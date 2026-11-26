@@ -70,6 +70,7 @@ struct RelocateRunCharacterizationTests {
         r.directory = url.deletingLastPathComponent().path
         r.sizeBytes = size
         r.partialMD5 = md5
+        FixtureDigest.stampFromDisk(r)   // GH #523: Bucket E needs the whole-file digest
         return r
     }
 

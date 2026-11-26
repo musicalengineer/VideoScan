@@ -30,6 +30,8 @@ final class VideoScanModel: ObservableObject {
             // un-latch; cheap enough for per-file live-reload appends.
             recordIndex.invalidate()
             recordPathIndex.invalidate()
+            // GH #528: the date seam's twin leg (digest → live archived copy).
+            archivedContentIndex.invalidate()
             // Hallie's filename memo too (codex #1020 item 1): a row
             // replaced by a PREBUILT record (`records[i] = decoded`) keeps
             // the buffer, the version and the identity generation — no
@@ -1731,6 +1733,12 @@ final class VideoScanModel: ObservableObject {
     /// memos. Reads are O(1); the O(records) rebuild runs once per
     /// catalog mutation, never in a view body.
     let archivePromotionIndex = ArchivePromotionIndex()
+
+    /// GH #528: whole-file digest → live archived copy — the date seam's
+    /// twin leg (`isDateReadOnly`, VideoScanModel+DateReadOnly.swift). O(1)
+    /// lookups; rebuilt lazily when the records array or any row's archive
+    /// facts change. See ArchivedContentIndex.swift.
+    let archivedContentIndex = ArchivedContentIndex()
 
     /// GH #190: sha256 digests landed or landing in a Master Archive during
     /// THIS process, per normalized archive root → digest → archive-relative

@@ -695,7 +695,9 @@ extension VideoScanModel {
     /// Re-stat every Bucket E witness immediately before the apply phase.
     /// An entry whose safe witnesses are no longer on disk at the recorded
     /// size (drive unplugged, file moved, trashed or emptied since the
-    /// classify pass) is NOT marked deleted: it moves to `ready` so the
+    /// classify pass) or no longer hold the source's bytes (a stored stamp
+    /// that does not describe the file now — Codex round 2, #523) is NOT
+    /// marked deleted: it moves to `ready` so the
     /// copy engine handles it, which itself refuses a missing source as
     /// salvage-failed rather than guessing. Logged per record.
     func reproveSafelyRedundantBeforeApply(
@@ -703,7 +705,13 @@ extension VideoScanModel {
         proof: RelocateReconcile.WitnessProof
     ) {
         guard !reconcile.safelyRedundant.isEmpty else { return }
-        let split = RelocateReconcile.reproveSafelyRedundant(reconcile.safelyRedundant, proof: proof)
+        // The witness's fixity as the catalog holds it NOW (a live row at
+        // that path), so a re-hash since classification counts and a row
+        // trashed since does not (Codex round 2, #523).
+        let split = RelocateReconcile.reproveSafelyRedundant(reconcile.safelyRedundant, proof: proof) { path in
+            guard let row = self.record(forPath: path), row.isLiveRelocateWitness else { return nil }
+            return row.relocateIdentityFixity
+        }
         for entry in split.refused {
             let line = "Reconcile: \(entry.rec.fullPath) — no safe copy is on disk now "
                 + "(\(entry.witnesses.first ?? "no witness")); will copy instead of marking deleted"

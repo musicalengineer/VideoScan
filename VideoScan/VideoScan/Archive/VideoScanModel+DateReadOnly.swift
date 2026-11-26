@@ -29,6 +29,19 @@
 // #221, rule 3): it writes through InspectorDateEdit, which refuses a
 // read-only record, and an archived row shows its filed date + Update….
 //
+// GH #528 (rule 3, every copy): the catalog stores ONE date per content
+// (`user_dates` / `inferred_dates` keyed by the whole-file digest, joined by
+// digest at load), so a date written on an unarchived copy of archived
+// content IS the archived copy's date after relaunch. The seam is therefore
+// twin-aware: a row is read-only when it is archived ITSELF
+// (`isDateReadOnlyItself`) or a LIVE archived copy of its content exists
+// (`archivedCopyFixingDate`, O(1) through ArchivedContentIndex). Every
+// writer above inherits that without a change. Questions about the archived
+// copy itself (which row Update… opens, the committer's "is archived" log
+// line, Dossier's per-row flags) ask `isDateReadOnlyItself`. The commit
+// refuses a date group on a twin as well (CatalogCommitter, defence in
+// depth, one log line).
+//
 // (For Rick: this is a const member predicate — `bool isDateReadOnly(const
 // VideoRecord&) const` — and the static helpers take it as a
 // `std::function<bool(const VideoRecord&)>` from the caller.)
@@ -44,9 +57,37 @@ extension VideoScanModel {
     /// or anything under the archive root — Rick 2026-09-27, kept so a file
     /// inside the archive that was never stamped Archived stays protected).
     /// Reading the record is always allowed; it may still DONATE its date.
-    /// O(1): an enum compare, a string compare and a prefix test.
+    ///
+    /// GH #528: ALSO true for every other live copy of archived content
+    /// (same whole-file digest) — the catalog keeps one date per content, so
+    /// a twin's date write is the archived copy's date after relaunch.
+    /// O(1): the per-row test, then (only when some archived copy has this
+    /// row's size) one digest read and a bucket probe.
     func isDateReadOnly(_ record: VideoRecord) -> Bool {
+        isDateReadOnlyItself(record) || archivedTwin(of: record) != nil
+    }
+
+    /// The per-row half of the seam: THIS row is archived — its lifecycle
+    /// stage is Archived (Rick 2026-10-11) or it IS a Master Archive file
+    /// (`isArchiveElement`, Rick 2026-09-27). O(1): an enum compare, a
+    /// string compare and a prefix test.
+    func isDateReadOnlyItself(_ record: VideoRecord) -> Bool {
         record.lifecycleStage == .archived || isArchiveElement(record)
+    }
+
+    /// The archived row whose filed date fixes `record`'s date: `record`
+    /// itself when it is archived, else a live archived copy of the same
+    /// content (GH #528 / codex #383), else nil (the date is editable).
+    /// What the Inspector shows ("Filed as …") and where its Update… goes.
+    func archivedCopyFixingDate(of record: VideoRecord) -> VideoRecord? {
+        isDateReadOnlyItself(record) ? record : archivedTwin(of: record)
+    }
+
+    /// A LIVE row other than `record`, archived itself, holding `record`'s
+    /// whole-file digest (`CatalogCommit.digest(of:)`) — nil without a digest.
+    private func archivedTwin(of record: VideoRecord) -> VideoRecord? {
+        archivedContentIndex.archivedCopy(sharingContentOf: record, in: records, root: masterArchiveRootPath,
+                                          isFixedItself: { self.isDateReadOnlyItself($0) })
     }
 
     /// Rick's hand-entered date (+ its confidence) rides from `source` to
@@ -77,6 +118,12 @@ extension VideoScanModel {
     /// (the inferred-date lanes) are skipped without a line — they are
     /// re-derived on every pass and a line per row would drown the log.
     func noteDateLeftAsFiled(_ record: VideoRecord, writer: String, declined value: String) {
+        // GH #528: a twin is named with the archived copy that fixes it.
+        if let archived = archivedCopyFixingDate(of: record), archived !== record {
+            log("\(writer): \(record.filename) is a copy of archived \(archived.filename) — date left as filed "
+                + "(\(record.userDate ?? "none")); \(value) not written. Use Update… on \(archived.filename) to change it.")
+            return
+        }
         log("\(writer): \(record.filename) is archived — date left as filed "
             + "(\(record.userDate ?? "none")); \(value) not written. Use Update… to change an archived file's date.")
     }

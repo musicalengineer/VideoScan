@@ -233,21 +233,26 @@ struct RelocateSummaryProofTests {
     }
 
     /// Codex's recipe: the backup was overwritten with different bytes of
-    /// the same size after it was catalogued. Bucket E still matches it by
-    /// the stored partial MD5 and the size; the summary must not.
+    /// the same size after it was catalogued. Since Codex round 2 (#523) it
+    /// is no Bucket E witness at all — its stored stamp no longer describes
+    /// the file — so Migrate COPIES the source; the summary's retire words
+    /// then rest on that verified copy, never on the overwritten backup.
     @Test func anOverwrittenBackupIsNotProven() async throws {
         let s = try await migrate(trust: .reliable) { rig in
             try Self.bytes(99).write(to: rig.backup.appendingPathComponent("clip.mov"))
         }
-        try #require(s.safelyRedundantCount == 1, "the stale partial MD5 still lands it in Bucket E")
-        #expect(!RelocateSummaryHeadline(s).invitesRetire, "\(RelocateSummaryHeadline(s))")
+        #expect(s.safelyRedundantCount == 0, "a rewritten backup never skips the copy")
+        #expect(s.provenBackupCount == 0, "and is never counted as a proven backup")
+        #expect(s.succeededCount == 1, "the source is copied instead (copied \(s.succeededCount))")
     }
 
     /// No full SHA-256 on record at all (partial MD5 only): not proven.
+    /// GH #523: such a "backup" is no Bucket E witness any more — Migrate
+    /// copies the file instead of skipping it (a sample is not identity).
     @Test func anUnhashedBackupIsNotProven() async throws {
         let s = try await migrate(trust: .reliable, hashed: false)
-        try #require(s.safelyRedundantCount == 1)
-        #expect(!RelocateSummaryHeadline(s).invitesRetire, "\(RelocateSummaryHeadline(s))")
+        #expect(s.safelyRedundantCount == 0, "a partialMD5-only witness never skips the copy")
+        #expect(s.succeededCount == 1, "the file is copied instead (copied \(s.succeededCount))")
     }
 
     /// Codex closing pass F1 (recipe): source A has no stored hash and an

@@ -11,10 +11,14 @@ extension VideoScanModel {
     /// Archived. Such a row never gets a date, a purge, a junk flag or a
     /// needsReformat flag from analysis — "archived = read-only except
     /// Update… {name, date}". Reading its file for analysis is allowed.
-    /// The SAME rule as the date seam (`isDateReadOnly`, Rick 2026-10-11)
-    /// — one definition, named here for Dossier's wider scope. O(1).
+    /// The SAME rule as the date seam's per-row half (`isDateReadOnlyItself`,
+    /// Rick 2026-10-11) — one definition, named here for Dossier's wider
+    /// scope. Per ROW on purpose (GH #528): an unarchived twin of archived
+    /// content keeps its own purge / junk / reformat flags; its DATE is
+    /// still frozen, because applyDossier asks the twin-aware `isDateReadOnly`
+    /// before it writes one. O(1).
     func isDossierReadOnly(_ record: VideoRecord) -> Bool {
-        isDateReadOnly(record)
+        isDateReadOnlyItself(record)
     }
 
     // MARK: - Dossier Writeback

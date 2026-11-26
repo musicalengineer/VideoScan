@@ -82,7 +82,14 @@ struct PruneCuratedSurvivesTests {
         #expect(kept.userNotes.contains("Grandpa's 1952 Christmas"), "note: \(kept.userNotes)")
         #expect(kept.starRating == 3, "star: \(kept.starRating)")
         #expect(kept.confirmedByUserPeople.contains { $0.name == "Donna" }, "people: \(kept.confirmedByUserPeople)")
-        #expect(kept.userDate == "1952-12-25", "date: \(kept.userDate ?? "nil")")
+        // GH #528 (rule 3; the 2026-10-11 ruling already declines the prune
+        // fold's date carry onto the archive file): the DATE is the one thing
+        // that does not ride the digest onto the archive file — it stays as
+        // filed (here: none) and only Update… changes it. The commit refuses
+        // the copy's date and says so; the notes, star, person and place,
+        // which are metadata, still arrive.
+        #expect(kept.userDate == nil, "date: \(kept.userDate ?? "nil") — an archive file's date changes only through Update…")
+        #expect(scene.sandbox.catalogLogText().contains("Catalog store: REFUSED date on \(copy.id.uuidString)"))
         #expect(kept.userPlace == "Middlefield, MA", "place: \(kept.userPlace ?? "nil")")
     }
 }

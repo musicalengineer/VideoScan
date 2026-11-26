@@ -11,9 +11,12 @@
 // Update… instead of the field (InspectorDateView).
 //
 // Codex #383 (round 2): the date is stored per CONTENT, so a record whose
-// content has a live archived copy is fixed too — `archivedCopy(fixing:)`
-// finds that copy; the Inspector refuses for every copy of the digest and
-// its Update… opens the archived one.
+// content has a live archived copy is fixed too. GH #528 moved that question
+// into the date seam itself (`VideoScanModel.archivedCopyFixingDate`, O(1)
+// through ArchivedContentIndex) so EVERY writer refuses, not just this one;
+// the Inspector refuses for every copy of the digest and its Update… opens
+// the archived one. `archivedCopy(fixing:)` below stays as the plain scan —
+// the reference the index is tested against.
 //
 // (For Rick: a namespace of free functions — `namespace InspectorDateEdit {
 // Outcome save(...); }` — the caller passes the seam's verdict in, as the
@@ -56,7 +59,9 @@ enum InspectorDateEdit {
     /// The archived record whose filed date fixes `record`'s date: `record`
     /// itself when the seam calls it read-only, else a LIVE copy of the same
     /// content (same whole-file digest, no removal marker) the seam calls
-    /// read-only, else nil (the date is editable).
+    /// read-only, else nil (the date is editable). `isReadOnly` must be the
+    /// PER-ROW rule (`VideoScanModel.isDateReadOnlyItself`): the twin-aware
+    /// seam would call `record` itself read-only and return it.
     ///
     /// Why a twin counts (Codex #383, rule 3): catalog.sqlite keeps Rick's
     /// date per CONTENT — `user_dates` is keyed by digest and the loader

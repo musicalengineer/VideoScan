@@ -144,6 +144,7 @@ struct DossierArchivedAdmissionScaleTests {
                 }
             } else if i < 14_000 {
                 r.partialMD5 = "twin-\(i / 2)"; r.sizeBytes = 1_000
+                FixtureDigest.stamp(r)   // GH #523: byte twins share a whole-file digest
                 if i % 2 == 0 {
                     r.sceneCaptions = [SceneCaption(timestamp: 1, text: "scene")]
                     r.audioTranscript = "words"; r.dossierProcessedAt = Date()
@@ -259,8 +260,10 @@ struct DossierArchivedAdmissionScaleTests {
         }
         let tape = master("1984-11-xx_test_Thanksgiving.mkv")
         tape.partialMD5 = "md5-tape"; tape.sizeBytes = 1
+        FixtureDigest.stamp(tape)
         let triageCopy = sb.record("test_Thanksgiving_copy.mkv", stage: .reviewing)
         triageCopy.partialMD5 = "md5-tape"; triageCopy.sizeBytes = 1
+        FixtureDigest.stamp(triageCopy)
         let g = UUID()
         let wedding = master("1987-xx-xx_test_Wedding.mov")
         wedding.durationSeconds = 3_600

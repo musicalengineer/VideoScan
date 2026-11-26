@@ -330,7 +330,9 @@ extension VideoScanModel {
         committer.adoptBaseline(records, held: held, generation: launch.snapshot.generation)
         committer.onCopiesUpdated = { [weak self] in self?.noteCatalogMutated() }
         // Codex #383: an archived copy never takes another copy's date.
-        committer.dateFixed = { [weak self] record in self?.isDateReadOnly(record) ?? false }
+        // The ARCHIVED copy itself (propagation's "is archived" rule); a twin
+        // of archived content is refused earlier, in the commit (GH #528).
+        committer.dateFixed = { [weak self] record in self?.isDateReadOnlyItself(record) ?? false }
         // B2.3: the marker veto answers only for this session's live records.
         committer.owns = { [weak self] record in self?.record(forID: record.id) === record }
         committer.onWritableAgain = { [weak self] in

@@ -69,7 +69,7 @@ struct ArchivedTwinDateTests {
     }
 
     private static func fixed(_ sb: F.Sandbox, _ r: VideoRecord) -> VideoRecord? {
-        InspectorDateEdit.archivedCopy(fixing: r, in: sb.model.records, isReadOnly: sb.model.isDateReadOnly)
+        InspectorDateEdit.archivedCopy(fixing: r, in: sb.model.records, isReadOnly: sb.model.isDateReadOnlyItself)
     }
 
     // MARK: Logic
@@ -79,7 +79,8 @@ struct ArchivedTwinDateTests {
         let sb = try F.Sandbox("twin_refused")
         defer { sb.cleanup() }
         let (original, copy) = Self.twins(sb)
-        #expect(!sb.model.isDateReadOnly(original), "the original itself is not archived")
+        #expect(!sb.model.isDateReadOnlyItself(original), "the original itself is not archived")
+        #expect(sb.model.isDateReadOnly(original), "GH #528: the seam itself now calls the twin read-only")
         let fixedBy = try #require(Self.fixed(sb, original), "the archived copy fixes the content's date")
         #expect(fixedBy === copy)
         #expect(InspectorDateEdit.save(entry: "1992", known: true, to: original, readOnly: true) == .refusedArchived)
@@ -142,7 +143,7 @@ struct ArchivedTwinDateTests {
         let clock = ContinuousClock()
         var found: VideoRecord?
         let elapsed = clock.measure {
-            found = InspectorDateEdit.archivedCopy(fixing: original, in: records, isReadOnly: sb.model.isDateReadOnly)
+            found = InspectorDateEdit.archivedCopy(fixing: original, in: records, isReadOnly: sb.model.isDateReadOnlyItself)
         }
         #expect(found === copy)
         let budget = PerformanceLane.debugCeiling(.milliseconds(100))
@@ -186,7 +187,7 @@ struct ArchivedTwinDateTests {
         let (original, copy) = try storedTwins(scene)
         let model = scene.model
         func readOnly() -> Bool {
-            InspectorDateEdit.archivedCopy(fixing: original, in: model.records, isReadOnly: model.isDateReadOnly) != nil
+            model.archivedCopyFixingDate(of: original) != nil
         }
 
         // Inside the debounce window of another edit on the SAME record.
@@ -218,6 +219,10 @@ struct ArchivedTwinDateTests {
         if let c = fresh.catalogCutover.committer { await c.repository.close() }
     }
 
+    /// GH #528 made this defence stronger: the twin's date is now refused at
+    /// the commit itself (it is put back to the filed date and never stored),
+    /// so the propagation's in-memory decline no longer fires for this shape;
+    /// the archived copy keeps 1984 in memory AND after relaunch.
     @Test("RED before #383 (DEFENCE): a date another path writes on the twin is not copied onto the archived copy; one honest log line")
     func propagationDeclines() async throws {
         let scene = try CutoverScene.make("twin_383_defence"); defer { scene.cleanup() }
@@ -227,10 +232,10 @@ struct ArchivedTwinDateTests {
         #expect(scene.model.saveCatalogNow())
         #expect(copy.userDate == "1984", "an archived copy never takes another copy's date")
         #expect(copy.userDateConfidence == UserDateConfidence.known.rawValue)
+        #expect(original.userDate == "1984", "GH #528: the twin's date is refused at commit")
         let log = scene.sandbox.catalogLogText()
-        #expect(log.contains("\(copy.filename) is archived — date left as filed (1984); 1992 from another copy of the same content not written"),
-                "\(log.suffix(600))")
-        #expect(log.contains("Use Update… on \(copy.filename)"))
+        #expect(log.contains("Catalog store: REFUSED date on \(original.id.uuidString)"), "\(log.suffix(600))")
+        #expect(log.contains("Use Update… on the archived copy"))
         if let c = scene.model.catalogCutover.committer { await c.repository.close() }
     }
 }

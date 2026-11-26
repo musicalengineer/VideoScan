@@ -49,15 +49,27 @@
 //      it. (applyDossier's own path-year tier stays at 0.50: there a
 //      VLM pass ran and found nothing better, which is itself evidence.)
 //
-// IDENTITY (codex #1413). A date may only travel between rows that are
-// VERIFIED to hold the same bytes: equal `contentHash` (the segmented /
-// full signature), else equal `partialMD5` AND equal `sizeBytes`. A
-// `duplicateGroupID` is NEVER sufficient — DuplicateDetector hands those
+// IDENTITY (codex #1413; GH #523, 2026-11-25). A date may only travel
+// between rows that are PROVEN to hold the same bytes: the same whole-file
+// SHA-256 under the commit's own digest rule (`contentKey(of:)` —
+// `CatalogRecordDTO.resolveDigest`, the key the catalog stores the content
+// under). No whole-file digest ⇒ no sharing. partialMD5 + size and the
+// segmented `contentHash` are SAMPLES: on Rick's catalog 12 partialMD5
+// groups held several whole-file digests (same size, head and tail,
+// different interior bytes), and an inferred date feeds Promote's decade
+// folder (rule 6). Until 2026-11-25 the rule was "equal contentHash, else
+// equal partialMD5 + size". A `duplicateGroupID` is NEVER sufficient — DuplicateDetector hands those
 // out to heuristic low / medium groups (timecode, filename stem,
 // duration) that can score high while the full hashes CONFLICT, and a
 // strong OCR date persisted onto different footage would then be
-// frozen by the settled-inference guard. Two rows whose content hashes
-// conflict are rejected even when they share a group and a partialMD5.
+// frozen by the settled-inference guard. Two rows whose digests differ are
+// rejected even when they share a group and a partialMD5.
+//
+// The #1413 UNWIND keeps judging dates propagated under the OLD rule by the
+// rule they were made under (a sampled match), and now ALSO clears one whose
+// origin's whole-file digest is KNOWN to differ — proven different content.
+// A propagated date whose origin or recipient was never fully hashed is left
+// as it is (unproven, not disproven); the production-shape guard counts them.
 //
 // BUDGET (codex #1415). Rule 1 examines at most `limit` rows per pass.
 // A row whose evidence was NOT examined (deferred) is never a rule-2
@@ -319,33 +331,34 @@ extension VideoScanModel {
         }
     }
 
-    /// The record's VERIFIED content-group identity: partialMD5 + size
-    /// (the DuplicateDetector "h|" bucket, the dossier-propagation key),
-    /// else the segmented / full `contentHash` for a row that was never
-    /// partially hashed. `duplicateGroupID` is deliberately NOT a key —
-    /// see IDENTITY in the header. nil when the record carries no
-    /// verifiable identity at all — a group of one has nobody to share
-    /// with. (The `CatalogSizeTotals.GroupKey` enum is reused for its
-    /// `.byteTwin` / `.contentHash` cases; `.duplicateGroup` is never
-    /// produced here.)
+    /// The record's PROVEN content-group identity (GH #523): the whole-file
+    /// SHA-256 the commit stores the row under (`contentKey(of:)`). nil when
+    /// the row has no whole-file digest — not hashed yet, a fixity that does
+    /// not cover the file, or two that disagree — and then it shares with
+    /// nobody. Never partialMD5 + size, never the segmented `contentHash`,
+    /// never `duplicateGroupID` (see IDENTITY in the header).
     @MainActor
-    static func contentGroupKey(_ rec: VideoRecord) -> CatalogSizeTotals.GroupKey? {
-        if !rec.partialMD5.isEmpty, rec.sizeBytes > 0 {
-            return .byteTwin(md5: rec.partialMD5, sizeBytes: rec.sizeBytes)
-        }
-        if !rec.contentHash.isEmpty {
-            return .contentHash(rec.contentHash)
-        }
-        return nil
+    static func contentGroupKey(_ rec: VideoRecord) -> String? {
+        contentKey(of: rec)
     }
 
-    /// codex #1413: may a date travel between these two rows? Only when
-    /// their bytes are VERIFIED the same — equal content hashes when
-    /// both have one (a conflict rejects the pair outright, whatever
-    /// else they share), else equal partialMD5 AND equal non-zero size.
-    /// Never consults `duplicateGroupID` or `duplicateConfidence`.
+    /// codex #1413 / GH #523: may a date (or dossier text) travel between
+    /// these two rows? Only when both carry a whole-file digest and the two
+    /// are equal. Never consults a sample, `duplicateGroupID` or
+    /// `duplicateConfidence`.
     @MainActor
     static func haveVerifiedSameContent(_ a: VideoRecord, _ b: VideoRecord) -> Bool {
+        guard let ka = contentKey(of: a) else { return false }
+        return ka == contentKey(of: b)
+    }
+
+    /// The pre-GH #523 rule — equal segmented content hashes when both have
+    /// one, else equal partialMD5 + non-zero size. Used ONLY by the #1413
+    /// unwind, to judge a date propagated under that rule by the rule it was
+    /// made under (together with `wholeFileDigestsDiffer`). Never a reason to
+    /// share anything new.
+    @MainActor
+    static func haveSampledSameContent(_ a: VideoRecord, _ b: VideoRecord) -> Bool {
         if !a.contentHash.isEmpty, !b.contentHash.isEmpty {
             return a.contentHash == b.contentHash
         }
@@ -353,6 +366,14 @@ extension VideoScanModel {
             && a.partialMD5 == b.partialMD5
             && a.sizeBytes > 0
             && a.sizeBytes == b.sizeBytes
+    }
+
+    /// True when BOTH rows carry a whole-file digest and they differ —
+    /// proven different content, whatever their samples say.
+    @MainActor
+    static func wholeFileDigestsDiffer(_ a: VideoRecord, _ b: VideoRecord) -> Bool {
+        guard let ka = contentKey(of: a), let kb = contentKey(of: b) else { return false }
+        return ka != kb
     }
 
     /// Rule 1 core: what the record's OWN stored evidence says. Content
@@ -736,7 +757,7 @@ extension VideoScanModel {
         let limit: Int
         let people: [DateTriangulationPerson]
         var result = InferredDateCatchUpResult()
-        var groups: [CatalogSizeTotals.GroupKey: [VideoRecord]] = [:]
+        var groups: [String: [VideoRecord]] = [:]
         var footageGroups: [UUID: [VideoRecord]] = [:]
         var byID: [UUID: VideoRecord] = [:]
         // Rick 2026-09-27: Master Archive files are read-only to this pass —
@@ -744,7 +765,7 @@ extension VideoScanModel {
         var archived = Set<UUID>()
         // The rows this pass may write to, and the groups it may share within.
         var candidates: [VideoRecord] = []
-        var groupKeys: [CatalogSizeTotals.GroupKey] = []
+        var groupKeys: [String] = []
         var footageKeys: [UUID] = []
         var refreshIDs: Set<UUID> = []
         var touched: [VideoRecord] = []
@@ -800,7 +821,7 @@ extension VideoScanModel {
     /// allocated for the rest of the catalog.
     @MainActor
     private func bucketForDateInference(_ scope: [VideoRecord]?, into pass: inout InferredDateCatchUpPass) {
-        let scopeKeys: Set<CatalogSizeTotals.GroupKey>? = scope.map { rows in
+        let scopeKeys: Set<String>? = scope.map { rows in
             Set(rows.compactMap { Self.contentGroupKey($0) })
         }
         let scopeFootage: Set<UUID>? = scope.map { rows in Set(rows.compactMap { $0.footage?.groupID }) }
@@ -923,10 +944,9 @@ extension VideoScanModel {
     }
 
     /// Rule 2 — share within each group. Donors best-first; each
-    /// recipient takes the best donor whose bytes are VERIFIED its
-    /// own (a bucket can hold rows whose content hashes conflict —
-    /// same head, tail and length, different middle; they never
-    /// exchange dates). Deferred rows neither give nor take.
+    /// recipient takes the best donor whose bytes are PROVEN its own (GH
+    /// #523: a bucket is one whole-file digest, so the per-pair check is
+    /// belt and braces). Deferred rows neither give nor take.
     @MainActor
     private static func propagateWithinContentGroups(_ pass: inout InferredDateCatchUpPass) {
         for key in pass.groupKeys {
@@ -1016,14 +1036,14 @@ extension VideoScanModel {
     private static func dateInferenceScope(
         _ scope: [VideoRecord]?,
         allRecords: [VideoRecord],
-        groups: [CatalogSizeTotals.GroupKey: [VideoRecord]],
+        groups: [String: [VideoRecord]],
         footageGroups: [UUID: [VideoRecord]]
-    ) -> (candidates: [VideoRecord], groupKeys: [CatalogSizeTotals.GroupKey], footageKeys: [UUID]) {
+    ) -> (candidates: [VideoRecord], groupKeys: [String], footageKeys: [UUID]) {
         guard let scope else { return (allRecords, Array(groups.keys), Array(footageGroups.keys)) }
         var seen = Set<UUID>()
         var rows: [VideoRecord] = []
-        var keys: [CatalogSizeTotals.GroupKey] = []
-        var seenKeys = Set<CatalogSizeTotals.GroupKey>()
+        var keys: [String] = []
+        var seenKeys = Set<String>()
         var footageKeys: [UUID] = []
         var seenFootage = Set<UUID>()
         for rec in scope {
@@ -1176,11 +1196,9 @@ extension VideoScanModel {
             // chain, not the immediate donor — B (from A) may be verified
             // for C while B's own date is A's, and A/C conflict. A missing
             // link or a cycle is unverified by definition.
-            let origin = Self.originDonor(of: rec, byID: byID)
-            if let origin, Self.haveVerifiedSameContent(origin, rec) { continue }
-            if let origin, !origin.contentHash.isEmpty, !rec.contentHash.isEmpty, origin.contentHash != rec.contentHash {
-                result.conflictingHashes += 1
-            }
+            let verdict = Self.propagatedDateVerdict(rec, origin: Self.originDonor(of: rec, byID: byID))
+            if verdict.stands { continue }
+            if verdict.provenDifferent { result.conflictingHashes += 1 }
             victims.append(rec)
             entries.append(UnwoundDateEntry(recordID: rec.id, fullPath: rec.fullPath,
                                             inferredRecordDate: date,
@@ -1251,6 +1269,24 @@ extension VideoScanModel {
         log(line)
         appLog.write(line)
         return result
+    }
+
+    /// Does a date propagated from `origin` onto `rec` still stand? (codex
+    /// #1413 / #1439, GH #523.) It stands when the two are proven the same
+    /// content by the whole-file digest, or when it was made under the old
+    /// sampled rule (equal segmented hash, else partialMD5 + size) and no
+    /// whole-file digest disproves it. `provenDifferent`: the digests — or
+    /// the segmented hashes — of the two differ. No origin (a missing link,
+    /// a cycle, an undated origin): it does not stand. Pure over the rows.
+    @MainActor
+    static func propagatedDateVerdict(_ rec: VideoRecord, origin: VideoRecord?) -> (stands: Bool, provenDifferent: Bool) {
+        guard let origin else { return (false, false) }
+        let digestsDiffer = wholeFileDigestsDiffer(origin, rec)
+        if haveVerifiedSameContent(origin, rec) || (haveSampledSameContent(origin, rec) && !digestsDiffer) {
+            return (true, false)
+        }
+        let hashesDiffer = !origin.contentHash.isEmpty && !rec.contentHash.isEmpty && origin.contentHash != rec.contentHash
+        return (false, digestsDiffer || hashesDiffer)
     }
 
     /// Follow "propagated from <id>" links to the row that EARNED the

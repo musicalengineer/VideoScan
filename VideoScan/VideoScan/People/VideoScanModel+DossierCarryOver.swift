@@ -14,9 +14,11 @@ import VideoScanCore
 //                          "from <sibling uuid> (same footage)"
 //
 // Who counts as the same footage:
-//   * same bytes — VERIFIED content identity, the date lane's rule
-//     (`haveVerifiedSameContent`: equal content hashes, else partialMD5 +
-//     non-zero size). Never `duplicateGroupID`.
+//   * same bytes — PROVEN content identity, the date lane's rule
+//     (`haveVerifiedSameContent`: the same whole-file SHA-256 under the
+//     commit's digest rule — GH #523; until 2026-11-25 equal content hashes,
+//     else partialMD5 + size, which are samples). No whole-file digest ⇒
+//     never "same bytes". Never `duplicateGroupID`.
 //   * same footage — both rows in one machine footage group at
 //     `footageShareMinimumConfidence` (likely) or better, AND the same
 //     length (±2 s / 1 %). Captions carry timestamps; without the §3.4
@@ -69,7 +71,7 @@ struct DossierCarryOverIndex {
     /// of the longer one, whichever is larger.
     static let lengthToleranceSeconds = 2.0
 
-    private var byContent: [CatalogSizeTotals.GroupKey: [VideoRecord]] = [:]
+    private var byContent: [String: [VideoRecord]] = [:]
     private var byFootage: [UUID: [VideoRecord]] = [:]
     /// Resolves a carried donor's "from <uuid>" back to its origin: the
     /// model's O(1) id index in production, the bucketed records otherwise.
@@ -81,13 +83,13 @@ struct DossierCarryOverIndex {
     init(records: [VideoRecord], candidates: [VideoRecord],
          lookup: ((UUID) -> VideoRecord?)? = nil) {
         let minimum = VideoScanModel.footageShareMinimumConfidence
-        var contentKeys = Set<CatalogSizeTotals.GroupKey>()
+        var contentKeys = Set<String>()
         var footageKeys = Set<UUID>()
         for c in candidates {
             if let k = VideoScanModel.contentGroupKey(c) { contentKeys.insert(k) }
             if let f = c.footage, f.confidence >= minimum { footageKeys.insert(f.groupID) }
         }
-        var content: [CatalogSizeTotals.GroupKey: [VideoRecord]] = [:]
+        var content: [String: [VideoRecord]] = [:]
         var footage: [UUID: [VideoRecord]] = [:]
         if !contentKeys.isEmpty || !footageKeys.isEmpty {
             for r in records {

@@ -699,8 +699,13 @@ final class CatalogCommitter {
         guard let now = admit(owner: owner) else { return false }
         let clock = ContinuousClock()
         let start = clock.now
-        let detected = detect(now.records, scope: scope)
+        var detected = detect(now.records, scope: scope)
         lastDetection = clock.now - start
+        // GH #528: a date on a copy of archived content is refused here too.
+        let refusal = ArchivedContentDateRefusal.refuse(detected.items, records: now.records, isArchivedItself: dateFixed,
+                                                        owns: owns, baselinePrints: baseline.prints)
+        detected.items = refusal.items
+        for line in refusal.lines { sink(line) }
         let durableWaiting = baseline.notDurable(detected.waiting) == 0
         guard let prepared = prepare(door, detected, now: now, scope: scope) else { return durableWaiting }
         let outcome = CatalogCommit.runBlocking(prepared.plan, on: repository)
