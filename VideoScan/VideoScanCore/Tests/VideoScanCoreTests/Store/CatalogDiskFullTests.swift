@@ -56,7 +56,7 @@ struct CatalogDiskFullTests {
         let database = try volume.copyCatalog(from: scene.databaseFolder)
 
         // 1. A healthy commit on the image: the baseline every check compares with.
-        var session = try await CommitSession.open(database)
+        let session = try await CommitSession.open(database)
         _ = try await session.commitNotes("before-full")
         let before = await session.generation
         let noted = try Self.noteCount(database, "before-full")
