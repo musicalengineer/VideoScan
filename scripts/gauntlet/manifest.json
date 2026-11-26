@@ -39204,6 +39204,18 @@
         "treeNicknameWinsForTheLiving",
         "undatedTreePersonIsTreatedAsLiving"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/NetworkWalkCancelCheckpointTests.swift",
+      "stage": "regression",
+      "suites": [
+        "NetworkWalkCancelCheckpointTests"
+      ],
+      "tests": [
+        "cancelledNetworkWalkSavesNoCheckpoint",
+        "completedNetworkWalkStillSavesCheckpoint"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -43251,7 +43263,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 1055,
+      "expected_floor": 1057,
       "name": "regression",
       "package_expected_floor": 351,
       "package_selectors": [
@@ -43514,7 +43526,8 @@
         "VideoScanTests/ReformatUnverifiedOutputMatrixTests",
         "VideoScanTests/CleanupUnverifiedRenderMatrixTests",
         "VideoScanTests/EncodeSourceWithoutDurationMatrixTests",
-        "VideoScanTests/VolumeRescueNeverReplacesTests"
+        "VideoScanTests/VolumeRescueNeverReplacesTests",
+        "VideoScanTests/NetworkWalkCancelCheckpointTests"
       ]
     },
     {
