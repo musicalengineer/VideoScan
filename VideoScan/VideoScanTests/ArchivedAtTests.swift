@@ -1,5 +1,6 @@
 // ArchivedAtTests.swift — the archived date (Rick 2026-09-09): Promote's
-// field first, the Promote note for older copies, fixity last; DTO round-trip.
+// field first, the Promote note for older copies, never a fixity check's
+// date (GH #477); DTO round-trip.
 
 import Foundation
 import Testing
@@ -9,7 +10,7 @@ import VideoScanCore
 @Suite("Archived date — resolution")
 struct ArchivedAtTests {
 
-    @Test("field wins, then the earliest Promote note, then fixity")
+    @Test("field wins, then the earliest Promote note; a fixity check's date is never the archived date (GH #477)")
     func precedence() {
         let field = Date(timeIntervalSince1970: 1_700_000_000)
         let noteDate = ISO8601DateFormatter().date(from: "2026-08-16T20:11:03Z")!
@@ -20,7 +21,8 @@ struct ArchivedAtTests {
         #expect(r.archivedDateText == "—")
 
         r.archiveFixity = fixity
-        #expect(r.resolvedArchivedAt == fixity.verifiedAt)
+        #expect(r.resolvedArchivedAt == nil, "a Verify check's date is not the day it was archived")
+        #expect(r.archivedDateText == "—", "TRUTH: the Archived column says nothing rather than a check's date")
 
         r.notes = "Promote 2026-08-20T10:00:00Z: promoted from /a · sha256 x\nPromote 2026-08-16T20:11:03Z: promoted from /b · sha256 y"
         #expect(r.resolvedArchivedAt == noteDate, "earliest Promote stamp wins over a later re-promote and over fixity")
@@ -70,7 +72,7 @@ struct ArchivedAtBackfillTests {
     }
 
     @MainActor
-    @Test("note → manifest → fixity → unresolved; already-stamped copies untouched")
+    @Test("note → manifest → unresolved (a fixity check's date is never used, GH #477); already-stamped copies untouched")
     func precedenceAndIdempotence() {
         let noteDate = ISO8601DateFormatter().date(from: "2026-08-16T20:11:03Z")!
         let manifestDate = Date(timeIntervalSince1970: 1_750_000_000)
@@ -84,13 +86,14 @@ struct ArchivedAtBackfillTests {
         let e = VideoRecord(); e.archivedAt = keep; e.notes = "Promote 2026-08-16T20:11:03Z: promoted from /e"
 
         let tally = ArchivedAtBackfill.apply(to: [a, b, c, d, e], manifest: [b.id: manifestDate, e.id: manifestDate])
-        #expect(tally == .init(fromNote: 1, fromManifest: 1, fromFixity: 1, unresolved: 1))
+        #expect(tally == .init(fromNote: 1, fromManifest: 1, unresolved: 2))
         #expect(a.archivedAt == noteDate)
         #expect(b.archivedAt == manifestDate)
-        #expect(c.archivedAt == fixityDate)
+        #expect(c.archivedAt == nil, "a check's date is not the archive day (GH #477)")
+        _ = fixityDate
         #expect(d.archivedAt == nil)
         #expect(e.archivedAt == keep)
-        #expect(tally.line.hasPrefix("Backfilled archived dates for 3 archive copies"))
+        #expect(tally.line.hasPrefix("Backfilled archived dates for 2 archive copies"))
         #expect(ArchivedAtBackfill.apply(to: [a, b, c, e], manifest: [:]).filled == 0, "second pass changes nothing")
     }
 }

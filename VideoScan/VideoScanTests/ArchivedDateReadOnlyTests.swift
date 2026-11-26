@@ -388,12 +388,12 @@ struct ArchivedDateReadOnlyTests {
         "MediaOps/VideoScanModel+DuplicateEnrichment.swift": "duplicate-delete enrichment — isDateReadOnly (QA P3-c)",
         "Archive/VideoScanModel+DateReadOnly.swift": "carryHandEnteredDate — the seam's own carry rule",
         "ArchiveAngel/Promote/ArchiveAngelFamilyStamp.swift": "stampDateIfMissing — called only via ArchiveAngelFamilyFacts.stampDate, which consults the seam",
+        "Catalog/InspectorDateEdit.swift": "the Inspector's \"When was this?\" field — refused when isDateReadOnly (GH #221: Update… only)",
         "MediaOps/VideoScanModel+RepairLifecycle.swift": "undoConfirmRepair restores the repair's own pre-confirm snapshot (the carry itself goes through carryHandEnteredDate)",
         // Exempt: the filing itself, the one door, and Rick's hand.
         "Archive/PromoteToArchiveJob+Steps.swift": "Promote dates the archive copy it just registered — the filing act",
         "Archive/VideoScanModel+MasterArchive.swift": "registerPromotedCopy / orphan copy — builds the new archive record",
         "Archive/VideoScanModel+ArchiveUpdate.swift": "Update… — the one door (Rick 2026-09-27)",
-        "Catalog/InspectorDateView.swift": "Rick typing a date in the Inspector — his hand, not a writer the ruling names (flagged to Rick 2026-10-11)",
         "ArchiveAngel/Promote/ArchiveAngelFamilyFacts.swift": "restore — undo of the Angel's own stamp on a promote that did not land",
         "Catalog/VideoScanModel+RescanPreservation.swift": "puts the record's OWN preserved values back after a rescan",
         // New records (not an existing row) and value types.

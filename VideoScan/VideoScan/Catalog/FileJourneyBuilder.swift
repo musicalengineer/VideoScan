@@ -439,8 +439,8 @@ enum FileJourneyBuilder {
 
     /// The day Promote archived it: its own stamp, else the copy's promote
     /// note. NEVER the fixity's date — that moves with every Verify, and a
-    /// check is not the day it was archived (`resolvedArchivedAt` falls back
-    /// to it; the sheet must not).
+    /// check is not the day it was archived (`resolvedArchivedAt` follows the
+    /// same rule since GH #477).
     static func archiveDay(_ copy: VideoRecord) -> Date? {
         copy.archivedAt ?? VideoRecord.promoteStamp(inNotes: copy.notes)
     }

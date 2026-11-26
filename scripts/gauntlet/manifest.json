@@ -11611,13 +11611,12 @@
         "CatalogRenameArchiveIndexTests"
       ],
       "tests": [
-        "archiveRenameHappyPath",
+        "archiveFileIsRefused",
         "archiveRootFileBareNameNotAKey",
         "backupRetentionKeepsTwenty",
         "busyArchiveRefusesInModel",
         "concurrentAppendDuringPublishIsNotLost",
         "csvCellWithQuoteIsRewritten",
-        "decisionsSourceFilenameUntouched",
         "destinationExistsRefuses",
         "engineTokenRules",
         "identityMismatchRefusesOrSkips",
@@ -39304,6 +39303,22 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchivedInspectorDateTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ArchivedInspectorDateTests"
+      ],
+      "tests": [
+        "archiveElementsRefusedControlWritten",
+        "archivedWords",
+        "clearOnArchivedIsRefused",
+        "saveOnArchivedIsRefused",
+        "unreadableEntry",
+        "writerCasesThenRelaunch"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/TestPreferencesTests.swift",
       "stage": "unit",
       "suites": [
@@ -39317,6 +39332,40 @@
         "crossedScopesWithDifferentValuesKeepTheLiveOne",
         "nestedScopesUnwindInnermostFirstAcrossAwait",
         "scratchSuitesAreUniqueAndRemovable"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchivedTwinDateAndRenameTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ArchivedRenameRefusalTests",
+        "ArchivedTwinDateTests"
+      ],
+      "tests": [
+        "propagationDeclines",
+        "scale",
+        "twinIsRefused",
+        "twinWords",
+        "underRootRefusedSourceRenames",
+        "unlockedArchiveCopyRefused",
+        "whoFixesWhat",
+        "writerThroughSQLite"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveDateProvenanceTruthTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchiveDateProvenanceTruthTests"
+      ],
+      "tests": [
+        "backfillScale",
+        "fixityDateIsNotTheArchiveDay",
+        "machineDateIsNotAUserDate",
+        "noDayNoYearNoUserDate",
+        "usersDateRebuilds"
       ]
     }
   ],
@@ -42114,7 +42163,7 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 4130,
+      "expected_floor": 4135,
       "name": "unit",
       "package_expected_floor": 1027,
       "package_selectors": [
@@ -42914,7 +42963,8 @@
         "VideoScanTests/CatalogTagDuplicateSortSensorTests",
         "VideoScanTests/CatalogTagSortRealisticShapeTests",
         "VideoScanTests/TestDefaultsWriteSensorTests",
-        "VideoScanTests/TestPreferencesTests"
+        "VideoScanTests/TestPreferencesTests",
+        "VideoScanTests/ArchiveDateProvenanceTruthTests"
       ]
     },
     {
@@ -43368,7 +43418,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 1065,
+      "expected_floor": 1079,
       "name": "regression",
       "package_expected_floor": 366,
       "package_selectors": [
@@ -43633,7 +43683,10 @@
         "VideoScanTests/ReformatUnverifiedOutputMatrixTests",
         "VideoScanTests/CleanupUnverifiedRenderMatrixTests",
         "VideoScanTests/EncodeSourceWithoutDurationMatrixTests",
-        "VideoScanTests/VolumeRescueNeverReplacesTests"
+        "VideoScanTests/VolumeRescueNeverReplacesTests",
+        "VideoScanTests/ArchivedInspectorDateTests",
+        "VideoScanTests/ArchivedTwinDateTests",
+        "VideoScanTests/ArchivedRenameRefusalTests"
       ]
     },
     {
