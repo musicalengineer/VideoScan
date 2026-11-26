@@ -33,6 +33,7 @@ extension VideoScanModel {
     /// file is just ordinary media now and shouldn't clutter the
     /// Workbench review queue.
     func dropWorkbenchToCatalog(_ recs: [VideoRecord]) {
+        guard !CuratedEditGuard.refuses("workbench", model: self) else { return }
         for rec in recs { rec.lifecycleStage = .cataloged }
         saveCatalogNow()
     }

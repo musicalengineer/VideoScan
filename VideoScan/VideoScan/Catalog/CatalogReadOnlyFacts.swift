@@ -34,6 +34,19 @@ struct CatalogReadOnlyFacts: Equatable, Sendable {
     /// The role: this Mac is a viewer (CatalogSync, via applyReadOnlyMode).
     var viewerRole = false
 
+    /// GH #343: catalog.sqlite was restored from a backup this session. The
+    /// records on screen are the catalog as it was before; nothing is saved
+    /// until VideoScan is reopened. Never cleared (not even by Adopt, which
+    /// this session refuses).
+    var restoredFromBackup = false
+
+    /// Codex #384 F3: Restore from Backup… is running — from the moment Rick
+    /// confirms (after what is in memory was committed) until it restores
+    /// or refuses. Transient: cleared on every refusal, replaced by
+    /// `restoredFromBackup` on success. An edit made in this window would
+    /// be in neither the safety copy nor the restored catalog.
+    var restoringFromBackup = false
+
     /// The launch opened no catalog (no latch, GH #354; or catalog.sqlite
     /// refused): its words, for the doors that need a catalog (QA r1 F5).
     var launchRefusalWords: String?
@@ -42,14 +55,22 @@ struct CatalogReadOnlyFacts: Equatable, Sendable {
     var storeReadOnly: Bool { jsonFrozenByLaunch || viewerRole }
 
     /// VideoScanModel.isReadOnly — may the session edit (the UI half)?
-    var modelReadOnly: Bool { sessionReadOnlyByLaunch || viewerRole }
+    var modelReadOnly: Bool { sessionReadOnlyByLaunch || viewerRole || restoredFromBackup || restoringFromBackup }
 
     /// Why the session may not write, in the person's words — nil when it
     /// may. The SQLite committer refuses every commit while this is non-nil
     /// (codex cycle #112: the facts must reach the committer, not only the UI).
     var readOnlyWords: String? {
         if viewerRole { return "this Mac is a viewer — only the master writes the catalog" }
+        if restoredFromBackup { return Self.restoredWords }
+        if restoringFromBackup { return Self.restoringWords }
         if sessionReadOnlyByLaunch { return "the catalog opened read-only at launch" }
         return nil
     }
+
+    /// The read-only words after Restore from Backup… (GH #343).
+    static let restoredWords = "the catalog was restored from a backup in this session — quit VideoScan and open it again to see it"
+
+    /// While Restore from Backup… runs (codex #384 F3).
+    static let restoringWords = "restoring the catalog — editing is paused until the restore finishes"
 }

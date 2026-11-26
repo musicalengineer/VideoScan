@@ -29,8 +29,9 @@
 //     ├── deltas/ , catalog-manifest.sha256   (optional, as before)
 //     └── people/<UUID>/…   // as below
 //
-// Import Catalog never merges into catalog.sqlite: a v2 bundle is refused
-// (no safe Restore exists yet) and so is a v1 bundle under catalog.sqlite.
+// Nothing is ever merged into catalog.sqlite: a v2 bundle goes to File ▸
+// Restore from Backup… (GH #343, CatalogBackupRestore.swift), which REPLACES
+// the catalog with the bundle's sealed copy; a v1 bundle is refused.
 //
 // Bundle v1 (before the database switch) — still readable by the legacy
 // merge on a Mac whose catalog is catalog.json; never written any more:

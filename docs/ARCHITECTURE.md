@@ -80,7 +80,7 @@ They are contracts now: §10.0 (the rules that hold everywhere) and §10.1–§1
 A miss here can lose or corrupt family media, the archive, or the family record:
 - **`Archive/`** — all of it: promote, `00_Index` writers and lock, Update… (refile), file locking, fixity, media ledger, `ArchiveVolumeProtection`.
 - **`MediaOps/`** — delete/prune/relocate: `DeleteDuplicates*`, `SignatureVerification`, `+JunkDelete`, `+TrashSelection`, `+SoftDelete`, `+PruneApply`, `+PruneVerification`, `PruneApplyJob`, `*Purge`, `Relocate*`, `+RepairLifecycle`, `RescueFileCopier`, `PartialFileNaming`, `DerivativeOutputPublish`, `CombineOutputPublish`.
-- **Catalog commit path** — Core `Store/ Commit/`, `CatalogCommitter`, purge/replacement relations.
+- **Catalog commit path** — Core `Store/ Commit/`, `CatalogCommitter`, purge/replacement relations, Restore from Backup… (`CatalogBackupRestore`, Core `CatalogDatabaseRestore`).
 - **`FamilyTree/`** — CyberBrain writes (`FamilyTreeNotes`, `FamilyTreeLiveModel`, `ResearchAttestation`, `ResearchPersonSheet`), FamilySearch pull/refresh; Hallie's `CyberBrainWriter` path.
 - **`ArchiveAngel/Promote/`**, **`Volumes/`** (`+RetireVolume`, `+DeleteScanTarget`), **`Catalog/ShowAgain*`**.
 
@@ -124,6 +124,7 @@ Size (non-test Swift, 2026-10-18): app 348K + Core 65K = 413K; Hallie 74K, Share
 - **Quarantine.** Rows that could not prove themselves at import sit in `quarantine` with their words; never dropped; rejoin only by digest — or (#339, DECISIONS 2026-11-25 evening) when Rick confirms carrying a row's tag, date and place onto a moved copy proven by content (Catalog Status ▸ Held back at import; `import carry` writer, then `personDecided`; never over a value he set). The list is read-only.
 - **A purge meets a delete's bar.** A row is replaced only when its replacement is actually stored; a purge and its replacement commit together as an explicit `oldID → newID` relation (never path matching); a kept purge is never re-sent alone (P0, 2026-10-22).
 - **Freshness.** Every cycler and integrity row carries "last completed pass" and the digest it was computed from; derived values imported from JSON are unverified until a cycler regenerates them.
+- **Restore from Backup…** (File menu, GH #343): a verified bundle's sealed copy is written INTO the open store by SQLite's backup API (one transaction; the file is never replaced, so no old-db/new-`-wal` pair can exist); the catalog as it was goes to the Trash first; this Mac's high-water is kept, so the relaunch opens read-only and Adopt is the person's act; the session stops until quit. The restore copies only the bytes that were verified (the staged copy is pinned by inode, size, times and SHA-256, re-checked under the source's lock before the first page); editing is paused from the confirmation on; once SQLite reports the copy done it is committed, so any later failure is "restored, not verified" and stops the session, never a refusal.
 - **Copies:** `sqlite3 … ".backup"`, never `cp` of a live WAL database. Scripts read through `scripts/catalog_db.py` (`?mode=ro`); `tests/test_no_script_writes_catalog.py` keeps it that way.
 - **Every catalog writer's OUTCOME line** ends with rows before · rows after · where the difference went.
 

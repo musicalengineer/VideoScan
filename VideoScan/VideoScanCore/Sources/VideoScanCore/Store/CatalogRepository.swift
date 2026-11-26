@@ -416,6 +416,17 @@ public protocol CatalogRepository: Sendable {
     /// then allow writes again.
     func adopt(toHighWater highWater: Int) async -> CatalogAdoptOutcome
 
+    /// Restore from Backup… (GH #343): write the sealed copy at `source`
+    /// INTO the open store with SQLite's backup API — one transaction, the
+    /// file never replaced — refusing unless the copy is still the bytes
+    /// that were verified (`source` is pinned: inode, size, times, SHA-256),
+    /// reads `expectedGeneration` and is below this Mac's high-water (so it
+    /// opens read-only and Adopt stays a person's act). The witnesses are
+    /// never touched. On `.restored` / `.restoredUnverified` the store is
+    /// CLOSED. (CatalogDatabaseRestore.swift has the steps and the reasons.)
+    func restore(fromSealedCopy source: CatalogPinnedSource, expectedGeneration: Int, pagesPerStep: Int32,
+                 progress: @escaping @Sendable (_ copied: Int, _ total: Int) -> Void) async -> CatalogRestoreOutcome
+
     /// Release the store. Safe to call twice.
     func close() async
 
@@ -445,6 +456,12 @@ extension CatalogRepository {
     /// A store with no sealed-copy door says so (the JSON repository; test fakes).
     public func sealedCopyBlocking(to target: URL) -> String? {
         "this catalog store cannot make a sealed copy"
+    }
+
+    /// A store with no restore door says so (test fakes).
+    public func restore(fromSealedCopy source: CatalogPinnedSource, expectedGeneration: Int, pagesPerStep: Int32,
+                        progress: @escaping @Sendable (_ copied: Int, _ total: Int) -> Void) async -> CatalogRestoreOutcome {
+        .refused(reason: "this catalog store cannot restore a backup")
     }
 
     /// A store with no file guard never stops for a moved file (test fakes).

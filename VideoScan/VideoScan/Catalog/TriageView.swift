@@ -872,7 +872,7 @@ struct TriageView: View {
                 // at once; the row's copy catches up with the next build.
                 StarRatingView(rating: Binding(
                     get: { model.record(forID: rec.id)?.starRating ?? rec.starRating },
-                    set: { model.record(forID: rec.id)?.starRating = $0 }
+                    set: { if let live = model.record(forID: rec.id) { CuratedRecordEdits(model: model).setStarRating($0, on: live) } }
                 ), onCommit: { model.saveCatalogDebounced() })
             }
             .width(min: 60, ideal: 70)
@@ -1123,13 +1123,7 @@ struct TriageView: View {
     /// O(selection): each id goes through the model's id index (this was
     /// a linear scan of the catalog per selected id).
     private func applyDisposition(_ disposition: MediaDisposition, to ids: Set<UUID>) {
-        for rec in model.triageRecords(withIDs: ids) {
-            rec.mediaDisposition = disposition
-            if rec.lifecycleStage == .cataloged && disposition != .unreviewed {
-                rec.lifecycleStage = .reviewing
-            }
-        }
-        model.saveCatalogDebounced()
+        guard CuratedRecordEdits(model: model).triageDisposition(disposition, on: model.triageRecords(withIDs: ids)) else { return }
         catalogEdited()
         noteStewardReviewDecision(disposition, on: ids)
     }

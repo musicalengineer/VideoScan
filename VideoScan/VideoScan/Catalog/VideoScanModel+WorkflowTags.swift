@@ -28,6 +28,7 @@ extension VideoScanModel {
     /// semantics: mixed selections apply to ALL (present=true adds the
     /// tag everywhere it's missing; present=false removes it everywhere).
     func setTag(_ tag: String, on recs: [VideoRecord], present: Bool) {
+        guard !CuratedEditGuard.refuses("tags", model: self) else { return }
         var changed: [VideoRecord] = []
         for rec in recs {
             let before = rec.tags
@@ -55,6 +56,7 @@ extension VideoScanModel {
 
     /// Clear every tag on every record in `recs`.
     func removeAllTags(from recs: [VideoRecord]) {
+        guard !CuratedEditGuard.refuses("tags", model: self) else { return }
         var changed: [VideoRecord] = []
         for rec in recs where !rec.tags.isEmpty {
             rec.tags = []
@@ -79,6 +81,8 @@ extension VideoScanModel {
     /// (it used to assign `rec.notes` directly) so the search index and
     /// save path stay in lock-step with the edit.
     func setUserNotes(_ text: String, for rec: VideoRecord) {
+        // Codex #388 P1: a read-only session refuses the edit, not only its save.
+        guard !CuratedEditGuard.refuses("notes", model: self) else { return }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard rec.userNotes != trimmed else { return }
         rec.userNotes = trimmed

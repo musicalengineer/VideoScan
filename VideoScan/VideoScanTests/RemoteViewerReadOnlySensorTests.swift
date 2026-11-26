@@ -538,6 +538,10 @@ struct RemoteViewerReadOnlySensorTests {
         "Catalog/CatalogStore.swift": (1, nil, nil), "Catalog/CatalogSync.swift": (3, nil, nil),
         // Back Up Catalog's sealed-copy temp file (app data, renamed on success).
         "Catalog/CatalogBackupSeal.swift": (1, nil, nil),
+        // Restore from Backup…'s own .restore-<uuid> work folder beside
+        // catalog.sqlite (the staged backup copy; GH #343). The safety copy
+        // reaches the Trash through MediaTrash.move, never this call.
+        "Catalog/CatalogBackupRestore.swift": (1, nil, nil),
         // The master's own VACUUM INTO temp (.catalog.sqlite.<uuid>.vspublish.tmp)
         // when a viewer-snapshot publish fails before its rename (phase 2, 2026-10-19).
         "Catalog/CatalogViewerSnapshot.swift": (1, nil, nil),

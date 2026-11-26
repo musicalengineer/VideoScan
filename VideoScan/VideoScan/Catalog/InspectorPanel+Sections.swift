@@ -31,7 +31,7 @@ extension InspectorPanel {
                     .foregroundColor(.secondary)
                 StarRatingView(rating: Binding(
                     get: { rec.starRating },
-                    set: { rec.starRating = $0 }
+                    set: { onRateRecord(rec, $0) }
                 ), onCommit: onRecordEdited)
             }
             // Volume name — prominent.

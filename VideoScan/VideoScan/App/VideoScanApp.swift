@@ -942,17 +942,17 @@ struct VideoScanApp: App {
                 }
                 .keyboardShortcut("e", modifiers: [.command])
 
-                Button("Import Catalog…") {
-                    catalogModel.importBundleViaPanel()
+                // GH #343 (Rick 2026-11-25): the Import Catalog… item, parked
+                // disabled since slice 2b for exactly this, returns as Restore
+                // from Backup… beside Back Up Catalog… — it REPLACES the
+                // catalog (never merges), so it is named for what it does and
+                // has no shortcut: a rare, deliberate act. The Catalog menu's
+                // three groups (DECISIONS 2026-11-01) are unchanged.
+                Button("Restore from Backup…") {
+                    catalogModel.restoreFromBackupViaPanel()
                 }
-                // ⇧⌘I since 2026-10-06: ⌘I is Catalog Info (Finder's rule).
-                .keyboardShortcut("i", modifiers: [.command, .shift])
-                // Disabled since JSON gone, slice 2b (2026-10-21): every
-                // bundle is refused (bundleImportDecision), so the panel
-                // could never succeed. Restore from a catalog.sqlite backup
-                // is GH #343; the item returns enabled with it.
-                .disabled(true)
-                .help(VideoScanModel.importCatalogComingHelp)
+                .disabled(catalogModel.isReadOnly)
+                .help(VideoScanModel.restoreFromBackupHelp)
 
                 // Same prompt the backup-time nag shows, on demand — so the
                 // user never has to run a backup just to reach it

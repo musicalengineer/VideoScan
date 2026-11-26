@@ -4671,6 +4671,36 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDatabaseRestoreTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogDatabaseRestoreTests",
+        "CatalogDatabaseRestoreCommittedTests",
+        "CatalogDatabaseRestorePinnedTests",
+        "CatalogDatabaseRestoreScaleTests"
+      ],
+      "tests": [
+        "changeUnderTheLockRefused",
+        "countsComeBackExactly",
+        "errorAfterCommitIsRestoredUnverified",
+        "failureMidCopyRollsBack",
+        "fileStopRefuses",
+        "generationRefusals",
+        "hundredThousandRowBackupRestoresWithinBudget",
+        "modifiedAfterPinRefused",
+        "pageSizeRefused",
+        "poisonedAndReadOnlyRefused",
+        "provenMovedNeedsTheSameBytes",
+        "replacedAfterPinRefused",
+        "restoreThenRelaunchThenAdopt",
+        "sameSizeMtimeRestoredChangeRefused",
+        "sharedLockSurvivesTheRehash",
+        "unsealedSourceRefused",
+        "utf16BackupRefusedUpFront"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogHardKillTests.swift",
       "stage": "regression",
       "suites": [
@@ -4678,6 +4708,17 @@
       ],
       "tests": [
         "randomKillsLeaveACommittedPrefix"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogRestoreHardKillTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogRestoreHardKillTests"
+      ],
+      "tests": [
+        "randomKillsLeaveLiveOrBackup"
       ]
     },
     {
@@ -10559,7 +10600,7 @@
         "heldCatalogRefuses",
         "jsonAuthorityRefuses",
         "jsonBundleRefusedDatabaseUnchanged",
-        "sqliteBundleRefused",
+        "sqliteBundleGoesToRestore",
         "twelveThousandRows"
       ]
     },
@@ -10981,7 +11022,7 @@
         "focusesAnUnfocusedTable",
         "hiddenSelectionPromotesNothing",
         "hookGuardsOnTheWindowAndCleansUp",
-        "importCatalogMovedOffCommandI",
+        "importCatalogBecameRestoreFromBackupWithNoShortcut",
         "installedOnceAtTheWindowRoot",
         "keepsOnlyVisibleInRowOrder",
         "leavesItAloneWhenItOrAChildAlreadyHasIt",
@@ -11693,6 +11734,52 @@
         "tenThousandJitteringPassesConverge",
         "toolbarBodyNeverWalksRecords",
         "volumeTableBuildsNoFormatterPerCell"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogRestoreFromBackupTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogRestoreFromBackupTests",
+        "CatalogRestoreCodex384Tests",
+        "CatalogRestoreFromBackupSensorTests"
+      ],
+      "tests": [
+        "atHighWaterRefused",
+        "cancelledChangesNothing",
+        "doorNeverReplacesTheFile",
+        "editingPausedMidRestore",
+        "everyCuratedEditRefusedMidRestore",
+        "failureAfterCommitStopsTheSession",
+        "heldCatalogRefused",
+        "manifestMismatchRefused",
+        "missingLatchRefused",
+        "modifiedAfterVerificationRefused",
+        "replacedAfterVerificationRefused",
+        "restoreStopRelaunchAdopt",
+        "safetyCopyDamagedInTrashRefused",
+        "shaMismatchRefused",
+        "storeRefusalGivesHoldBack",
+        "trashFailureGivesHoldBack"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CuratedEditGuardTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CuratedEditGuardTests",
+        "CuratedEditGuardSensorTests"
+      ],
+      "tests": [
+        "dateEditKeepsBothRefusals",
+        "inspectorDateRoutesThroughBothRules",
+        "modelMutatorsAskTheGuard",
+        "refusalLoggedOncePerEpisode",
+        "viewerSessionRefusesTheEdit",
+        "viewsWriteNoCuratedFieldDirectly",
+        "writableSessionTakesTheEdit"
       ]
     },
     {
@@ -43640,9 +43727,9 @@
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 1137,
+      "expected_floor": 1160,
       "name": "regression",
-      "package_expected_floor": 378,
+      "package_expected_floor": 396,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -43672,6 +43759,11 @@
         "VideoScanCoreTests.CatalogCommitB25Tests",
         "VideoScanCoreTests.CatalogCommitB26Tests",
         "VideoScanCoreTests.CatalogHardKillTests",
+        "VideoScanCoreTests.CatalogRestoreHardKillTests",
+        "VideoScanCoreTests.CatalogDatabaseRestoreTests",
+        "VideoScanCoreTests.CatalogDatabaseRestoreCommittedTests",
+        "VideoScanCoreTests.CatalogDatabaseRestorePinnedTests",
+        "VideoScanCoreTests.CatalogDatabaseRestoreScaleTests",
         "VideoScanCoreTests.CatalogDiskFullTests",
         "VideoScanCoreTests.CatalogFolderDoorsTests",
         "VideoScanCoreTests.CatalogWriteCornerDiskTests",
@@ -43767,6 +43859,11 @@
         "VideoScanTests/CatalogPurgeMarkerTests",
         "VideoScanTests/CatalogQuitCornerTests",
         "VideoScanTests/CatalogRescanRefusedReplacementTests",
+        "VideoScanTests/CatalogRestoreFromBackupSensorTests",
+        "VideoScanTests/CatalogRestoreFromBackupTests",
+        "VideoScanTests/CatalogRestoreCodex384Tests",
+        "VideoScanTests/CuratedEditGuardTests",
+        "VideoScanTests/CuratedEditGuardSensorTests",
         "VideoScanTests/CatalogSQLiteSnapshotTests",
         "VideoScanTests/CatalogScopedSaveBaselineTests",
         "VideoScanTests/CatalogSearchBudgetSensorTests",

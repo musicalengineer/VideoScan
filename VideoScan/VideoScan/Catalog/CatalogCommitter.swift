@@ -182,8 +182,12 @@ final class CatalogCommitter {
     /// Of `replacedBy`: kept purges already named as waiting on a
     /// replacement that is gone (said once each, codex #124 F2).
     private var notedUnresolved: Set<UUID> = []
-    /// Reopen / Adopt is closing and opening the store: no commit runs.
+    /// Reopen / Adopt / Restore is closing and opening the store: no commit runs.
     private var reopening = false
+    /// GH #343: catalog.sqlite was restored from a backup this session. The
+    /// records in memory are the catalog as it WAS; nothing may be committed
+    /// into the restored file, ever, by this session — quit and reopen.
+    private(set) var restoreStop: String?
     private var heldBy: String?
     private var lastRefusalNote: String?
     private var lastMarkerRefusal: String?
@@ -325,7 +329,7 @@ final class CatalogCommitter {
     /// catalog.sqlite or its latch was replaced or moved. Only read while
     /// commits are already blocked, so a working session pays no `stat`.
     private var fileStop: String? {
-        blockedReason == nil ? nil : repository.fileStopWords
+        restoreStop ?? (blockedReason == nil ? nil : repository.fileStopWords)
     }
 
     /// Catalog ▸ Catalog Status… ▸ Reopen SQLite Catalog is refused after a file-stop.
@@ -601,6 +605,10 @@ final class CatalogCommitter {
     /// Catalog ▸ Catalog Status… ▸ Adopt This SQLite Catalog… (gap 5): the person accepted a
     /// restored catalog.sqlite below the high-water this Mac already wrote.
     func adopt(toHighWater highWater: Int) async -> CatalogAdoptOutcome {
+        if let restoreStop {
+            sink("Catalog store: REFUSED Adopt This SQLite Catalog — \(restoreStop). Nothing changed.")
+            return .refused(reason: restoreStop)
+        }
         reopening = true
         cancelTimer()
         let outcome = await repository.adopt(toHighWater: highWater)
@@ -615,6 +623,35 @@ final class CatalogCommitter {
             sink("Catalog store: REFUSED Adopt This SQLite Catalog — \(words). Nothing changed.")
         }
         return outcome
+    }
+
+    // MARK: - Restore from Backup… (GH #343, CatalogBackupRestore.swift)
+
+    /// The restore's write hold: what is in memory was committed first
+    /// (`commitBeforeSafetyCopy`); from here no commit, side-table write or
+    /// marker change is admitted (`reopening`) until `endRestore` or
+    /// `stopAfterRestore`. Synchronous, on the main actor: nothing can be
+    /// admitted between the commit-first and this.
+    func beginRestore() {
+        cancelTimer()
+        reopening = true
+    }
+
+    /// The restore was refused before it wrote: writes resume as before.
+    func endRestore() {
+        reopening = false
+        scheduleCommit()
+    }
+
+    /// The restore wrote catalog.sqlite (and the store closed itself): this
+    /// session stops for good. Every door refuses with `words` (they end
+    /// "quit and reopen"); Reopen and Adopt are refused; the quit saves nothing.
+    func stopAfterRestore(_ words: String) {
+        cancelTimer()
+        restoreStop = words
+        reopening = false
+        blockedReason = words
+        sink("Catalog store: saving stopped for this session — \(words)")
     }
 
     /// catalog.sqlite's generation read now from the store (one small read);

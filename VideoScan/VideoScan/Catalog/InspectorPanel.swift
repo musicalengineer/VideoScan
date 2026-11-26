@@ -17,6 +17,10 @@ struct InspectorPanel: View {
     /// the panel has no model access by design; the host passes
     /// `model.saveCatalogDebounced`. Defaulted for previews.
     var onRecordEdited: () -> Void = {}
+    /// THE rating write (codex #388 P1): the host routes it through
+    /// CuratedRecordEdits, which refuses in a read-only session. Defaulted
+    /// (no write) for previews.
+    var onRateRecord: (VideoRecord, Int) -> Void = { _, _ in }
     let duplicateGroupMembers: [VideoRecord]
     /// Same footage, different file (2026-10-19): the members of this
     /// record's footage group whose bytes differ — resolved and memoized by
@@ -479,9 +483,11 @@ struct StarRatingView: View {
                     .contentShape(Rectangle())
                     .onTapGesture {
                         let new = (shown == star) ? 0 : star
-                        shown = new
                         rating = new
-                        onCommit()
+                        // Read back through the binding: a refused write
+                        // (read-only session) shows the stars unchanged.
+                        shown = rating
+                        if shown == new { onCommit() }
                     }
                     .accessibilityIdentifier("starRating.\(star)")
             }

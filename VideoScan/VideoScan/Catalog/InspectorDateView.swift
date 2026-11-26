@@ -107,7 +107,9 @@ struct InspectorDateView: View {
                 archivedFixedSection(fixedBy)
             } else {
                 editableSection
+                    .disabled(model.isReadOnly)   // codex #388 P1: a read-only session takes no edit
             }
+
 
             // Background step 1 (DECISIONS 2026-11-01): the era job's
             // observation, its own line under Rick's — never a date.
@@ -352,17 +354,29 @@ struct InspectorDateView: View {
 
     // MARK: Mutations
 
+    // Both rules (CuratedRecordEdits): a read-only session refuses the edit
+    // itself (codex #388 — nil, nothing touched, logged once by the guard);
+    // an archived record or archived twin refuses through InspectorDateEdit
+    // (GH #221 / codex #383 — `.refusedArchived`).
     private func saveEntry() {
         let typed = entryText
-        apply(InspectorDateEdit.save(entry: typed, known: isKnown, to: record, readOnly: fixedNow() != nil), typed: typed)
+        apply(CuratedRecordEdits(model: model).saveUserDate(entry: typed, known: isKnown, on: record,
+                                                            archived: fixedNow() != nil), typed: typed)
     }
 
     private func clearEntry() {
-        apply(InspectorDateEdit.clear(record, readOnly: fixedNow() != nil), typed: "a cleared date")
+        apply(CuratedRecordEdits(model: model).clearUserDate(on: record, archived: fixedNow() != nil),
+              typed: "a cleared date")
     }
 
     /// The edit's outcome → the field, the catalog save, the ledger line.
-    private func apply(_ outcome: InspectorDateEdit.Outcome, typed: String) {
+    /// nil = the read-only guard refused: the field reseeds, nothing saved.
+    private func apply(_ outcome: InspectorDateEdit.Outcome?, typed: String) {
+        guard let outcome else {
+            entryText = record.userDate ?? ""
+            entryRejected = false
+            return
+        }
         switch outcome {
         case .saved(let canonical):
             entryRejected = false

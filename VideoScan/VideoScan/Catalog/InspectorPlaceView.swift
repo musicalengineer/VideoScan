@@ -87,6 +87,7 @@ struct InspectorPlaceView: View {
                         .accessibilityIdentifier("inspector.place.clear")
                 }
             }
+            .disabled(model.isReadOnly)   // codex #388 P1: a read-only session takes no edit
 
             Picker("", selection: $isKnown) {
                 Text("Best guess").tag(false)
@@ -105,6 +106,7 @@ struct InspectorPlaceView: View {
                 saveEntry()
             }
             .accessibilityIdentifier("inspector.place.confidencePicker")
+            .disabled(model.isReadOnly)
 
             if entryRejected {
                 Text("Hmm, that was empty — try a town like Franklin, MA, or a region like Cape Cod.")
@@ -162,18 +164,15 @@ struct InspectorPlaceView: View {
             return
         }
         entryRejected = false
+        guard CuratedRecordEdits(model: model).setUserPlace(canonical, known: isKnown, on: record) else { return }
         entryText = canonical   // reflect the normalized form back
-        record.userPlace = canonical
-        record.userPlaceConfidence = (isKnown ? UserPlaceConfidence.known
-                                              : UserPlaceConfidence.estimated).rawValue
         save()
     }
 
     private func clearEntry() {
+        guard CuratedRecordEdits(model: model).setUserPlace(nil, known: false, on: record) else { return }
         entryText = ""
         entryRejected = false
-        record.userPlace = nil
-        record.userPlaceConfidence = nil   // meaningless without a place
         save()
     }
 
