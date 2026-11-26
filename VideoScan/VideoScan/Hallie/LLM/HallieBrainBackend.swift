@@ -214,7 +214,9 @@ struct HallieLoggedBrain: HallieBrainBackend {
             let ms = Int((clock.now - started) / .milliseconds(1))
             let reason = HallieBrainLog.failureReason(error, afterMs: ms)
             write("[hallie] brain OUTCOME op=\(op) brain=\(brainLabel) failed ms=\(ms) reason=\(reason)")
-            if let afterFailure {
+            // A familyMedia refusal promised zero dials; the after-failure
+            // line would probe /api/ps on the first host (Codex #450 P2).
+            if let afterFailure, !Self.isFamilyMediaRefusal(error) {
                 let write = write
                 Task.detached(priority: .utility) {
                     if let line = await afterFailure() { write(line) }
@@ -222,6 +224,11 @@ struct HallieLoggedBrain: HallieBrainBackend {
             }
             throw error
         }
+    }
+
+    private static func isFamilyMediaRefusal(_ error: Error) -> Bool {
+        if case HallieBrainError.familyMediaRefused = error { return true }
+        return false
     }
 
     func translate(_ text: String) async throws -> NLQuerySpec {

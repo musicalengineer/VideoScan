@@ -156,6 +156,33 @@ struct HallieBrainLogTests {
                 + "“llama3.3:70b” NOT loaded; in memory: qwen3.8:27b-mlx")
     }
 
+    /// Codex #450 round 1 (P2): a familyMedia refusal promises zero dials,
+    /// but the after-failure line probed the first host's /api/ps.
+    @Test("a familyMedia refusal runs no after-failure probe: nothing is dialled")
+    func refusalDialsNoAfterFailureProbe() async throws {
+        struct Refusing: HallieBrainBackend {
+            var provider: HallieBrainProvider { .local }
+            var modelName: String { "qwen3.8:27b-mlx" }
+            var displayName: String { "fake" }
+            func translate(_ text: String) async throws -> NLQuerySpec { throw CancellationError() }
+            func translateAST(_ text: String) async throws -> ArchivistQueryAST { throw CancellationError() }
+            func interpretTurn(_ text: String) async throws -> HallieTurnInterpretation { throw CancellationError() }
+            func composePlainText(system: String, user: String,
+                                  dataClass: HallieDataClass) async throws -> String {
+                throw HallieBrainError.familyMediaRefused("text, to an Ollama host off this Mac")
+            }
+            func warmUp() async {}
+        }
+        let sink = HallieLineSink()
+        var brain = HallieLoggedBrain(inner: Refusing(), write: { sink.write($0) })
+        brain.afterFailure = { "[hallie-brain] PROBED" }
+        _ = try? await brain.composePlainText(system: "", user: "", dataClass: .familyMedia)
+        // The probe, if launched, is detached; give it ample time to land.
+        try await Task.sleep(for: .milliseconds(300))
+        #expect(sink.lines.count == 2, "\(sink.lines)")
+        #expect(!sink.lines.contains { $0.contains("PROBED") })
+    }
+
     @Test("what the server holds: loaded, another model, nothing")
     func residentLines() {
         let host = "127.0.0.1:11434"

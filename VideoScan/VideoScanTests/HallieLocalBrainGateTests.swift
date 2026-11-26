@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 @testable import VideoScan
 
@@ -87,12 +88,58 @@ struct HallieLocalBrainGateTests {
     func localityTruthTable() {
         let names: Set<String> = ["localhost", "127.0.0.1", "::1", "ricksultra", "ricksultra.local"]
         let local = ["127.0.0.1:11434", "localhost", "http://localhost:11434", "[::1]:11434",
-                     "RicksUltra.local", "http://RicksUltra.local:11434", "RicksUltra.local."]
+                     "RicksUltra.local", "http://RicksUltra.local:11434", "RicksUltra.local.", "127.0.0.2"]
         let remote = ["https://ollama.example.com", "http://ollama.example.com:11434", "ollama.example.com",
                       "http://localhost@evil.example", "localhost.example.com", "https://ricksultra.example.com",
-                      "RicksM4.local", "192.168.1.20", "127.0.0.2", ""]
+                      "RicksM4.local", "192.168.1.20", ""]
         for e in local { #expect(OllamaEndpoints.isOnThisMac(e, thisMacNames: names), "\(e) is this Mac") }
         for e in remote { #expect(!OllamaEndpoints.isOnThisMac(e, thisMacNames: names), "\(e) is not this Mac") }
+    }
+
+    /// Codex #450 round 1: `[0:0:0:0:0:0:0:1]` is `::1`, but a string
+    /// compare refused it, breaking the local brain. IP literals are now
+    /// compared as ADDRESSES (inet_pton): 127/8, ::1 and IPv4-mapped
+    /// ::ffff:127/8 are loopback. Shorthand IPv4 (`127.1`, `2130706433`)
+    /// is not an inet_pton address, so it stays refused — fail closed.
+    @Test("every spelling of a loopback address is this Mac; other addresses are not")
+    func loopbackAddressSpellings() {
+        let names: Set<String> = ["localhost", "127.0.0.1", "::1"]   // the production base set
+        let local = ["[0:0:0:0:0:0:0:1]:11434", "http://[0:0:0:0:0:0:0:1]:11434", "[::1]",
+                     "http://[::1]:11434", "[0000:0000:0000:0000:0000:0000:0000:0001]", "127.0.0.2",
+                     "http://127.255.255.254:11434", "[::ffff:127.0.0.1]:11434",
+                     "http://[0:0:0:0:0:ffff:7f00:1]:11434"]
+        let remote = ["[::2]", "[::]", "0.0.0.0", "[::ffff:192.168.1.20]", "10.0.0.1", "128.0.0.1",
+                      "[fe80::1]", "126.255.255.255", "127.0.0.1.evil.example", "http://127.0.0.1@evil.example",
+                      "127.1", "2130706433"]
+        for e in local { #expect(OllamaEndpoints.isOnThisMac(e, thisMacNames: names), "\(e) is this Mac") }
+        for e in remote { #expect(!OllamaEndpoints.isOnThisMac(e, thisMacNames: names), "\(e) is not this Mac") }
+    }
+
+    /// Codex #450 round 1: the gate checked only the FIRST URL, and the
+    /// session followed redirects — this Mac's /api/chat answering 307 to a
+    /// remote host would have carried the family-media POST (307 keeps the
+    /// method and body) off the Mac. Driven through the PRODUCTION
+    /// transport (`.urlSession` on the session `OllamaHTTP.makeSession`
+    /// builds) with a URLProtocol stub standing in for the network.
+    @Test("a 307 from this Mac's /api/chat to a remote host is never followed: zero requests reach it")
+    func familyMediaRedirectOffThisMacIsRefused() async {
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [RedirectingOllamaStub.self]
+        var template = OllamaQueryTranslator()
+        template.session = OllamaHTTP.makeSession(configuration: config)
+        template.timeoutSeconds = 5
+        template.probeTimeoutSeconds = 5
+        var brain = OllamaFailoverTranslator(hosts: ["127.0.0.1:11434"], template: template)
+        brain.thisMacNames = ["127.0.0.1"]
+        brain.connectionRetryDelay = .zero
+        await #expect(throws: (any Error).self, "the call fails closed") {
+            _ = try await brain.composePlainText(system: "s", user: "MARKER-450 transcript: we're at the cape",
+                                                 dataClass: .familyMedia)
+        }
+        let seen = RedirectingOllamaStub.seen.withLock { $0 }
+        #expect(seen.contains("http://127.0.0.1:11434/api/chat"), "the stub saw the chat request: \(seen)")
+        #expect(!seen.contains { $0.contains(RedirectingOllamaStub.remoteHost) },
+                "no request may reach the redirect's destination: \(seen)")
     }
 
     @Test("a fleet Mac row is not this Mac: familyMedia goes only to the Mac running the app")
@@ -134,4 +181,38 @@ struct HallieLocalBrainGateTests {
         let cloud = HallieBrainHistoryPolicy.history([turn], for: .cloud)
         #expect(HallieBrainHistoryPolicy.dataClass(.familyText, carrying: cloud) == .familyText)
     }
+}
+
+/// Stands in for an Ollama on this Mac whose /api/chat redirects off it.
+/// Records the URL of every request started, including any redirected one.
+private final class RedirectingOllamaStub: URLProtocol {
+    static let remoteHost = "remote-450.example"
+    static let seen = Mutex<[String]>([])
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let url = request.url else { return }
+        Self.seen.withLock { $0.append(url.absoluteString) }
+        if url.host == Self.remoteHost || url.path == "/api/tags" {
+            let body = url.path == "/api/tags" ? #"{"models":[]}"# : composedReply
+            let ok = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: nil)!
+            client?.urlProtocol(self, didReceive: ok, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: Data(body.utf8))
+            client?.urlProtocolDidFinishLoading(self)
+            return
+        }
+        let target = "https://\(Self.remoteHost)/api/chat"
+        let redirect = HTTPURLResponse(url: url, statusCode: 307, httpVersion: "HTTP/1.1",
+                                       headerFields: ["Location": target])!
+        var next = request
+        next.url = URL(string: target)
+        client?.urlProtocol(self, wasRedirectedTo: next, redirectResponse: redirect)
+        // A refused redirect leaves the 307 as the final response.
+        client?.urlProtocol(self, didReceive: redirect, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+
+    override func stopLoading() {}
 }
