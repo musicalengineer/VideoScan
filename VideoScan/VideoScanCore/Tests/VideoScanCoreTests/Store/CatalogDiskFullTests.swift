@@ -219,8 +219,12 @@ struct CommitSession {
     let opened: CatalogOpenOutcome
     let records: [VideoRecord]
 
-    static func open(_ url: URL, requireReadWrite: Bool = true) async throws -> CommitSession {
-        let repository = GRDBCatalogRepository(host: "disk-full-test", durability: .archival)
+    /// `spaceFloor`: off by default — these suites drive SQLite's OWN
+    /// disk-full paths on a 32 MB image, which the production 1 GB floor
+    /// would refuse before they are reached (GH #357 has its own tests).
+    static func open(_ url: URL, requireReadWrite: Bool = true,
+                     spaceFloor: CatalogSpaceFloor = .offForTests) async throws -> CommitSession {
+        let repository = GRDBCatalogRepository(host: "disk-full-test", durability: .archival, spaceFloor: spaceFloor)
         let opened = await repository.open(at: url)
         if case .refused(let reason) = opened { throw FixtureFailure(words: "open refused: \(reason)") }
         if requireReadWrite && opened != .readWrite {

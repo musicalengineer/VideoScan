@@ -4947,6 +4947,7 @@
         "noReplaceOrIgnoreConflictResolutionInTheStore",
         "normalisationKeepsWhitespaceInsideStringLiterals",
         "onlyStoreFoldersImportGRDB",
+        "spaceFloorOffNeverLeavesTheTests",
         "theDDLMatchesTheDesignDocumentsTriggers",
         "theMigrationCreatesNoTableOutsideTheDDL",
         "volatileDurabilityNeverLeavesTheTests"
@@ -37822,6 +37823,24 @@
       ]
     },
     {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogSpaceFloorTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogSpaceFloorTests"
+      ],
+      "tests": [
+        "costPerWrite",
+        "minimumFloor",
+        "multipleOfCatalogAndWAL",
+        "poisonedFolder",
+        "realReading",
+        "refusalWords",
+        "refusedThroughTheDoor",
+        "unreadableAndOff"
+      ]
+    },
+    {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ProvenanceEstimateTests.swift",
       "stage": "unit",
@@ -43266,7 +43285,7 @@
       ],
       "expected_floor": 1055,
       "name": "regression",
-      "package_expected_floor": 354,
+      "package_expected_floor": 363,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -43325,7 +43344,8 @@
         "VideoScanCoreTests.LateMeasurementAfterFinishTests",
         "VideoScanCoreTests.CatalogCloseDrainTests",
         "VideoScanCoreTests.EraCanaryCommandTests",
-        "VideoScanCoreTests.CatalogCommitFailsAfterPhaseOneTests"
+        "VideoScanCoreTests.CatalogCommitFailsAfterPhaseOneTests",
+        "VideoScanCoreTests.CatalogSpaceFloorTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",

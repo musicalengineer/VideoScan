@@ -135,6 +135,8 @@ public actor GRDBCatalogRepository: CatalogRepository {
 
     public let host: String
     private let durability: Durability
+    /// GH #357: the free-space floor every write is checked against before BEGIN.
+    private let spaceFloor: CatalogSpaceFloor
     private var pool: DatabasePool? { didSet { publishGate() } }
     private var databaseURL: URL? { didSet { publishGate() } }
     private var mode: Mode = .closed { didSet { publishGate() } }
@@ -171,9 +173,11 @@ public actor GRDBCatalogRepository: CatalogRepository {
     private var closeWaiters: [CheckedContinuation<Void, Never>] = []
 
     public init(host: String = GRDBCatalogRepository.defaultHost,
-                durability: Durability = .archival) {
+                durability: Durability = .archival,
+                spaceFloor: CatalogSpaceFloor = .production) {
         self.host = host
         self.durability = durability
+        self.spaceFloor = spaceFloor
     }
 
     public var generation: Int { session.generation }
@@ -628,7 +632,8 @@ public actor GRDBCatalogRepository: CatalogRepository {
         if let words = session.fileStopped { return .refused(reason: words) }   // #359: the stop speaks first
         if case .readOnly(let reason) = mode { return .refused(reason: "read-only: \(reason)") }
         let plan = WritePlan(session: session, door: door, host: host, databaseURL: databaseURL,
-                             publish: durability.publish, crashBeforeCommit: crashBeforeCommit, fileGuard: fileGuard)
+                             publish: durability.publish, crashBeforeCommit: crashBeforeCommit, fileGuard: fileGuard,
+                             spaceFloor: spaceFloor)
         let outcome: CatalogWriteOutcome
         do {
             outcome = try await pool.writeWithoutTransaction { db in try plan.run(db, body) }
@@ -652,7 +657,8 @@ public actor GRDBCatalogRepository: CatalogRepository {
         if let words = session.fileStopped { return .refused(reason: words) }   // #359: the stop speaks first
         if let reason = open.readOnlyReason { return .refused(reason: "read-only: \(reason)") }
         let plan = WritePlan(session: session, door: door, host: host, databaseURL: databaseURL,
-                             publish: durability.publish, crashBeforeCommit: open.crashBeforeCommit, fileGuard: fileGuard)
+                             publish: durability.publish, crashBeforeCommit: open.crashBeforeCommit, fileGuard: fileGuard,
+                             spaceFloor: spaceFloor)
         let outcome: CatalogWriteOutcome
         do {
             outcome = try pool.writeWithoutTransaction { db in try plan.run(db, body) }
@@ -716,6 +722,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
         let publish: AtomicFilePublish.Durability
         let crashBeforeCommit: Seam?
         let fileGuard: CatalogFileGuard
+        let spaceFloor: CatalogSpaceFloor
 
         func run(_ db: Database,
                  _ body: (any CatalogTransaction) throws -> Void) throws -> CatalogWriteOutcome {
@@ -725,6 +732,12 @@ public actor GRDBCatalogRepository: CatalogRepository {
             if let words = session.fileStop(fileGuard) { return .refused(reason: words) }
             if let reason = session.needsReopen {
                 return .refused(reason: "reopen the catalog: \(reason)")
+            }
+            // GH #357: the free-space floor, before BEGIN — a write refused
+            // here runs no body, writes no frame and moves no witness.
+            if let words = spaceFloor.refusal(forDatabaseAt: databaseURL) {
+                storeLog.error("catalog store REFUSED a write via \(door.rawValue, privacy: .public) below the free-space floor: \(words, privacy: .public)")
+                return .refused(reason: words)
             }
             // codex C′ #6: read HERE, on the writer, after every earlier
             // write on this repository has committed and updated the box.
