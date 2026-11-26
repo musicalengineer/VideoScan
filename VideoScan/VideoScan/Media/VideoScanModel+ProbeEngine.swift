@@ -871,6 +871,7 @@ extension VideoScanModel {
         if var cached = metadataCache.lookup(path: path, fileSize: fileSize, modDate: modDate) {
             cached.wasCacheHit = true
             cached.scanContext = ScanContext.capture(for: url, scanRootPath: scanRootPath)
+            cached.identityStamp = FileIdentityStamp.capture(path: path)   // GH #434
             return cached
         }
 
@@ -971,6 +972,11 @@ extension VideoScanModel {
         // schema stays stable — scanContext lives in catalog.json only and is
         // recaptured fresh on every scan.
         outcome.scanContext = ScanContext.capture(for: url, scanRootPath: scanRootPath)
+        // GH #434: the file this probe saw, so the merge can prove a stored
+        // whole-file digest still describes it (open + fstat + fgetattrlist
+        // + stat: four syscalls, no data read; ~10 µs local, one round trip
+        // on SMB — against a full re-read of the file when it is missing).
+        outcome.identityStamp = FileIdentityStamp.capture(path: path)
         return outcome
     }
 

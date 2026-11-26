@@ -180,6 +180,12 @@ public class VideoRecord: Identifiable, Decodable {
     /// `volumeName` at the time of first migration). nil ⇒ never relocated.
     public var originVolume: String?
     public var wasCacheHit: Bool = false   // transient — not persisted to SQLite cache
+    /// Transient, never persisted (GH #434): the identity stamp of the file
+    /// THIS scan probed (volume UUID + inode + size + mtime + ctime, one
+    /// opened descriptor). The rescan merge lets a stored whole-file digest
+    /// follow the file onto the fresh record only when it still describes
+    /// this stamp (`ContentFixity.describesFileNow`). nil = not probed now.
+    public var scanIdentityStamp: FileIdentityStamp?
     /// Transient, set by a SQLite load (cutover B1): some derived values on
     /// this record (captions, transcript, inferred date, checks, faces…) were
     /// imported from catalog.json and have not been regenerated against the
