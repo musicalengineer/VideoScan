@@ -124,7 +124,12 @@ struct CatalogCommitBaseline {
     /// this fingerprint), how many are NOT durable: every one except a
     /// held row whose stored payload has exactly this fingerprint.
     func notDurable(_ waitingRows: [(id: UUID, print: Fingerprint)]) -> Int {
-        waitingRows.filter { held[$0.id] != $0.print }.count
+        waitingRows.filter { !isDurablyHeld($0.id, at: $0.print) }.count
+    }
+
+    /// `pending_rows` holds `id`'s payload at exactly this fingerprint.
+    func isDurablyHeld(_ id: UUID, at print: Fingerprint) -> Bool {
+        held[id] == print
     }
 
     // MARK: - After a commit

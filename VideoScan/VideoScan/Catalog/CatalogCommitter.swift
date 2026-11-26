@@ -231,12 +231,33 @@ final class CatalogCommitter {
         blockedReason = reason
     }
 
-    /// Records whose state is not in catalog.sqlite (tests; the status
-    /// line). Held rows count: they are not rows yet.
+    /// Records whose state is durable nowhere in catalog.sqlite (tests; the
+    /// quit's question). A held row counts only when it changed since its
+    /// `pending_rows` payload was stored.
     func changedRecordCount() -> Int {
+        unsavedRecords().count
+    }
+
+    /// The records whose current state is durable NOWHERE in catalog.sqlite
+    /// — changed since the baseline, or refused — and nothing else: what the
+    /// quit's rescue copy holds (GH #356), based on `knownGeneration`. A
+    /// held row whose `pending_rows` payload has exactly its current
+    /// fingerprint is durable there and is left out (Codex #381 P2: one
+    /// failed edit used to rescue the whole pending set) — the same rule as
+    /// `CatalogCommitBaseline.notDurable`.
+    /// O(records) fingerprinting; called at quit and by tests, never per frame.
+    func unsavedRecords() -> [VideoRecord] {
         let records = input().records
         let prints = CatalogChangeDetector.fingerprints(of: records.map(VideoRecordDTO.init))
-        return CatalogChangeDetector.changed(records.map(\.id), fingerprints: prints, baseline: baseline.prints).count
+        return CatalogChangeDetector.changed(records.map(\.id), fingerprints: prints, baseline: baseline.prints)
+            .filter { !baseline.isDurablyHeld(records[$0].id, at: prints[$0]) }
+            .map { records[$0] }
+    }
+
+    /// The commit can't run only because a job holds catalog writes (MOPS-16)
+    /// — the one refusal that may clear by itself (the quit waits it out).
+    var isHeldByJob: Bool {
+        !reopening && blockedReason == nil && input().readOnlyReason == nil && input().holdReason != nil
     }
 
     // MARK: - Removal markers (through CatalogMarkerRelay)

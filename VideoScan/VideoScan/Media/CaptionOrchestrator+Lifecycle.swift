@@ -231,6 +231,20 @@ extension CaptionOrchestrator {
         dropCachedRunnerForShutdown()
     }
 
+    /// The quit was cancelled (Keep Open, or a rescue copy that could not be
+    /// written — GH #356, Codex #381 P2): reopen the latch so caption and
+    /// dossier batches can start again in this session. Safe to reopen:
+    /// `beginShutdown` only latched and dropped the cached runner (the next
+    /// batch builds one), and a batch drained for the quit was cancelled —
+    /// it is NOT restarted here (the quit's alert says so); a drain that
+    /// timed out leaves `currentStatus` active, and every start* refuses
+    /// while it is.
+    func endShutdown() {
+        guard isShuttingDown else { return }
+        isShuttingDown = false
+        shutdownLog.notice("quit cancelled — shutdown latch reopened; caption / dossier batches may start again")
+    }
+
     @discardableResult
     func drainForShutdown(deadline: TimeInterval = 5.0) async -> Bool {
         isShuttingDown = true

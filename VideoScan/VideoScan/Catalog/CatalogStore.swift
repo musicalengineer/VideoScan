@@ -1749,7 +1749,8 @@ extension CatalogStore {
     /// catalog's own encoder and publishes it with AtomicFilePublish
     /// (`.fullFsync`) at the URL it is given — on any thread, never on
     /// `writeQueue`, so a stalled catalog save cannot hold it. The closure
-    /// returns nil when the copy is durable, else the words. Not a catalog
+    /// returns nil when the copy is durable (published, fsync'd, read back
+    /// byte-equal), else the words. Not a catalog
     /// save: no hold, lock or generation check — it never touches catalog.json.
     /// `generation`: the header's stamp — the caller's catalog generation
     /// (catalog.sqlite's under the SQLite authority, QA r1 F3); nil = this
@@ -1762,6 +1763,13 @@ extension CatalogStore {
                 encoder.dateEncodingStrategy = .iso8601
                 let data = try payload.encoded(using: encoder)
                 try AtomicFilePublish.write(data, to: url, durability: .fullFsync, createIntermediates: false)
+                // Codex #381 P1: durable means read back too — the published
+                // bytes, uncached, equal what was encoded. Memory: a second
+                // copy of the payload for the compare (under catalog.sqlite
+                // the unsaved records only).
+                guard try Data(contentsOf: url, options: .uncached) == data else {
+                    return "\(url.lastPathComponent) read back different from what was written"
+                }
                 return nil
             } catch {
                 return String(describing: error)

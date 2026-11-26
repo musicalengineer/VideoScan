@@ -161,18 +161,21 @@ struct CatalogFileGuardQAR1Tests {
         try Data("switched\n".utf8).write(to: latch)
         let repository = GRDBCatalogRepository(host: "qa-r1", durability: .volatileForTests)
         try #require(await repository.open(at: fixture.url) == .readWrite)
-        let wal = URL(fileURLWithPath: fixture.url.path + "-wal")
-        let walBefore = CatalogOpenCornerTests.sha256OrDash(wal)
         await repository.injectCrashBeforeCommit { try FileManager.default.removeItem(at: latch) }
         let outcome = await repository.write(as: .ui) { _ in }
-        let walAfter = CatalogOpenCornerTests.sha256OrDash(wal)
+        // GH #338: the transaction's pages are flushed to the -wal BEFORE phase
+        // 1 (uncommitted frames: no commit flag, invisible to every reader and
+        // to recovery), so the -wal's bytes move by design at check 3. What
+        // must not land is a COMMITTED frame: a fresh reader of the database
+        // + -wal at the path still reads generation 2.
+        let committedAfter = try CatalogDiskFullTests.storedGeneration(fixture.url)
         let generation = await repository.generation
         await repository.injectCrashBeforeCommit(nil)
         await repository.close()
         #expect(outcome == .refused(reason: "\(SQLiteCatalogReader.latchFileName) was replaced or removed while VideoScan was open; nothing more will be saved — quit and reopen"),
                 "\(outcome)")
         #expect(generation == 2)
-        #expect(walAfter == walBefore, "the commit landed after the latch was removed")
+        #expect(committedAfter == 2, "the commit landed after the latch was removed (a fresh reader sees generation \(committedAfter))")
     }
 
     // F3: close() keeps the TRUNCATE checkpoint after a swap so "the

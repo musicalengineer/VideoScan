@@ -4607,7 +4607,8 @@
       ],
       "tests": [
         "ballastIsNotInheritedByChildren",
-        "diskFullCommitRefusesAndRetries"
+        "diskFullCommitRefusesAndRetries",
+        "relaunchAfterDiskFullRefusalOpensReadWrite"
       ]
     },
     {
@@ -4953,6 +4954,7 @@
         "noReplaceOrIgnoreConflictResolutionInTheStore",
         "normalisationKeepsWhitespaceInsideStringLiterals",
         "onlyStoreFoldersImportGRDB",
+        "spaceFloorOffNeverLeavesTheTests",
         "theDDLMatchesTheDesignDocumentsTriggers",
         "theMigrationCreatesNoTableOutsideTheDDL",
         "volatileDurabilityNeverLeavesTheTests"
@@ -10321,6 +10323,7 @@
         "drainCancelsCooperativeBatch",
         "drainDeadlineExpiresOnStubbornEngine",
         "drainOnIdleIsImmediate",
+        "endShutdownReopensTheLatch",
         "mlxUsageFlagRoundTrip",
         "shutdownLatchRefusesNewBatches"
       ]
@@ -11535,8 +11538,18 @@
         "CatalogQuitCornerTests"
       ],
       "tests": [
+        "editAfterTheRescueGetsItsOwnCopy",
+        "editInsideTheDebounceWindowLandsAtQuit",
+        "heldRowsAlreadyDurableAreNotRescued",
+        "holdThatClearsIsWaitedOut",
+        "holdThatStaysAsksAndKeepOpenKeepsTheEdit",
         "keepOpenChoiceNeedsTheCommitBeforeTerminate",
+        "keepOpenReopensTheShutdownLatch",
         "masterQuitWithFailedFinalCommit",
+        "nothingAtRiskQuitsWithoutAQuestion",
+        "refusedCommitAsksWithTheCommittersWords",
+        "rescueThatCannotBeWrittenKeepsVideoScanOpen",
+        "roleFlipWithAcceptedEditAsksThenRescuesTheDelta",
         "viewerQuitSavesNothingAndSaysNothing"
       ]
     },
@@ -37847,6 +37860,39 @@
       ]
     },
     {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitFailsAfterPhaseOneTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitFailsAfterPhaseOneTests"
+      ],
+      "tests": [
+        "bodyFailureKeepsItsWords",
+        "commitFailureIsNamed"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogSpaceFloorTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogSpaceFloorTests"
+      ],
+      "tests": [
+        "adoptRefusedBelowTheFloor",
+        "copyFloorAppliesOnlyOnTheCatalogDisk",
+        "costPerWrite",
+        "minimumFloor",
+        "multipleOfCatalogAndWAL",
+        "poisonedFolder",
+        "realReading",
+        "refusalWords",
+        "refusedThroughTheDoor",
+        "sealedCopyOnTheCatalogDiskRespectsTheFloor",
+        "unreadableAndOff"
+      ]
+    },
+    {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ProvenanceEstimateTests.swift",
       "stage": "unit",
@@ -43322,9 +43368,9 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 1055,
+      "expected_floor": 1065,
       "name": "regression",
-      "package_expected_floor": 351,
+      "package_expected_floor": 366,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -43382,7 +43428,9 @@
         "VideoScanCoreTests.CatalogRealityFutureEvidenceTests",
         "VideoScanCoreTests.LateMeasurementAfterFinishTests",
         "VideoScanCoreTests.CatalogCloseDrainTests",
-        "VideoScanCoreTests.EraCanaryCommandTests"
+        "VideoScanCoreTests.EraCanaryCommandTests",
+        "VideoScanCoreTests.CatalogCommitFailsAfterPhaseOneTests",
+        "VideoScanCoreTests.CatalogSpaceFloorTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",

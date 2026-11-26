@@ -114,6 +114,15 @@ struct CatalogStoreSensorTests {
         #expect(users.isEmpty, "production code chose .volatileForTests: \(users.map(\.lastPathComponent))")
     }
 
+    /// GH #357: the free-space floor is switched off only by test suites.
+    @Test func spaceFloorOffNeverLeavesTheTests() {
+        let users = Self.swiftFiles()
+            .filter { !$0.path.contains("/Tests/") && !$0.path.contains("/VideoScanTests/") }
+            .filter { $0.lastPathComponent != "CatalogSpaceFloor.swift" }
+            .filter { Self.read($0).contains("offForTests") }
+        #expect(users.isEmpty, "production code switched the space floor off: \(users.map(\.lastPathComponent))")
+    }
+
     @Test func theDDLMatchesTheDesignDocumentsTriggers() {
         // The bookkeeping triggers by name, as docs/design/catalog_sqlite_schema_v1.sql r3 lists them.
         let names = [
