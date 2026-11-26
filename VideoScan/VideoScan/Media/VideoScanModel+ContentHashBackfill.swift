@@ -107,24 +107,24 @@ extension VideoScanModel {
     @MainActor
     struct SignatureRefusals {
         static let named = 5
-        private(set) var count = 0
+        private(set) var refused = 0
         private(set) var sample: [String] = []
 
         mutating func note(_ rec: VideoRecord?, found: String?) {
-            count += 1
+            refused += 1
             guard sample.count < Self.named, let rec else { return }
             sample.append("\(rec.fullPath) (record's volume \(rec.evidencedVolumeUUID ?? "unknown"), file's \(found ?? "unknown"))")
         }
 
         /// The console line, nil when nothing was refused.
         var logLine: String? {
-            guard count > 0 else { return nil }
-            let more = count > sample.count ? " … and \(count - sample.count) more" : ""
-            return "  ⚠ File signatures: \(count) file(s) NOT signed — the file at the record's path is on another volume than the record's: \(sample.joined(separator: "; "))\(more)"
+            guard refused > 0 else { return nil }
+            let more = refused > sample.count ? " … and \(refused - sample.count) more" : ""
+            return "  ⚠ File signatures: \(refused) file(s) NOT signed — the file at the record's path is on another volume than the record's: \(sample.joined(separator: "; "))\(more)"
         }
 
         /// The summary line's clause.
-        var summary: String { count > 0 ? ", refused \(count) (other volume)" : "" }
+        var summary: String { refused > 0 ? ", refused \(refused) (other volume)" : "" }
     }
 
     // MARK: - Candidate selection
@@ -394,7 +394,7 @@ extension VideoScanModel {
         // without changing `records.count`, so tell them (codex #1368).
         if applied > 0 { notifyVolumeAggregatesStale() }
 
-        result.refusedOtherVolume = refusals.count
+        result.refusedOtherVolume = refusals.refused
         refusals.logLine.map { log($0) }
         log("File signatures: computed \(result.hashed), failed \(result.failed)"
             + refusals.summary
