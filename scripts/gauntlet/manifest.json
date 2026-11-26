@@ -35315,6 +35315,7 @@
         "test_a_start_the_host_refused_is_not_a_run_and_is_bounded",
         "test_a_tick_starts_the_real_suite_lane_and_a_later_tick_writes_its_verdict",
         "test_an_unknown_range_is_never_docs_only",
+        "test_an_unreadable_outcome_word_is_not_a_host_refusal_and_is_retried_once",
         "test_busy_and_the_quiet_window_wait_without_counting_against_the_commit",
         "test_history_and_state_are_bounded",
         "test_install_uninstall_and_reinstall_on_a_fake_m4_and_a_refusal_anywhere_else",
