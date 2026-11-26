@@ -358,6 +358,18 @@ final class CatalogCommitter {
         return saveRefusal() ?? baseline.waiting[id]?.words ?? "its current values could not be stored"
     }
 
+    /// GH #339, Held Back at Import ▸ Carry Selected…: the records Rick
+    /// confirmed a carry onto, committed NOW through the commit door under
+    /// its own writer (`import carry`: the provenance lands in
+    /// generation_history and row_knowledge). Only these rows. nil = every
+    /// one is stored; else the words — the caller closes no held-back row.
+    /// (The same synchronous commit as the marker door, another door name.)
+    func commitCarried(ids: Set<UUID>) -> String? {
+        if let why = saveRefusal() { return why }
+        if commit(.importCarry, owner: nil, scope: .only(ids)) { return nil }
+        return saveRefusal() ?? ids.lazy.compactMap { self.baseline.waiting[$0]?.words }.first ?? "the rows could not be stored"
+    }
+
     /// A safety copy of catalog.sqlite is about to be sealed (`VACUUM INTO`,
     /// B2.3): what is in memory is committed FIRST, so the copy holds what
     /// the person sees — including an edit typed inside the 2 s debounce
@@ -412,6 +424,9 @@ final class CatalogCommitter {
         /// The background helper's observations (schema v1.13), from its
         /// journal through JournalApplier — the only road in (design §3.4).
         case observations = "background observations"
+        /// GH #339: a held-back row closed after Rick confirmed carrying its
+        /// tag / date / place onto a proven moved copy (HeldBackStore).
+        case heldBack = "held back at import"
 
         var change: String { self == .folders ? "a folder change" : "a \(rawValue) change" }
     }

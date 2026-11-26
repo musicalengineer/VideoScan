@@ -39204,6 +39204,72 @@
         "treeNicknameWinsForTheLiving",
         "undatedTreePersonIsTreatedAsLiving"
       ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogHeldBackRowsTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogHeldBackRowsTests",
+        "HeldBackCuratedTests"
+      ],
+      "tests": [
+        "ISOLATION_aFileTheCatalogDoesNotHoldIsRefusedAndNothingIsWritten",
+        "ISOLATION_aRowWithAnIntegrityFindingIsRefusedByTheDDLAndTheWriteRollsBack",
+        "ISOLATION_anUnknownTagIsAProblem",
+        "ISOLATION_noRawRowIsUnreadable",
+        "ISOLATION_textThatIsNotARecordIsUnreadableWithWords",
+        "ISOLATION_wrongTypesAndForeignValuesAreProblemsNeverValues",
+        "SCALE_twoThousandRowsReadInUnderASecond",
+        "aDateConfidenceWithoutADateIsIgnored",
+        "aResolveWritesOnlyTheResolutionColumnsAndASecondSaysAlreadyResolved",
+        "aWholeRecordReadsItsCuratedMembers",
+        "everyRowReadsBackWholeAndTheOpenCountIsTheUnresolvedRows"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HeldBackSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "HeldBackSensorTests"
+      ],
+      "tests": [
+        "jobWritesNothing",
+        "oneWriter",
+        "sheetConfirmsAndStaysO1"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HeldBackTests.swift",
+      "stage": "unit",
+      "suites": [
+        "HeldBackPlanTests",
+        "HeldBackProofTests",
+        "HeldBackCarryTests"
+      ],
+      "tests": [
+        "acrossRoleFlip",
+        "archivedKeepsDate",
+        "carryAndRelaunch",
+        "changedFileSkipped",
+        "duringHold",
+        "editInsideDebounce",
+        "fields",
+        "groupWordsAreEvidence",
+        "groups",
+        "jobOffersOnlyProven",
+        "jobPlan",
+        "neverOverwrite",
+        "noWriteWithoutConfirmation",
+        "offerBlocking",
+        "offlineIsNeverGone",
+        "poisonedRowInTheTable",
+        "sampledAndNone",
+        "scale",
+        "wholeFile"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -42000,7 +42066,7 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 4109,
+      "expected_floor": 4131,
       "name": "unit",
       "package_expected_floor": 1027,
       "package_selectors": [
@@ -42797,7 +42863,11 @@
         "VideoScanTests/CatalogTagDuplicateSortLogicTests",
         "VideoScanTests/CatalogTagDuplicateSortScaleTests",
         "VideoScanTests/CatalogTagDuplicateSortSensorTests",
-        "VideoScanTests/CatalogTagSortRealisticShapeTests"
+        "VideoScanTests/CatalogTagSortRealisticShapeTests",
+        "VideoScanTests/HeldBackSensorTests",
+        "VideoScanTests/HeldBackPlanTests",
+        "VideoScanTests/HeldBackProofTests",
+        "VideoScanTests/HeldBackCarryTests"
       ]
     },
     {
@@ -43253,7 +43323,7 @@
       ],
       "expected_floor": 1055,
       "name": "regression",
-      "package_expected_floor": 351,
+      "package_expected_floor": 362,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -43311,7 +43381,9 @@
         "VideoScanCoreTests.CatalogRealityFutureEvidenceTests",
         "VideoScanCoreTests.LateMeasurementAfterFinishTests",
         "VideoScanCoreTests.CatalogCloseDrainTests",
-        "VideoScanCoreTests.EraCanaryCommandTests"
+        "VideoScanCoreTests.EraCanaryCommandTests",
+        "VideoScanCoreTests.CatalogHeldBackRowsTests",
+        "VideoScanCoreTests.HeldBackCuratedTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",

@@ -48,7 +48,10 @@ struct CatalogStatusWindow: View {
     @ObservedObject private var queue: CatalogStatusUpdateQueue
     @ObservedObject private var cutover: CatalogCutoverState
     @StateObject private var info: CatalogDatabaseInfoModel
+    /// GH #339: the held-back rows' count and their read-only list.
+    @ObservedObject private var heldBack: HeldBackStore
     @State private var showValidate = false
+    @State private var showHeldBack = false
     @Environment(\.openWindow) private var openWindow
 
     init(model: VideoScanModel, center: MediaFileOperationsCenter, orchestrator: CaptionOrchestrator,
@@ -59,6 +62,7 @@ struct CatalogStatusWindow: View {
         self._freshness = ObservedObject(wrappedValue: model.catalogFreshness)
         self._queue = ObservedObject(wrappedValue: model.catalogStatusUpdateQueue)
         self._cutover = ObservedObject(wrappedValue: model.catalogCutover)
+        self._heldBack = ObservedObject(wrappedValue: model.heldBack)
         // Its "unknown — …" facts reach the log once per change (F6).
         self._info = StateObject(wrappedValue: CatalogDatabaseInfoModel(sources: sources,
                                                                         log: { [weak model] in model?.catalogStatusNote($0) }))
@@ -73,6 +77,7 @@ struct CatalogStatusWindow: View {
                 CatalogActionBriefHeader(brief: .catalogStatus)
                 catalogLead
                 threeLines
+                if let open = heldBack.openCount { heldBackRow(open) }
                 if cutover.canReopen || cutover.canAdopt { restore }
                 GroupBox {
                     CatalogStatusBand(
@@ -104,6 +109,29 @@ struct CatalogStatusWindow: View {
         .sheet(isPresented: $showValidate) {
             ValidateCatalogSheet(model: model, center: center)
         }
+        .sheet(isPresented: $showHeldBack) {
+            HeldBackSheet(store: heldBack, center: center, isReadOnly: model.isReadOnly)
+        }
+    }
+
+    // MARK: Held back at import (GH #339)
+
+    /// "Held back at import: 2,110 — why" and Show… (the read-only list). O(1).
+    private func heldBackRow(_ open: Int) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "tray.full").foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(HeldBackWords.statusLine(open)).font(.headline)
+                    .accessibilityIdentifier("catalogStatus.heldBack")
+                Text(HeldBackWords.statusHelp).font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button(HeldBackWords.showButton) { showHeldBack = true }
+                .accessibilityIdentifier("catalogStatus.heldBack.show")
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.06)))
     }
 
     // MARK: The Catalog indicator's lead

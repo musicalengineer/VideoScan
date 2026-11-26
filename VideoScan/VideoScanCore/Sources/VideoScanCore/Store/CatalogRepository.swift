@@ -113,6 +113,12 @@ public enum CatalogWriter: String, Sendable {
     /// "Switch Catalog to SQLite…": the Master Archive designation moved
     /// from catalog.json into `catalog_state`.
     case cutover
+    /// GH #339: Rick confirmed carrying a held-back row's tag, date and
+    /// place onto its proven moved copy. Its own door so the provenance is
+    /// in the audit trail: `generation_history.writer` = "import carry" and
+    /// `row_knowledge.source` = "app:import carry" (the values came from the
+    /// October import's row, not a fresh edit).
+    case importCarry = "import carry"
 }
 
 // MARK: - What a body sees
@@ -205,7 +211,7 @@ public protocol CatalogLiveReading {
 public protocol CatalogReader: CatalogRecordReading, CatalogLoadReading, CatalogLiveReading, CatalogFolderReading,
                                CatalogDecisionReading, CatalogProvenanceRoleReading, CatalogProvenanceAssertionReading,
                                CatalogAnalysisResultsReading, CatalogObservationsReading, CatalogFrameIndexReading,
-                               CatalogPublicMarkReading, CatalogReportCardReading {
+                               CatalogPublicMarkReading, CatalogReportCardReading, CatalogHeldBackReading {
     /// The committed generation this read's snapshot was taken at.
     var generation: Int { get }
 }
@@ -220,7 +226,8 @@ public protocol CatalogReader: CatalogRecordReading, CatalogLoadReading, Catalog
 /// CatalogPublicMarkRows.swift): their readings and doors ride on the
 /// same transaction.
 public protocol CatalogTransaction: CatalogRecordReading, CatalogLiveReading, CatalogFolderWriting, CatalogDecisionWriting,
-                                    CatalogProvenanceRoleWriting, CatalogProvenanceAssertionWriting, CatalogPublicMarkWriting {
+                                    CatalogProvenanceRoleWriting, CatalogProvenanceAssertionWriting, CatalogPublicMarkWriting,
+                                    CatalogHeldBackWriting {
     /// The generation this write advances TO (the committed one plus one).
     /// Rows written in this transaction are stamped with it.
     var generation: Int { get }

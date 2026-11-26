@@ -33,9 +33,11 @@ extension MediaFileOperationKind {
     /// `.findMaster` (2026-10-26) writes nothing at all: it reads the
     /// fingerprint sidecar read-only and logs its answers. `.indexFrames`
     /// (2026-11-07) writes only its own cache folder (FrameIndexJob).
+    /// `.findMovedCopies` (2026-11-25, #339) writes nothing: it hands its
+    /// proven pairs to the held-back store; the carry is a separate commit.
     static let notCatalogWriters: Set<MediaFileOperationKind> = [
         .combine, .compare, .extract, .ripFrames, .reformat, .transcode, .cleanup, .trim,
-        .balanceAudio, .rebuildAudio, .compareFootage, .findMaster, .indexFrames,
+        .balanceAudio, .rebuildAudio, .compareFootage, .findMaster, .indexFrames, .findMovedCopies,
     ]
 
     var writesCatalog: Bool { Self.catalogWriters.contains(self) }
