@@ -338,18 +338,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // the nothing-active path.
             captionOrchestrator?.beginShutdown()
 
-            // VLM drain: cancel + bounded wait so MLX stops dispatching
-            // GPU work before AppKit tears Metal down around it
+            // GH #356: the catalog's final commit, while the quit can still
+            // be cancelled. The common case lands here synchronously and the
+            // quit goes on at once; a VLM batch to drain, a job's hold to wait
+            // out, or a failed commit (Keep Open / Quit and Keep a Rescue
+            // Copy) goes through finishQuit on the terminateLater path.
+            let vlmActive = captionOrchestrator?.currentStatus.isActive == true
+            if !vlmActive, CatalogQuitRecovery.quitNeedsNoQuestion(model: catalogModel) { return .terminateNow }
+            // VLM drain (in finishQuit): cancel + bounded wait so MLX stops
+            // dispatching GPU work before AppKit tears Metal down around it
             // (crash variant VideoScan-2026-06-11-232946.ips).
-            if let orch = captionOrchestrator, orch.currentStatus.isActive {
-                shutdownLogger.notice("quit requested with VLM batch active — draining (max \(Self.vlmDrainDeadline, format: .fixed(precision: 1))s)")
-                Task { @MainActor [weak self] in
-                    await self?.drainVLMForShutdownIfActive()
-                    NSApp.reply(toApplicationShouldTerminate: true)
-                }
-                return .terminateLater
+            Task { @MainActor [weak self] in
+                let reply = await self?.finishQuit() ?? .terminateNow
+                NSApp.reply(toApplicationShouldTerminate: reply == .terminateNow)
             }
-            return .terminateNow
+            return .terminateLater
         }
     }
 
@@ -369,15 +372,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// is generous, and past it the plan on disk names the file anyway.
     static let deleteDuplicatesStopDeadline: TimeInterval = 60
 
-    /// The common end of the two file-operation `.terminateLater` paths,
-    /// once their jobs have settled: the dossier/VLM shutdown latch and
-    /// drain. Always `.terminateNow` since Import to SQLite's quit settle was
-    /// retired (2026-10-20); the catalog's save is willTerminate's checked save.
+    /// The common end of every `.terminateLater` path, once their jobs have
+    /// settled: the dossier/VLM shutdown latch and drain, then the catalog's
+    /// final commit (GH #356) — `.terminateCancel` when the commit failed and
+    /// the person chose Keep Open. A quit that goes on still ends in
+    /// willTerminate's checked save (the rescue copy when it cannot save).
     @MainActor
     private func finishQuit() async -> NSApplication.TerminateReply {
         captionOrchestrator?.beginShutdown()
         await drainVLMForShutdownIfActive()
-        return .terminateNow
+        let proceed = await CatalogQuitRecovery.finalCommitBeforeQuit(model: catalogModel, ask: CatalogQuitRecovery.askWithAlert)
+        return proceed ? .terminateNow : .terminateCancel
     }
 
     /// The VLM drain, shared by the immediate quit path and the
@@ -385,6 +390,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @MainActor
     private func drainVLMForShutdownIfActive() async {
         guard let orch = captionOrchestrator, orch.currentStatus.isActive else { return }
+        shutdownLogger.notice("quit requested with VLM batch active — draining (max \(Self.vlmDrainDeadline, format: .fixed(precision: 1))s)")
         appLog.write("shutdown: cancelling dossier/VLM batch, draining in-flight inference")
         let drained = await orch.drainForShutdown(deadline: Self.vlmDrainDeadline)
         vlmDrainTimedOut = !drained

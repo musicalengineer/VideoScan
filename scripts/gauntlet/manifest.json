@@ -11530,8 +11530,14 @@
         "CatalogQuitCornerTests"
       ],
       "tests": [
+        "editInsideTheDebounceWindowLandsAtQuit",
+        "holdThatClearsIsWaitedOut",
+        "holdThatStaysAsksAndKeepOpenKeepsTheEdit",
         "keepOpenChoiceNeedsTheCommitBeforeTerminate",
         "masterQuitWithFailedFinalCommit",
+        "nothingAtRiskQuitsWithoutAQuestion",
+        "refusedCommitAsksWithTheCommittersWords",
+        "roleFlipWithAcceptedEditAsksThenRescuesTheDelta",
         "viewerQuitSavesNothingAndSaysNothing"
       ]
     },
@@ -43283,7 +43289,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 1055,
+      "expected_floor": 1061,
       "name": "regression",
       "package_expected_floor": 363,
       "package_selectors": [

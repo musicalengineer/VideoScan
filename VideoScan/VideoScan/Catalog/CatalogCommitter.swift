@@ -234,9 +234,23 @@ final class CatalogCommitter {
     /// Records whose state is not in catalog.sqlite (tests; the status
     /// line). Held rows count: they are not rows yet.
     func changedRecordCount() -> Int {
+        unsavedRecords().count
+    }
+
+    /// The records whose current state is not in catalog.sqlite — changed
+    /// since the baseline, refused, or held — and nothing else: what the
+    /// quit's rescue copy holds (GH #356), based on `knownGeneration`.
+    /// O(records) fingerprinting; called at quit and by tests, never per frame.
+    func unsavedRecords() -> [VideoRecord] {
         let records = input().records
         let prints = CatalogChangeDetector.fingerprints(of: records.map(VideoRecordDTO.init))
-        return CatalogChangeDetector.changed(records.map(\.id), fingerprints: prints, baseline: baseline.prints).count
+        return CatalogChangeDetector.changed(records.map(\.id), fingerprints: prints, baseline: baseline.prints).map { records[$0] }
+    }
+
+    /// The commit can't run only because a job holds catalog writes (MOPS-16)
+    /// — the one refusal that may clear by itself (the quit waits it out).
+    var isHeldByJob: Bool {
+        !reopening && blockedReason == nil && input().readOnlyReason == nil && input().holdReason != nil
     }
 
     // MARK: - Removal markers (through CatalogMarkerRelay)

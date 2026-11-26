@@ -384,11 +384,12 @@ struct CatalogQuitRecoverySensorTests {
             .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }.joined(separator: "\n")
     }
 
-    @Test("both terminateLater paths reply through finishQuit; willTerminate makes the CHECKED save; launch announces recovery copies; no Import to SQLite settle is left")
+    @Test("all three terminateLater paths (two file-operation paths, and the VLM-drain / catalog-final-commit path, GH #356) reply through finishQuit; willTerminate makes the CHECKED save; launch announces recovery copies; no Import to SQLite settle is left")
     func theDelegateQuitWiring() throws {
         let app = try Self.code("App/VideoScanApp.swift")
-        #expect(app.components(separatedBy: "NSApp.reply(toApplicationShouldTerminate: reply == .terminateNow)").count == 3)
-        #expect(app.components(separatedBy: "await self?.finishQuit() ?? .terminateNow").count == 3, "both terminateLater paths")
+        #expect(app.components(separatedBy: "NSApp.reply(toApplicationShouldTerminate: reply == .terminateNow)").count == 4)
+        #expect(app.components(separatedBy: "await self?.finishQuit() ?? .terminateNow").count == 4, "all three terminateLater paths")
+        #expect(!app.contains("NSApp.reply(toApplicationShouldTerminate: true)"), "a path that replies without finishQuit skips the catalog's final commit")
         #expect(app.contains("if suspending || center.hasActivePruneApply {"))
         #expect(app.contains("CatalogQuitRecovery.saveAtTermination(model: model)"))
         #expect(!app.contains("catalogModel?.saveCatalogNow()"))
