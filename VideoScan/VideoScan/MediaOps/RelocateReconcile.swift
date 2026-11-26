@@ -409,28 +409,39 @@ enum RelocateReconcile {
     /// witness on a disk image (its backing file may be on the source) or
     /// on a volume whose drive cannot be established never counts, and
     /// neither does any witness when the source root's own drive cannot be
-    /// established (refuse over guess). A network share is one drive per
-    /// server + share, as in the two-drives rule.
+    /// established (refuse over guess).
+    ///
+    /// Round 2 (Codex #387, 2026-11-26):
+    ///   • THE SOURCE'S DRIVE MUST BE ESTABLISHED NOW. A source root that is
+    ///     not in the kernel mount table (unplugged; or a stale folder left
+    ///     in /Volumes, which would stat on the boot disk), cannot be
+    ///     stat'd, or whose drive DiskArbitration cannot name, proves
+    ///     nothing: its volume may be a sibling of the witness's on one SSD.
+    ///     Not independent — Retire refuses (saying the drive is not
+    ///     connected), Relocate copies.
+    ///   • NETWORK vs NETWORK IS NEVER INDEPENDENT. A share's key names the
+    ///     MOUNT (server + share), not the disks behind it: two shares of one
+    ///     NAS are one disk. A network witness of a local source, or a local
+    ///     witness of a network source, counts (different keys).
     ///
     /// st_dev is kept only as a same-pass comparison (both stats taken
     /// here, now): equal → same volume → not independent, no lookup needed.
-    /// When the source root cannot be stat'd the drive is not mounted, so a
-    /// witness that can be stat'd is not on it — it still has to be on a
-    /// drive. A witness that cannot be stat'd is left to the presence probe,
-    /// which refuses it. Device ids always via `DeviceID.from` (2026-10-05).
-    /// Cost: two statfs + DiskArbitration descriptions per witness checked
-    /// (the resolver memoises by st_dev within one call).
+    /// A witness that cannot be stat'd is left to the presence probe, which
+    /// refuses it. Device ids always via `DeviceID.from` (2026-10-05).
+    /// Cost: one getmntinfo (in memory) + two statfs + DiskArbitration
+    /// descriptions per witness checked (the resolver memoises by st_dev
+    /// within one call).
     static let witnessIsOffTheSourceDrive: WitnessIndependenceProbe = { witness, source, root in
         var ws = stat()
         guard stat(witness, &ws) == 0 else { return true }
         var resolver = DuplicateDrives.Resolver(fresh: true)
         guard let witnessDrive = resolver.drive(forPath: witness), witnessDrive.kind.addsADrive else { return false }
         var rs = stat()
-        if stat(root, &rs) == 0 {
-            if DeviceID.from(rs.st_dev) == DeviceID.from(ws.st_dev) { return false }
-            guard let rootDrive = resolver.drive(forPath: root), rootDrive.kind.addsADrive,
-                  rootDrive.key != witnessDrive.key else { return false }
-        }
+        guard RetireGate.mountedNow(root), stat(root, &rs) == 0 else { return false }   // source drive unknown
+        if DeviceID.from(rs.st_dev) == DeviceID.from(ws.st_dev) { return false }
+        guard let rootDrive = resolver.drive(forPath: root), rootDrive.kind.addsADrive,
+              rootDrive.key != witnessDrive.key else { return false }
+        if rootDrive.kind == .network && witnessDrive.kind == .network { return false }   // shares may be one NAS
         return witnessIsNotTheSourceFile(witness, source, root)
     }
 

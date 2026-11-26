@@ -25,6 +25,13 @@
 //   differentPhysicalDrivesAreIndependent ...................... green → green
 //   networkShareWitnessIsIndependentOfALocalDisk ............... green → green
 //   theWitnessThatIsTheSourceFileIsNeverIndependent ............ green → green
+//
+// Round 2 (Codex #387, 2026-11-26) — red on 0e5b2180c, green after:
+//   anUnmountedSourceDriveNeverProvesIndependence ............... RED → green
+//   retireRefusesWhileTheSourceDriveIsNotConnected .............. RED → green
+//   twoNetworkSharesAreNotIndependent ........................... RED → green
+//   retireNamesWhyAWitnessOnAnotherVolumeDoesNotCount ........... RED → green
+//   aLocalDriveWitnessIsIndependentOfANetworkSource (control) ... green → green
 
 import Darwin
 import Foundation
@@ -86,7 +93,73 @@ struct WitnessWholeDiskIndependenceTests {
                                         disk: .retireLive, drive: .live)
 
         #expect(check.refusal != nil, "Retire allowed: the only copy is on the same physical SSD")
-        #expect(check.unproven.witnessGone == [row.path])
+        #expect(check.unproven.witnessNotIndependent == [row.path])
+    }
+
+    @Test("Retire's refusal says WHY a copy on disk does not count (not on another physical drive)")
+    func retireNamesWhyAWitnessOnAnotherVolumeDoesNotCount() throws {
+        let w = try Self.witness()
+        try Self.requireTwoVolumesOfOneDisk(w.path)
+        let row = RetireGateInput.Row(path: Self.siblingVolumeRoot + "/clip.mov", size: w.size,
+                                      labelled: false, witnesses: [w.path])
+        let input = RetireGateInput(volumeRootPath: Self.siblingVolumeRoot, total: 1, disposed: 1,
+                                    rows: [row], recordedVolumeUUID: nil)
+
+        let check = RetireGate.evaluate(input, independence: RelocateReconcile.witnessIsOffTheSourceDrive,
+                                        disk: .retireLive, drive: .live)
+
+        let words = try #require(check.refusal)
+        #expect(words.contains("not proven to be on another physical drive"), "refusal words: \(words)")
+    }
+
+    // MARK: Round 2 — the source's drive must be established NOW (Codex #387 finding 1)
+
+    /// A /Volumes path no volume is mounted at (the source drive unplugged).
+    private static func unmountedRoot() -> String { "/Volumes/VS-not-mounted-\(UUID().uuidString)" }
+
+    @Test("an UNMOUNTED source drive never proves independence — its physical disk cannot be established")
+    func anUnmountedSourceDriveNeverProvesIndependence() throws {
+        let w = try Self.witness()
+        let root = Self.unmountedRoot()
+        // The witness is on a real physical drive (this Mac's SSD); the source
+        // drive may be another volume of that very SSD — nobody can tell.
+        #expect(!RelocateReconcile.witnessIsOffTheSourceDrive(w.path, root + "/clip.mov", root),
+                "a witness was called independent of a drive that is not connected")
+    }
+
+    @Test("Retire refuses while the drive is not connected, and says so")
+    func retireRefusesWhileTheSourceDriveIsNotConnected() throws {
+        let w = try Self.witness()
+        let root = Self.unmountedRoot()
+        let row = RetireGateInput.Row(path: root + "/clip.mov", size: w.size, labelled: false, witnesses: [w.path])
+        let input = RetireGateInput(volumeRootPath: root, total: 1, disposed: 1, rows: [row], recordedVolumeUUID: nil)
+
+        let check = RetireGate.evaluate(input, independence: RelocateReconcile.witnessIsOffTheSourceDrive,
+                                        disk: .retireLive, drive: .live)
+
+        let words = try #require(check.refusal, "Retire allowed with the drive unplugged — independence unproven")
+        #expect(check.unproven.witnessNotIndependent == [row.path])
+        #expect(words.contains("this drive is not connected"), "refusal words: \(words)")
+    }
+
+    // MARK: Round 2 — network shares (Codex #387 finding 2)
+
+    @Test("two network shares are never independent of each other — both may be one NAS disk")
+    func twoNetworkSharesAreNotIndependent() throws {
+        let w = try Self.witness()
+        try Self.requireTwoVolumesOfOneDisk(w.path)
+        #expect(!Self.independent(witness: w.path,
+                                  rootDrive: .init(device: 1, kind: .network, physicalDevice: "net://nas/Source"),
+                                  witnessDrive: .init(device: 2, kind: .network, physicalDevice: "net://nas/Backup")))
+    }
+
+    @Test("control: a witness on a local physical drive is independent of a network source")
+    func aLocalDriveWitnessIsIndependentOfANetworkSource() throws {
+        let w = try Self.witness()
+        try Self.requireTwoVolumesOfOneDisk(w.path)
+        #expect(Self.independent(witness: w.path,
+                                 rootDrive: .init(device: 1, kind: .network, physicalDevice: "net://nas/Source"),
+                                 witnessDrive: .init(device: 2, kind: .physical, physicalDevice: "IOService:/B")))
     }
 
     // MARK: Injected drives (the one seam DuplicateDrives already has)

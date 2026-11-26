@@ -10,6 +10,10 @@
 //   (b) one of its witnesses holds NOW — a live row off this drive, on
 //       another physical drive (the device + inode rule), on disk at the
 //       file's size; or
+//       (GH #311 r2: the drive itself must be connected for that to be
+//       proven, and a network share never vouches for another share. A
+//       witness on disk that fails only the drive rule is named apart, with
+//       why — `witnessNotIndependent`.)
 //   (a) it is labelled deleted and its file is PROVABLY gone:
 //       * the drive is connected — asked from the kernel mount table, fresh,
 //         before AND after the stats (QA m1: a drive that leaves during the
@@ -95,6 +99,14 @@ struct RetireGateInput: Sendable, Equatable {
 struct RetireUnprovenFiles: Sendable, Equatable {
     /// Rest on a witness and none of them holds on disk on another drive now.
     var witnessGone: [String] = []
+    /// Rest on a witness that IS on disk at the file's size, but none is
+    /// proven to be on another PHYSICAL drive (GH #311): another volume of
+    /// this disk, a disk image or an unidentified volume, two network
+    /// shares, or this drive is not connected so its disk is unknown.
+    var witnessNotIndependent: [String] = []
+    /// True when this drive's root could not be found as a folder during
+    /// the check (unplugged) — the words then say so.
+    var driveNotConnected = false
     /// Labelled deleted, the file is still on this drive (or stat can't say
     /// it is gone), no witness holds.
     var labelledStillHere: [String] = []
@@ -103,8 +115,10 @@ struct RetireUnprovenFiles: Sendable, Equatable {
     /// the catalog scanned, or the file's folder is gone.
     var labelledUnchecked: [String] = []
 
-    var all: [String] { witnessGone + labelledStillHere + labelledUnchecked }
-    var isEmpty: Bool { witnessGone.isEmpty && labelledStillHere.isEmpty && labelledUnchecked.isEmpty }
+    var all: [String] { witnessGone + witnessNotIndependent + labelledStillHere + labelledUnchecked }
+    var isEmpty: Bool {
+        witnessGone.isEmpty && witnessNotIndependent.isEmpty && labelledStillHere.isEmpty && labelledUnchecked.isEmpty
+    }
 
     /// How many names each clause lists before "and N more".
     static let namesShown = 10
@@ -113,6 +127,9 @@ struct RetireUnprovenFiles: Sendable, Equatable {
     func refusalText(volumeRootPath: String) -> String {
         let clauses: [(paths: [String], words: String)] = [
             (witnessGone, "no longer have a copy on disk on another drive"),
+            (witnessNotIndependent, driveNotConnected
+                ? "have a copy on disk, but this drive is not connected, so which physical disk it is on cannot be established — connect it to prove the copy is on another drive"
+                : "have a copy on disk that is not proven to be on another physical drive (another volume of this same disk, a disk image, a volume VideoScan cannot identify, or a network share when this drive is a network share too — two shares may be one NAS disk)"),
             (labelledStillHere, "labelled deleted are still on this drive, with no copy on another drive"),
             (labelledUnchecked, "labelled deleted can't be checked (the drive isn't connected or isn't the one we catalogued, or the file's folder is gone) and have no copy on another drive"),
         ]
@@ -178,11 +195,14 @@ enum RetireGate {
         var restedOnAbsence: [String] = []
         let root = input.volumeRootPath
         for row in input.rows {
-            let held = row.witnesses.contains { w in
-                disk.stat(w) == .file(size: row.size) && independence(w, row.path, root)
+            let onDisk = row.witnesses.filter { disk.stat($0) == .file(size: row.size) }
+            if onDisk.contains(where: { independence($0, row.path, root) }) { continue }
+            guard row.labelled else {
+                // GH #311 r2: a copy that IS there but is not proven to be on
+                // another physical drive is named apart, with why.
+                if onDisk.isEmpty { out.witnessGone.append(row.path) } else { out.witnessNotIndependent.append(row.path) }
+                continue
             }
-            if held { continue }
-            guard row.labelled else { out.witnessGone.append(row.path); continue }
             let g = ground ?? AbsenceGround(input, disk: disk, drive: drive)
             ground = g
             switch absence(of: row.path, rootDevice: g.rootDevice, disk: disk, drive: drive) {
@@ -196,6 +216,7 @@ enum RetireGate {
         if !restedOnAbsence.isEmpty && !driveIsTheCataloguedOne(input, disk: disk, drive: drive) {
             out.labelledUnchecked += restedOnAbsence
         }
+        if !out.witnessNotIndependent.isEmpty { out.driveNotConnected = drive.directoryDevice(root) == nil }
         return RetireCheck(input: input, refusal: out.isEmpty ? nil : out.refusalText(volumeRootPath: root),
                            unproven: out)
     }

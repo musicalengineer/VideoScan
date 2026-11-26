@@ -181,7 +181,8 @@ struct RetireAccountedForTests {
         fx.model.records = [skipped, witness]
         #expect(!fx.model.retireVolume(at: fx.driveA.path, reason: "t", witnesses: [witness.fullPath]),
                 "the only witness is on the drive being retired's own device")
-        #expect(fx.model.retireRefusal(at: fx.driveA.path)?.contains("no longer have a copy") == true)
+        // GH #311 r2: the copy IS on disk — the refusal says why it does not count.
+        #expect(fx.model.retireRefusal(at: fx.driveA.path)?.contains("not proven to be on another physical drive") == true)
     }
 
     @Test func aSkippedRecordIsNeverARelinkSource() {
