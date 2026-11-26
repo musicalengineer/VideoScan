@@ -689,6 +689,7 @@ struct CatalogContent: View {
             record: selectedRecord,
             folderKey: selectedRecord.flatMap(EventsFolderMembers.contentKey),
             onRecordEdited: { model.saveCatalogDebounced() },
+            onRateRecord: { CuratedRecordEdits(model: model).setStarRating($1, on: $0) },
             duplicateGroupMembers: duplicateGroupMembers,
             sameFootageMembers: sameFootageMembers,
             possibleSameFootage: possibleSameFootage,

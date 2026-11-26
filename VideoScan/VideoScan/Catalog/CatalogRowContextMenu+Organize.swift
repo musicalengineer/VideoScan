@@ -77,11 +77,15 @@ extension CatalogContent {
     @ViewBuilder
     private func tagsMenu(selectedRecs: [VideoRecord]) -> some View {
         Menu("Tags") {
+            // A read-only session takes no edit (codex #388 P1): the items
+            // are disabled here, and the mutators refuse regardless.
             dispositionItems(selectedRecs: selectedRecs)
+                .disabled(model.isReadOnly)
 
             Divider()
 
             workflowTagItems(selectedRecs: selectedRecs)
+                .disabled(model.isReadOnly)
 
             Divider()
 
@@ -137,8 +141,7 @@ extension CatalogContent {
     }
 
     private func setDisposition(_ disposition: MediaDisposition, on recs: [VideoRecord]) {
-        for r in recs { r.mediaDisposition = disposition }
-        model.saveCatalogDebounced()
+        CuratedRecordEdits(model: model).setDisposition(disposition, on: recs)
     }
 
     /// Workflow tags (2026-07-23): any-of markers. Each quick-pick toggles

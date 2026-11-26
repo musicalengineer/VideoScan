@@ -39,6 +39,7 @@ extension VideoScanModel {
     /// un-tag looked ignored. An auto-sourced name also lands in
     /// rejectedPeople so a future rescan can't silently resurrect it.
     func setPerson(_ name: String, on recs: [VideoRecord], present: Bool) {
+        guard !CuratedEditGuard.refuses("people", model: self) else { return }
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
         func same(_ other: String) -> Bool {
@@ -81,6 +82,7 @@ extension VideoScanModel {
     /// be clearable WITHOUT losing manual confirms). Confirmed and
     /// rejected are human judgments and survive untouched.
     func clearMachinePeopleTags(from recs: [VideoRecord]) {
+        guard !CuratedEditGuard.refuses("people", model: self) else { return }
         var changed: [VideoRecord] = []
         for rec in recs {
             guard !rec.detectedPeople.isEmpty || !rec.suspectedPeople.isEmpty
@@ -97,6 +99,7 @@ extension VideoScanModel {
     /// a bulk un-tag cleanup swept a true-Donna file into a rejection,
     /// which then invisibly blocked Find & Tag).
     func clearRejections(from recs: [VideoRecord]) {
+        guard !CuratedEditGuard.refuses("people", model: self) else { return }
         var changed: [VideoRecord] = []
         for rec in recs where !rec.rejectedPeople.isEmpty {
             rec.rejectedPeople = []
@@ -110,6 +113,7 @@ extension VideoScanModel {
     /// Clears rejections too: this is "start this file's people over",
     /// not "reject everyone".
     func removeAllPeople(from recs: [VideoRecord]) {
+        guard !CuratedEditGuard.refuses("people", model: self) else { return }
         var changed: [VideoRecord] = []
         for rec in recs {
             guard !rec.detectedPeople.isEmpty || !rec.suspectedPeople.isEmpty

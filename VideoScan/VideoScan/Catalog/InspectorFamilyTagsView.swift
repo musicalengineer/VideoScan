@@ -25,6 +25,7 @@ struct InspectorFamilyTagsView: View {
     // that forces an immediate self-redraw after any mutation so the
     // chip rows reflect the new state without waiting on the parent.
     let record: VideoRecord
+    @EnvironmentObject var model: VideoScanModel
     @State private var editMode: Bool = false
     @State private var refreshTick: Int = 0
     /// Free-text "New Person…" prompt (Rick 2026-08-01: tagging "Dan"
@@ -69,6 +70,7 @@ struct InspectorFamilyTagsView: View {
             // Edit toggle. Default is read-only so accidental clicks
             // during browsing don't mutate state.
             Toggle("Edit Tags", isOn: $editMode.animation())
+                .disabled(model.isReadOnly)
                 .toggleStyle(.button)
                 .controlSize(.small)
                 .padding(.top, 4)
@@ -266,39 +268,26 @@ struct InspectorFamilyTagsView: View {
 
     // MARK: - Mutations
 
+    // Every write goes through CuratedRecordEdits (codex #388 P1: refused
+    // in a read-only session). Rules unchanged: a confirm is idempotent
+    // case-insensitively ("dan" beside a gallery "Dan") and un-rejects the
+    // name; a reject adds to rejectedPeople and drops the detection
+    // (suspectedPeople untouched — explicit rejection needs an explicit click).
+
     private func confirmTag(name: String) {
-        guard !name.isEmpty else { return }
-        // Idempotent, case-insensitively: free-text "dan" must not
-        // double-tag alongside a gallery "Dan".
-        guard !record.confirmedByUserPeople.contains(where: {
-            $0.name.compare(name, options: .caseInsensitive) == .orderedSame
-        }) else { return }
-        record.confirmedByUserPeople.append(ConfirmedTag(name: name, confirmedAt: Date()))
-        // Confirming a name un-rejects it implicitly — the user
-        // changed their mind.
-        record.rejectedPeople.removeAll { $0 == name }
-        save()
+        if CuratedRecordEdits(model: model).confirmPerson(name, on: record) { save() }
     }
 
     private func rejectAutoDetected(name: String) {
-        // Add to rejectedPeople (idempotent), drop from detectedPeople.
-        // Don't touch suspectedPeople — those are already low-
-        // confidence; explicit rejection requires explicit click.
-        if !record.rejectedPeople.contains(name) {
-            record.rejectedPeople.append(name)
-        }
-        record.detectedPeople.removeAll { $0 == name }
-        save()
+        if CuratedRecordEdits(model: model).rejectDetected(name, on: record) { save() }
     }
 
     private func unconfirm(tagId: String) {
-        record.confirmedByUserPeople.removeAll { $0.id == tagId }
-        save()
+        if CuratedRecordEdits(model: model).unconfirm(tagID: tagId, on: record) { save() }
     }
 
     private func unreject(name: String) {
-        record.rejectedPeople.removeAll { $0 == name }
-        save()
+        if CuratedRecordEdits(model: model).unreject(name, on: record) { save() }
     }
 
     private func save() {

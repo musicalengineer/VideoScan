@@ -457,6 +457,99 @@ struct CatalogDatabaseRestorePinnedTests {
         await repository.close()
     }
 
+    /// One write to `url` from ANOTHER PROCESS (/usr/bin/sqlite3, no busy
+    /// wait). POSIX locks are per process: an in-process connection would
+    /// see SQLite's own lock table and be refused even with the OS lock
+    /// gone, so only a separate process proves the lock is really held.
+    /// Returns the exit status and stderr.
+    static func externalWrite(_ url: URL) throws -> (status: Int32, stderr: String) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        process.arguments = ["-cmd", ".timeout 0", url.path,
+                             "UPDATE generations SET saved_from_host = 'external writer' WHERE id = 1;"]
+        let errors = Pipe()
+        process.standardError = errors
+        process.standardOutput = Pipe()
+        try process.run()
+        process.waitUntilExit()
+        let words = String(decoding: errors.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+        return (process.terminationStatus, words)
+    }
+
+    /// `catalog-crash-helper posix-lock-probe` from another process: the
+    /// first line it prints (`LOCKED …` / `UNLOCKED`).
+    static func probePOSIXLock(_ helper: URL, _ url: URL, offset: Int64, length: Int64) throws -> String {
+        let process = Process()
+        process.executableURL = helper
+        process.arguments = ["posix-lock-probe", url.path, String(offset), String(length)]
+        let output = Pipe()
+        process.standardOutput = output
+        try process.run()
+        process.waitUntilExit()
+        return String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // Apple's system SQLite (3.54.0-aapl, what GRDB links here) takes its
+    // locks per open file description, so on this platform closing another
+    // descriptor does NOT drop them (probed 2026-11-25: Homebrew's 3.54.1
+    // drops them, /usr/bin/sqlite3 does not). Upstream SQLite's contract is
+    // POSIX advisory locks, which ANY close() of the inode drops. So the
+    // test holds a classic per-process POSIX lock on a spare byte range
+    // (taken under the source's SHARED lock, before the re-hash — what a
+    // POSIX-locking SQLite holds) and asks a second process, AFTER the
+    // re-hash, mid-copy, whether it is still held. RED before the fix (the
+    // hash fd's close dropped it), green after. The external sqlite3 writer
+    // is the end-to-end check on this platform's SQLite.
+    @Test("P2 (codex #388): the re-hash under the source's SHARED lock closes no descriptor of the source — a POSIX lock held before it is still held after it (seen from another process), and an external writer is locked out mid-copy")
+    func sharedLockSurvivesTheRehash() async throws {
+        let helper = try #require(HardKillChild.helperURL(), "catalog-crash-helper was not built beside the test bundle")
+        let scene = try await RestoreScene.make(healthyRows: 200); defer { scene.remove() }
+        let repository = try await scene.open()
+        let backedUp = try await RestoreScene.setNotes("as backed up", on: repository)
+        let backup = try scene.seal(repository, "backup.sqlite")
+        _ = try await RestoreScene.setNotes("typed after the backup", on: repository)
+        // Baseline: unlocked, the external writer CAN write (on a copy), and
+        // the probe sees no lock — so what follows is the lock, not the tools.
+        let probe = scene.importer.directory.appendingPathComponent("probe.sqlite")
+        try FileManager.default.copyItem(at: backup, to: probe)
+        let baseline = try Self.externalWrite(probe)
+        try #require(baseline.status == 0, Comment(rawValue: "the external writer must work unlocked: \(baseline.stderr)"))
+        let spare: (offset: Int64, length: Int64) = (0x4000_0400, 16)   // past SQLite's lock bytes (0x40000000 + 0…511)
+        try #require(try Self.probePOSIXLock(helper, backup, offset: spare.offset, length: spare.length) == "UNLOCKED")
+        let pinned = try CatalogPinnedSource.pin(backup)
+        let lockFD = DescriptorBox()
+        defer { lockFD.close() }
+        await repository.injectRestoreSourceLockedHook {
+            let fd = open(backup.path, O_RDONLY)
+            guard fd >= 0 else { throw CocoaError(.fileReadNoPermission) }
+            lockFD.set(fd)
+            var lock = flock(l_start: off_t(spare.offset), l_len: off_t(spare.length), l_pid: 0,
+                             l_type: Int16(F_RDLCK), l_whence: Int16(SEEK_SET))
+            guard fcntl(fd, F_SETLK, &lock) == 0 else { throw CocoaError(.fileLocking) }
+        }
+        let attempts = StepCounter()
+        let probed = TextBox()
+        let results = ResultBox()
+        await repository.injectRestoreStepHook {
+            // The first step ran: the pin was re-hashed before it.
+            guard attempts.next() == 1 else { return }
+            probed.set(try Self.probePOSIXLock(helper, backup, offset: spare.offset, length: spare.length))
+            results.set(try Self.externalWrite(backup))
+        }
+        let outcome = await repository.restore(fromSealedCopy: pinned, expectedGeneration: backedUp, pagesPerStep: 1)
+        await repository.injectRestoreStepHook(nil)
+        await repository.injectRestoreSourceLockedHook(nil)
+        let seenLock = try #require(probed.value, "the step seam ran inside the copy")
+        #expect(seenLock.hasPrefix("LOCKED"), "the re-hash closed a descriptor of the source and dropped this process's POSIX locks on it: \(seenLock)")
+        let seen = try #require(results.value)
+        #expect(seen.status != 0, "another process wrote the source mid-restore — its SHARED lock was released")
+        #expect(seen.stderr.contains("locked"), Comment(rawValue: seen.stderr))
+        guard case .restored(let generation, _, _) = outcome else { Issue.record("expected restored, got \(outcome)"); return }
+        #expect(generation == backedUp)
+        #expect(try await RestoreScene.notes(at: scene.databaseURL) == ["as backed up"])
+    }
+
     @Test("provenMoved: a rename keeps the proof; the same length with one byte changed does not")
     func provenMovedNeedsTheSameBytes() throws {
         let folder = try StoreFixture.temporaryDirectory(); defer { try? FileManager.default.removeItem(at: folder) }
@@ -477,6 +570,30 @@ struct CatalogDatabaseRestorePinnedTests {
         try Data(repeating: 7, count: 300_000).write(to: copied)
         #expect(pinned.provenMoved(to: copied) == "another file is at its path", "identity, not only the bytes")
     }
+}
+
+/// A string handed out of a seam closure.
+final class TextBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: String?
+    var value: String? { lock.withLock { stored } }
+    func set(_ v: String) { lock.withLock { stored = v } }
+}
+
+/// A descriptor opened inside a seam, closed by the test.
+final class DescriptorBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var fd: Int32 = -1
+    func set(_ v: Int32) { lock.withLock { fd = v } }
+    func close() { lock.withLock { if fd >= 0 { _ = Darwin.close(fd); fd = -1 } } }
+}
+
+/// One value handed out of a seam closure (≈ a mutex-guarded optional).
+final class ResultBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: (status: Int32, stderr: String)?
+    var value: (status: Int32, stderr: String)? { lock.withLock { stored } }
+    func set(_ v: (status: Int32, stderr: String)) { lock.withLock { stored = v } }
 }
 
 extension GRDBCatalogRepository {

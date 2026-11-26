@@ -148,6 +148,7 @@ extension ConfirmPersonSheet {
     }
 
     private func catalogWriteback(rating: ConfirmRating, candidate: PersonCandidateScore) {
+        guard !CuratedEditGuard.refuses("people", model: catalogModel) else { return }
         guard let rec = catalogModel.records.first(where: { $0.id == candidate.recordID })
         else { return }
         let p = profile.name

@@ -471,13 +471,47 @@ struct CatalogRestoreCodex384Tests {
         #expect(scene.model.isReadOnly, "the model must not accept edits while the restore runs")
         let words = scene.model.readOnlyFacts.readOnlyWords ?? ""
         #expect(words.contains("restoring the catalog — editing is paused"), Comment(rawValue: words))
-        try scene.record(.healthy).userNotes = "typed mid-restore"
+        // Codex #388 P1: the edit itself is refused through the production
+        // setter — not only its save (it would be in neither database).
+        let record = try scene.record(.healthy)
+        let before = record.userNotes
+        scene.model.setUserNotes("typed mid-restore", for: record)
+        #expect(record.userNotes == before, "a mid-restore note must be refused, not held in memory to be lost")
         #expect(scene.model.saveCatalogNow() == false, "a mid-restore save is refused, not taken")
         #expect(CatalogQuitRecovery.saveAtTermination(model: scene.model) == .readOnlySession(words: CatalogReadOnlyFacts.restoringWords))
         park.proceed.signal()
         let outcome = await running.value
         guard case .restored = outcome else { Issue.record("expected restored, got \(outcome)"); return }
         #expect(scene.model.isReadOnly && scene.model.readOnlyFacts.restoredFromBackup)
+    }
+
+    @Test("P1 (codex #388): mid-restore, every curated mutator class is refused through its production path — the record reads as before; the restore then completes", arguments: CuratedEditClass.allCases)
+    func everyCuratedEditRefusedMidRestore(_ kind: CuratedEditClass) async throws {
+        let scene = try CutoverScene.make("restore_edit_\(kind.rawValue)"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        _ = try await scene.backUp()
+        let record = try scene.record(.healthy)
+        CuratedEditBattery.preseed(record)
+        #expect(scene.model.saveCatalogNow(), "the preseed saves before the restore")
+        let park = RestorePark()
+        let context = try scene.restoreContext(trash: { url in
+            let landed = try MediaTrash.move(url)
+            park.arrived.signal()
+            park.proceed.wait()
+            return landed
+        })
+        let bundle = scene.backupURL
+        let running = Task { await CatalogBackupRestore.run(bundle: bundle, context: context) }
+        await park.waitArrived()
+        let before = CuratedSnapshot(record)
+        CuratedEditBattery.run(kind, model: scene.model, on: record)
+        #expect(CuratedSnapshot(record) == before, "\(kind) changed a record while the restore ran")
+        park.proceed.signal()
+        let outcome = await running.value
+        guard case .restored = outcome else { Issue.record("expected restored, got \(outcome)"); return }
+        let console = await CuratedEditBattery.settledConsole(scene.model)
+        #expect(console.contains { $0.contains("Edit refused") && $0.contains("restoring the catalog") },
+                Comment(rawValue: console.suffix(8).joined(separator: " | ")))
     }
 
     @Test("P1: a failure AFTER the copy committed is restoredUnverified — the store closed, the committer stopped, the session read-only")

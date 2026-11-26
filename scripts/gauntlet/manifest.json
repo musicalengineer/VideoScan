@@ -4686,6 +4686,7 @@
         "replacedAfterPinRefused",
         "restoreThenRelaunchThenAdopt",
         "sameSizeMtimeRestoredChangeRefused",
+        "sharedLockSurvivesTheRehash",
         "unsealedSourceRefused",
         "utf16BackupRefusedUpFront"
       ]
@@ -11730,6 +11731,7 @@
         "cancelledChangesNothing",
         "doorNeverReplacesTheFile",
         "editingPausedMidRestore",
+        "everyCuratedEditRefusedMidRestore",
         "failureAfterCommitStopsTheSession",
         "heldCatalogRefused",
         "manifestMismatchRefused",
@@ -11741,6 +11743,22 @@
         "shaMismatchRefused",
         "storeRefusalGivesHoldBack",
         "trashFailureGivesHoldBack"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CuratedEditGuardTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CuratedEditGuardTests",
+        "CuratedEditGuardSensorTests"
+      ],
+      "tests": [
+        "modelMutatorsAskTheGuard",
+        "refusalLoggedOncePerEpisode",
+        "viewerSessionRefusesTheEdit",
+        "viewsWriteNoCuratedFieldDirectly",
+        "writableSessionTakesTheEdit"
       ]
     },
     {
@@ -43318,9 +43336,9 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 1070,
+      "expected_floor": 1076,
       "name": "regression",
-      "package_expected_floor": 368,
+      "package_expected_floor": 369,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -43447,6 +43465,8 @@
         "VideoScanTests/CatalogRestoreFromBackupSensorTests",
         "VideoScanTests/CatalogRestoreFromBackupTests",
         "VideoScanTests/CatalogRestoreCodex384Tests",
+        "VideoScanTests/CuratedEditGuardTests",
+        "VideoScanTests/CuratedEditGuardSensorTests",
         "VideoScanTests/CatalogSQLiteSnapshotTests",
         "VideoScanTests/CatalogScopedSaveBaselineTests",
         "VideoScanTests/CatalogSearchBudgetSensorTests",

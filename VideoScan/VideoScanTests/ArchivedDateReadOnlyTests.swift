@@ -393,7 +393,7 @@ struct ArchivedDateReadOnlyTests {
         "Archive/PromoteToArchiveJob+Steps.swift": "Promote dates the archive copy it just registered — the filing act",
         "Archive/VideoScanModel+MasterArchive.swift": "registerPromotedCopy / orphan copy — builds the new archive record",
         "Archive/VideoScanModel+ArchiveUpdate.swift": "Update… — the one door (Rick 2026-09-27)",
-        "Catalog/InspectorDateView.swift": "Rick typing a date in the Inspector — his hand, not a writer the ruling names (flagged to Rick 2026-10-11)",
+        "Catalog/CuratedRecordEdits.swift": "setUserDate — Rick typing a date in the Inspector (InspectorDateView routes here since codex #388) — his hand, not a writer the ruling names (flagged to Rick 2026-10-11)",
         "ArchiveAngel/Promote/ArchiveAngelFamilyFacts.swift": "restore — undo of the Angel's own stamp on a promote that did not land",
         "Catalog/VideoScanModel+RescanPreservation.swift": "puts the record's OWN preserved values back after a rescan",
         // New records (not an existing row) and value types.

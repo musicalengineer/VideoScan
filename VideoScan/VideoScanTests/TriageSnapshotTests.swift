@@ -745,8 +745,10 @@ struct TriageViewSensorTests {
         let start = try #require(view.range(of: "private func applyDisposition("))
         let end = try #require(view.range(of: "private func showInCatalog(", range: start.upperBound..<view.endIndex))
         let apply = String(view[start.upperBound..<end.lowerBound])
-        #expect(apply.contains("for rec in model.triageRecords(withIDs: ids) {"), "O(selection), not O(selection × records)")
-        #expect(apply.contains("model.saveCatalogDebounced()") && apply.contains("catalogEdited()"))
+        #expect(apply.contains("model.triageRecords(withIDs: ids)"), "O(selection), not O(selection × records)")
+        // The write itself goes through CuratedRecordEdits (codex #388 P1: refused in a read-only session), which saves.
+        #expect(apply.contains("CuratedRecordEdits(model: model).triageDisposition(") && apply.contains("catalogEdited()"))
+        #expect(try code(source("CuratedRecordEdits.swift")).contains("model.saveCatalogDebounced()"))
         #expect(try code(source("VideoScanModel+TriageSnapshot.swift")).contains("ids.compactMap { record(forID: $0) }"))
     }
 

@@ -78,6 +78,7 @@ struct InspectorDateView: View {
                         .accessibilityIdentifier("inspector.date.clear")
                 }
             }
+            .disabled(model.isReadOnly)   // codex #388 P1: a read-only session takes no edit
 
             Picker("", selection: $isKnown) {
                 Text("Best guess").tag(false)
@@ -96,6 +97,7 @@ struct InspectorDateView: View {
                 saveEntry()
             }
             .accessibilityIdentifier("inspector.date.confidencePicker")
+            .disabled(model.isReadOnly)
 
             if entryRejected {
                 Text("Hmm, couldn't read that — try 1992, 6/1992, or 6/14/1992.")
@@ -255,18 +257,15 @@ struct InspectorDateView: View {
             return
         }
         entryRejected = false
+        guard CuratedRecordEdits(model: model).setUserDate(canonical, known: isKnown, on: record) else { return }
         entryText = canonical   // reflect the normalized form back
-        record.userDate = canonical
-        record.userDateConfidence = (isKnown ? UserDateConfidence.known
-                                             : UserDateConfidence.estimated).rawValue
         save()
     }
 
     private func clearEntry() {
+        guard CuratedRecordEdits(model: model).setUserDate(nil, known: false, on: record) else { return }
         entryText = ""
         entryRejected = false
-        record.userDate = nil
-        record.userDateConfidence = nil   // meaningless without a date
         save()
     }
 

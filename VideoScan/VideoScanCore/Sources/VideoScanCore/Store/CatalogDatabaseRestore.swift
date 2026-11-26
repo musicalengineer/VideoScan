@@ -200,6 +200,19 @@ public enum CatalogDatabaseRestore {
         // The path still names the pinned file before SQLite opens it, and
         // again after the re-hash below: the connection's fd is that inode.
         if let words = source.identityChange() { throw Refusal(words: changedWords(words)) }
+        // Codex #388 P2: the re-hash under the SHARED lock reads through a
+        // descriptor opened BEFORE SQLite's and closed AFTER SQLite's
+        // connection. POSIX advisory locks belong to the (process, inode)
+        // pair, so close() on ANY descriptor of the file drops every lock
+        // the process holds on it — a hash fd closed inside the read
+        // transaction would silently release SQLite's SHARED lock
+        // (sqlite.org/howtocorrupt.html §2.2). Swift runs `defer`s in
+        // reverse order, so this one (declared first) runs after the
+        // queue's close below. (≈ a C++ RAII guard declared before the
+        // connection, destroyed after it.)
+        let held: CatalogPinnedSource.HeldFile
+        do { held = try source.hold() } catch { throw Refusal(words: changedWords(error.words)) }
+        defer { held.close() }
         let queue = try openSource(source.url)
         defer { try? queue.close() }
         let replaced = try Int.fetchOne(db, sql: "SELECT generation FROM generations WHERE id = 1") ?? -1
@@ -212,7 +225,7 @@ public enum CatalogDatabaseRestore {
             if let words = try mismatch(src, generation: generation, expected: expectedGeneration, highWater: highWater, live: live) {
                 throw Refusal(words: words)
             }
-            if let words = source.changeSincePinned() { throw Refusal(words: changedWords(words)) }
+            if let words = source.changeSincePinned(through: held) { throw Refusal(words: changedWords(words)) }
             if let words = stop() { throw Refusal(words: words) }
             try src.backup(to: db, pagesPerStep: pagesPerStep) { done in
                 if done.isCompleted { committed.set() }
@@ -334,6 +347,60 @@ public struct CatalogPinnedSource: Sendable, Equatable {
         }
     }
 
+    /// A descriptor on the pinned file, kept open across a SQLite
+    /// connection's whole life so that re-hashing never closes a descriptor
+    /// of that file while SQLite holds a lock on it (codex #388 P2). Opened
+    /// with O_NOFOLLOW and checked against the pin. `close()` is explicit
+    /// (the caller orders it after the SQLite close); deinit is the backstop.
+    /// (≈ a C++ unique_fd.)
+    public final class HeldFile: @unchecked Sendable {
+        let fd: Int32
+        private let lock = NSLock()
+        private var open = true
+        init(fd: Int32) { self.fd = fd }
+        public func close() {
+            let shouldClose = lock.withLock { () -> Bool in defer { open = false }; return open }
+            if shouldClose { _ = Darwin.close(fd) }
+        }
+        deinit { close() }
+    }
+
+    /// Open the pinned file and keep it open: refused when the path no
+    /// longer names the pinned file (identity compared through the fd).
+    public func hold() throws(Unreadable) -> HeldFile {
+        let path = url.path
+        if let words = identityChange() { throw Unreadable(words: words) }
+        let fd = open(path, O_RDONLY | O_NOFOLLOW)
+        guard fd >= 0 else { throw Unreadable(words: "\(url.lastPathComponent) cannot be opened (\(String(cString: strerror(errno))))") }
+        let held = HeldFile(fd: fd)
+        var st = stat()
+        guard fstat(fd, &st) == 0, Identity(st) == identity else {
+            held.close()
+            throw Unreadable(words: "another file is at its path")
+        }
+        return held
+    }
+
+    /// `changeSincePinned()` through `held` — the same checks (path and fd
+    /// identity before and after, the full SHA-256), reading from offset 0
+    /// with pread and closing nothing.
+    public func changeSincePinned(through held: HeldFile) -> String? {
+        if let words = identityChange() { return words }
+        var st = stat()
+        guard fstat(held.fd, &st) == 0 else { return "it cannot be examined (\(String(cString: strerror(errno))))" }
+        let opened = Identity(st)
+        if opened != identity { return Self.difference(identity, opened) }
+        let hashed: String
+        switch Self.hash(fd: held.fd, name: url.lastPathComponent) {
+        case .failure(let why): return why.words
+        case .success(let hex): hashed = hex
+        }
+        guard fstat(held.fd, &st) == 0, Identity(st) == identity else { return "it changed while it was being read" }
+        if let words = identityChange() { return words }
+        if hashed != sha256 { return "its SHA-256 is now \(hashed.prefix(12))…, it was \(sha256.prefix(12))…" }
+        return nil
+    }
+
     /// The cheap half: lstat only (no hash).
     public func identityChange() -> String? {
         var st = stat()
@@ -376,17 +443,10 @@ public struct CatalogPinnedSource: Sendable, Equatable {
         guard fstat(fd, &opened) == 0, Identity(opened) == Identity(before) else {
             return .failure(Unreadable(words: "\(url.lastPathComponent) changed while it was being opened"))
         }
-        var hasher = SHA256()
-        let chunk = 1 << 20
-        var buffer = [UInt8](repeating: 0, count: chunk)
-        while true {
-            let count = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, chunk) }
-            if count < 0 {
-                if errno == EINTR { continue }
-                return .failure(Unreadable(words: "\(url.lastPathComponent) could not be read (\(String(cString: strerror(errno))))"))
-            }
-            if count == 0 { break }
-            buffer.withUnsafeBytes { hasher.update(bufferPointer: UnsafeRawBufferPointer(rebasing: $0[0..<count])) }
+        let hex: String
+        switch hash(fd: fd, name: url.lastPathComponent) {
+        case .failure(let why): return .failure(why)
+        case .success(let hashed): hex = hashed
         }
         var after = stat()
         var atPath = stat()
@@ -394,7 +454,26 @@ public struct CatalogPinnedSource: Sendable, Equatable {
               Identity(after) == Identity(before), Identity(atPath) == Identity(before) else {
             return .failure(Unreadable(words: "\(url.lastPathComponent) changed while it was being read"))
         }
-        let hex = hasher.finalize().map { String(format: "%02x", $0) }.joined()
         return .success((Identity(before), hex))
+    }
+
+    /// SHA-256 of the whole file behind `fd`, from offset 0 (pread: the
+    /// descriptor's offset is untouched). Memory: one 1 MB buffer.
+    private static func hash(fd: Int32, name: String) -> Result<String, Unreadable> {
+        var hasher = SHA256()
+        let chunk = 1 << 20
+        var buffer = [UInt8](repeating: 0, count: chunk)
+        var offset: off_t = 0
+        while true {
+            let count = buffer.withUnsafeMutableBytes { pread(fd, $0.baseAddress, chunk, offset) }
+            if count < 0 {
+                if errno == EINTR { continue }
+                return .failure(Unreadable(words: "\(name) could not be read (\(String(cString: strerror(errno))))"))
+            }
+            if count == 0 { break }
+            offset += off_t(count)
+            buffer.withUnsafeBytes { hasher.update(bufferPointer: UnsafeRawBufferPointer(rebasing: $0[0..<count])) }
+        }
+        return .success(hasher.finalize().map { String(format: "%02x", $0) }.joined())
     }
 }
