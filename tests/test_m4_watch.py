@@ -245,6 +245,23 @@ class WatchTests(unittest.TestCase):
             self.assertIn('nothing to do (settled NO-OUTCOME)', self.scene.tick())
         self.assertEqual(len(self.scene.calls()), 2, 'retried more than once')
 
+    def test_an_unreadable_outcome_word_is_not_a_host_refusal_and_is_retried_once(self):
+        """#489: a torn or unknown OUTCOME word ("OUTCOME GRE") was never settled as a verdict
+        (honest), but read "the start was refused on the host (GRE)" and counted a start failure."""
+        head = self.scene.head()
+        self.scene.tick()
+        self.scene.finish(1, verdict='GRE')
+        line = self.scene.tick()
+        self.assertNotIn('refused on the host', line)
+        self.assertIn(f'the run of {head[:9]} ended with an unreadable OUTCOME (GRE): one retry — '
+                      'started the suite lane (run 2 of at most 2)', line)
+        self.scene.finish(2, verdict='GRE')
+        line = self.scene.tick()
+        self.assertIn(f'the run of {head[:9]} ended with an unreadable OUTCOME (GRE) again: recorded', line)
+        self.assertIn(f'{head[:9]} suite NO-OUTCOME — ended with an unreadable OUTCOME (GRE) twice', self.scene.text('verdict.txt'))
+        self.assertNotIn('START-FAILED', self.scene.text('history.log'))
+        self.assertEqual(len(self.scene.calls()), 2, 'retried more than once')
+
     def test_a_run_just_started_is_given_time_to_take_the_lock(self):
         self.scene.tick()
         self.assertIn('is still going', self.scene.tick(later=60))

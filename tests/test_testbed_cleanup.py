@@ -1181,6 +1181,44 @@ class CodexSecondReReviewTests(CleanCase):
             subprocess.run(['hdiutil', 'detach', '-force', '-quiet', mounted], capture_output=True, timeout=120)
 
 
+class ReadOnlyCacheTests(CleanCase):
+    """#486 (Codex #326): the floor forecast counted files in a folder that can be read but not
+    written as reclaimable, though remove_at (which never chmods) cannot unlink them; the other
+    cache then went without the floor being reached. Cost: a rebuild, never data."""
+
+    def test_files_in_a_folder_that_cannot_be_written_are_not_counted_toward_the_floor(self):
+        self.s.cache(1, 4_000_000)
+        build = self.s.caches[1] / 'Build'
+        os.chmod(build, 0o555)                               # listable, not writable: its blob cannot be unlinked
+        try:
+            self.s.cache(0, 2_000_000)
+            run = self.current()
+            line = self.clean(run, 'start', short_of_the_floor(self.s.home, 3_000_000))     # 6 MB counted, 2 MB reclaimable
+            self.assertTrue((self.s.caches[0] / 'Build' / 'blob').exists(), 'a cache was dropped on a forecast counting unremovable bytes')
+            self.assertTrue((build / 'blob').exists())
+            self.assertIn('build caches kept', line)
+        finally:
+            os.chmod(build, 0o755)
+
+    def test_a_cache_whose_removal_fails_makes_the_rest_be_forecast_again(self):
+        self.s.cache(1, 4_000_000)
+        self.s.cache(0, 2_000_000)
+        run = self.current()
+        refused = str(self.s.caches[1].name)
+        saved = th.Confine.remove
+
+        def remove(conf, dir_fd, name):
+            return (0, False) if name == refused else saved(conf, dir_fd, name)
+        th.Confine.remove = remove
+        try:
+            line = self.clean(run, 'start', short_of_the_floor(self.s.home, 3_000_000))
+        finally:
+            th.Confine.remove = saved
+        self.assertTrue((self.s.caches[0] / 'Build' / 'blob').exists(),
+                        'after one cache could not go, the other went though it alone cannot reach the floor')
+        self.assertIn('build caches kept', line)
+
+
 def signal_reset():
     import signal
     signal.alarm(0)

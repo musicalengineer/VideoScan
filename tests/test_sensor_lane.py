@@ -162,6 +162,53 @@ def test_a_torn_pass_line_never_hides_a_failure_printed_the_other_way():
     assert sl.count(twice) == (1, 1, ["Suite/testBroken()"])
 
 
+# ---- GH #454: a result line torn mid-name; every sensor owes a verdict ------
+
+EXPECTED = ["VideoScanTests/A/one()", "VideoScanTests/HallieShellCLITests/eileensChildrenAndTimsParents()",
+            "VideoScanTests/P/each(_:)"]
+
+
+def test_a_line_torn_mid_name_is_recovered_when_exactly_one_sensor_fits():
+    """RED 2026-11-07: 690 app sensors ran and passed, the lane counted 689 —
+    'eShellCLITests/…passed on' had lost the front of its line to another host."""
+    log = "\n".join([
+        "Test case 'A/one()' passed on 'My Mac - VideoScan (1)' (0.001 seconds)",
+        "Test case 'P/each(_:)' passed on 'My Mac - VideoScan (1)' (0.001 seconds)",
+        "Test case 'P/each(_:)' passed on 'My Mac - VideoScan (1)' (0.002 seconds)",
+        "some other host's output Test case 'Halli",
+        "eShellCLITests/eileensChildrenAndTimsParents()' passed on 'My Mac - VideoScan (2)' (0.345 seconds)",
+    ])
+    assert sl.count(log, EXPECTED) == (4, 0, [])
+
+
+def test_a_sensor_with_no_verdict_line_is_red_and_named():
+    log = "\n".join([
+        "Test case 'A/one()' passed on 'My Mac - VideoScan (1)' (0.001 seconds)",
+        "Test case 'P/each(_:)' passed on 'My Mac - VideoScan (1)' (0.001 seconds)",
+    ])
+    passed, failed, names = sl.count(log, EXPECTED)
+    assert (passed, failed) == (2, 1)
+    assert names == ["HallieShellCLITests/eileensChildrenAndTimsParents(): no verdict line in the log"]
+    # a known issue's verdict (withKnownIssue) is a verdict, and is not counted as passed
+    known = log + ("\nTest case 'HallieShellCLITests/eileensChildrenAndTimsParents()' recorded an expected failure "
+                   "on 'My Mac - VideoScan (1)' (0.1 seconds)")
+    assert sl.count(known, EXPECTED) == (2, 0, [])
+
+
+def test_a_torn_fragment_that_fits_two_sensors_or_one_already_judged_is_not_guessed():
+    two = ["VideoScanTests/X/aRows()", "VideoScanTests/Y/aRows()"]
+    log = "Rows()' passed on 'My Mac - VideoScan (1)' (0.1 seconds)\n"
+    passed, failed, names = sl.count(log, two)
+    assert (passed, failed) == (0, 2) and all(n.endswith("no verdict line in the log") for n in names)
+    judged = "\n".join([
+        "Test case 'A/one()' passed on 'My Mac - VideoScan (1)' (0.001 seconds)",
+        "one()' passed on 'My Mac - VideoScan (1)' (0.001 seconds)",
+    ])
+    assert sl.count(judged, ["VideoScanTests/A/one()"]) == (1, 0, [])
+    # without the sensor list (the core half), nothing changes
+    assert sl.count(judged) == (1, 0, [])
+
+
 def test_an_empty_run_is_never_green(monkeypatch, tmp_path, capsys):
     # The app half "ran" zero tests (a filter that matched nothing): red.
     monkeypatch.setattr(sl, "manifest_check", lambda *a, **k: ([], 0.0))

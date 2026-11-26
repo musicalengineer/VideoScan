@@ -34754,6 +34754,20 @@
       ]
     },
     {
+      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
+      "kind": "python",
+      "path": "tests/test_known_speech_fixture.py",
+      "stage": "unit",
+      "suites": [
+        "test_known_speech_fixture.py"
+      ],
+      "tests": [
+        "test_say_has_a_timeout_and_one_stall_is_retried",
+        "test_the_sentence_is_synthesised_once_per_process",
+        "test_two_stalls_end_in_seconds_with_the_cause_named"
+      ]
+    },
+    {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
       "path": "tests/test_label_queue_to_manifest.py",
@@ -35256,6 +35270,21 @@
     {
       "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
       "kind": "python",
+      "path": "tests/test_m4_run_out_put.py",
+      "stage": "unit",
+      "suites": [
+        "test_m4_run_out_put.py"
+      ],
+      "tests": [
+        "test_a_planted_link_is_never_written_or_read_through",
+        "test_a_second_name_or_a_folder_is_refused_and_left_as_it_was",
+        "test_append_and_replace_a_plain_file",
+        "test_no_summary_or_block_write_is_a_plain_redirection"
+      ]
+    },
+    {
+      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
+      "kind": "python",
       "path": "tests/test_m4_run_suite_lane.py",
       "stage": "regression",
       "suites": [
@@ -35317,6 +35346,7 @@
         "test_a_start_the_host_refused_is_not_a_run_and_is_bounded",
         "test_a_tick_starts_the_real_suite_lane_and_a_later_tick_writes_its_verdict",
         "test_an_unknown_range_is_never_docs_only",
+        "test_an_unreadable_outcome_word_is_not_a_host_refusal_and_is_retried_once",
         "test_busy_and_the_quiet_window_wait_without_counting_against_the_commit",
         "test_history_and_state_are_bounded",
         "test_install_uninstall_and_reinstall_on_a_fake_m4_and_a_refusal_anywhere_else",
@@ -35332,6 +35362,20 @@
         "test_the_plist_is_a_gui_session_agent_ticking_a_pinned_copy_every_300_seconds",
         "test_the_watcher_never_signals_pushes_or_writes_a_branch",
         "test_usage_errors_exit_2"
+      ]
+    },
+    {
+      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
+      "kind": "python",
+      "path": "tests/test_morning_metrics_static_analysis.py",
+      "stage": "unit",
+      "suites": [
+        "test_morning_metrics_static_analysis.py"
+      ],
+      "tests": [
+        "test_a_rise_between_two_lane_rows_is_flagged_through_interleaved_github_rows",
+        "test_codeql_is_not_read_from_the_lane",
+        "test_rows_from_other_sources_are_never_compared"
       ]
     },
     {
@@ -35375,6 +35419,7 @@
       ],
       "tests": [
         "test_a_cache_that_was_there_at_the_start_and_was_written_is_named_as_changed",
+        "test_a_cache_whose_removal_fails_makes_the_rest_be_forecast_again",
         "test_a_cleanup_that_fails_never_costs_the_run_its_outcome",
         "test_a_coverage_cache_that_is_a_link_is_never_followed",
         "test_a_hard_link_to_a_protected_file_loses_only_its_own_name",
@@ -35405,6 +35450,7 @@
         "test_f6_a_cleanup_past_its_budget_stops_and_still_says_one_line",
         "test_f6_a_fifo_never_stalls_the_cleanup_or_the_sampler",
         "test_f7_bytes_with_a_second_name_are_not_counted_as_reclaimable",
+        "test_files_in_a_folder_that_cannot_be_written_are_not_counted_toward_the_floor",
         "test_finished_runs_and_dead_corpus_work_go_whatever_the_disk_says",
         "test_no_lock_held_is_refused",
         "test_old_coverage_bundles_and_logs_go_and_the_newest_and_the_published_stay",
@@ -36595,10 +36641,13 @@
       "tests": [
         "test_a_failed_core_build_does_not_run_the_tests",
         "test_a_line_torn_by_parallel_hosts_is_still_counted_and_a_torn_failure_is_named",
+        "test_a_line_torn_mid_name_is_recovered_when_exactly_one_sensor_fits",
         "test_a_manifest_that_cannot_be_checked_is_an_error_not_a_pass",
         "test_a_manifest_that_matches_the_source_has_no_errors",
+        "test_a_sensor_with_no_verdict_line_is_red_and_named",
         "test_a_stale_manifest_makes_the_lane_red_and_says_how_to_refresh",
         "test_a_test_added_to_an_existing_file_without_a_manifest_edit_is_an_error",
+        "test_a_torn_fragment_that_fits_two_sensors_or_one_already_judged_is_not_guessed",
         "test_a_torn_pass_line_never_hides_a_failure_printed_the_other_way",
         "test_an_empty_run_is_never_green",
         "test_braces_in_strings_and_comments_do_not_break_spans",
@@ -36735,8 +36784,12 @@
       ],
       "tests": [
         "test_a_green_run_stamps_the_working_tree_including_untracked_files",
+        "test_a_green_run_with_its_count_stamps_and_streams_its_output",
+        "test_a_red_run_never_stamps",
+        "test_a_run_that_prints_no_count_is_red_and_never_stamps",
         "test_a_worktree_stamps_the_common_git_dir",
         "test_fifty_lines_are_kept",
+        "test_help_never_stamps",
         "test_not_a_repo_is_loud_and_nonzero",
         "test_tracked_but_ignored_files_stay_in_the_stamped_tree"
       ]
@@ -37196,6 +37249,7 @@
         "test_published_rows_reach_a_mac_without_the_local_files",
         "test_scale_a_full_size_log_with_fifteen_restarts_parses_inside_the_budget",
         "test_status_precedence_without_findings",
+        "test_tests_are_summed_across_host_launches",
         "test_the_1114_failing_tests_are_named_from_xcodebuilds_own_list",
         "test_the_1114_report_one_frame_down_is_the_known_463_and_the_run_is_not_red",
         "test_the_address_log_of_1107_reads_as_the_known_mlx_finding_not_as_a_crash",
@@ -41486,6 +41540,14 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "tests/test_known_speech_fixture.py",
+          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
+        },
+        {
+          "name": "tests/test_m4_run_out_put.py",
+          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
+        },
+        {
           "name": "tests/test_migrate_data.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
@@ -41612,6 +41674,10 @@
         {
           "name": "tests/test_migrate_people_folders.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_morning_metrics_static_analysis.py",
+          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
         },
         {
           "name": "tests/test_nightly_coverage.py",

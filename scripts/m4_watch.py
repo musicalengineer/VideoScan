@@ -308,7 +308,7 @@ class Watch:
                 self.state["current"] = None
                 self.state["runs"][sha] = max(0, (_count(self.state["runs"], sha) or 1) - 1)
                 saw += " — the start of %s waited (%s): tried again next tick" % (sha[:9], verdict.split(":")[1])
-            elif verdict is not None:                           # REFUSED: it never ran (a dirty testbed, ...)
+            elif verdict is not None and verdict.split(":")[0] == "REFUSED":    # it never ran (a dirty testbed, ...)
                 self.state["current"] = None
                 self.state["runs"][sha] = max(0, (_count(self.state["runs"], sha) or 1) - 1)
                 failures = _count(self.state["start_failures"], sha) + 1
@@ -319,14 +319,19 @@ class Watch:
             elif self.lock_names(out) or self.now() - _number(current.get("started")) < 120:
                 return saw + " — the run of %s is still going" % sha[:9]
             else:
+                # No OUTCOME, or one whose word is none of ours (#489: a torn "OUTCOME GRE" is not a
+                # verdict and not a refusal by the host): the no-outcome path, said as what it was.
+                ended = "ended without an OUTCOME" if verdict is None else \
+                    "ended with an unreadable OUTCOME (%s)" % verdict[:40]
                 self.state["current"] = None
                 if _count(self.state["runs"], sha) >= RUN_ATTEMPTS:
-                    self.settle(sha, "NO-OUTCOME", "ended without an OUTCOME twice (a logout of the GUI session, a restart)")
-                    saw += " — the run of %s ended without an OUTCOME again: recorded" % sha[:9]
+                    why = "(a logout of the GUI session, a restart)" if verdict is None else ""
+                    self.settle(sha, "NO-OUTCOME", ("%s twice %s" % (ended, why)).rstrip())
+                    saw += " — the run of %s %s again: recorded" % (sha[:9], ended)
                 else:
-                    saw += " — the run of %s ended without an OUTCOME: one retry" % sha[:9]
+                    saw += " — the run of %s %s: one retry" % (sha[:9], ended)
                     if sha != head:
-                        self.settle(sha, "NO-OUTCOME", "ended without an OUTCOME; a newer commit is on main, so no retry")
+                        self.settle(sha, "NO-OUTCOME", "%s; a newer commit is on main, so no retry" % ended)
 
         known = self.settled_verdict(head)
         if known:

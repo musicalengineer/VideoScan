@@ -432,6 +432,43 @@ def restart_accounts(text: str, reports: List[tuple]) -> List[dict]:
     return out
 
 
+# #425: each relaunch of the test host prints its own summaries, and Swift
+# Testing's `Test run with N tests` covers only the launch that printed it (the
+# 11/01 TSan row said 10,333 against 12,261 the week before: 8 restarts). A
+# launch that died prints no summary; its tests are its own terminal lines.
+TEST_FINISHED = re.compile(
+    r"^\W*(?:[✔✘━] Test (?!run with )(?!.* recorded an? (?:known )?issue ).+ (?:passed|failed) after "
+    r"|➜ Test (?!run with ).+ skipped)", re.M)
+XCTEST_FINISHED = re.compile(r"^Test Case '-\[.+\]' (?:passed|failed|skipped)", re.M)
+
+
+def tests_across_launches(text: str) -> int:
+    """Pure: the tests every host launch ran, summed. A launch's Swift Testing
+    half is its `Test run with N tests` line, or its terminal lines when it died
+    before printing one; its XCTest half is its last `Executed N tests` line
+    (the 'All tests' total) in the final launch, its `Test Case … passed|failed|
+    skipped` lines in one that died. The test the host died in finished
+    nothing and is not counted. One launch: exactly the summaries, as before."""
+    cuts = [0]
+    at = text.find(HOST_START_LINE)
+    at = text.find(HOST_START_LINE, at + 1) if at != -1 else -1     # the first launch starts at 0
+    while at != -1:
+        cuts.append(at)
+        at = text.find(HOST_START_LINE, at + 1)
+    cuts.append(len(text))
+    total = 0
+    for n, (lo, hi) in enumerate(zip(cuts, cuts[1:])):
+        part = text[lo:hi]
+        run = RUN_LINE.findall(part)
+        total += int(run[-1][0]) if run else len(TEST_FINISHED.findall(part))
+        xct = XCTEST_EXECUTED.findall(part)
+        if n == len(cuts) - 2:
+            total += int(xct[-1][0]) if xct else 0
+        else:
+            total += len(XCTEST_FINISHED.findall(part))
+    return total
+
+
 def failed_test_names(text: str) -> List[str]:
     """Pure: the failed tests, sorted. xcodebuild's "Failing tests:" list when the
     log has one (FAILING_BLOCK); otherwise the ✘ / Test Case lines (swift test, or
@@ -478,14 +515,13 @@ def parse_log(text: str, known=()) -> dict:
     test_only = [t for t in test_only if t not in summaries]
     restarts = restart_accounts(text, placed)
     run = RUN_LINE.findall(text)
-    tests, suites, outcome = (int(run[-1][0]), int(run[-1][1]), run[-1][2]) if run else (0, 0, None)
+    suites, outcome = (int(run[-1][1]), run[-1][2]) if run else (0, None)
+    tests = tests_across_launches(text)
     # XCTest prints "Executed N tests, with F failures" per suite and once for
     # 'All tests'; the last line is the whole XCTest half of a mixed run.
     xct = XCTEST_EXECUTED.findall(text)
-    if xct:
-        tests += int(xct[-1][0])
-        if int(xct[-1][1]) > 0 and outcome != "failed":
-            outcome = "failed"
+    if xct and int(xct[-1][1]) > 0 and outcome != "failed":
+        outcome = "failed"
     failed_tests = failed_test_names(text)
     return {
         "host_restarts": len(restarts),

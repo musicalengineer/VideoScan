@@ -14,7 +14,14 @@ voice. Whisper does not need the bytes to match across Macs, only the words,
 so generating beats a checked-in binary.
 
 Memory: one ~8 s AIFF (~0.7 MB) and one ~8 s clip per shape (h264 < 1 MB,
-ProRes/FFV1/MXF 2-4 MB, DV ~30 MB), in the caller's temp folder.
+ProRes/FFV1/MXF 2-4 MB, DV ~30 MB), in the caller's temp folder; plus the
+AIFF's bytes held once per process (_SPEECH, ~0.7 MB per voice, one voice).
+
+`say` (#490, 2026-11-18): with three lanes at once, single `say` processes
+wedged for 13-38 minutes while the same command by hand took 1.1 s, and the
+lane hung until its 3600 s watchdog. `say` now gets SAY_TIMEOUT_S and one
+retry, then SpeechStalled names the cause; and the sentence is synthesised
+once per process, so the six-shape media matrix asks `say` once, not six times.
 """
 from __future__ import annotations
 
@@ -22,7 +29,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 SENTENCE = ("VideoScan audio check. The quick brown fox jumps over the lazy dog. "
             "Seventeen purple elephants.")
@@ -50,6 +57,13 @@ SHAPES = {
                        ["-c:a", "pcm_s16le", "-ar", "48000", "-ac", "2"]),
 }
 DEFAULT_SHAPE = "mov-h264-aac"
+SAY_TIMEOUT_S = 30          # it takes ~1 s; 30 s is a stall, not a slow Mac
+SAY_ATTEMPTS = 2
+_SPEECH: Dict[str, bytes] = {}      # voice -> the AIFF `say` wrote for SENTENCE (this process)
+
+
+class SpeechStalled(RuntimeError):
+    """`say` did not finish in SAY_TIMEOUT_S, SAY_ATTEMPTS times: the speech service is wedged, not the code."""
 
 _BREW = ("/opt/homebrew/bin", "/usr/local/bin")
 
@@ -68,9 +82,32 @@ def tool(name: str) -> str:
 
 def available_voice(preferred: str = PREFERRED_VOICE) -> Optional[str]:
     """`preferred` if `say` has it, else None (= the system default voice)."""
-    listing = subprocess.run(["/usr/bin/say", "-v", "?"], capture_output=True, text=True, check=True).stdout
+    try:
+        listing = subprocess.run(["/usr/bin/say", "-v", "?"], capture_output=True, text=True, check=True,
+                                 timeout=SAY_TIMEOUT_S).stdout
+    except subprocess.TimeoutExpired:
+        return None                        # the speaking `say` below meets the same stall and names it
     names = {line.split("  ")[0].strip() for line in listing.splitlines() if line.strip()}
     return preferred if preferred in names else None
+
+
+def write_speech(aiff: Path, voice: Optional[str]) -> None:
+    """SENTENCE spoken into `aiff`: from this process's first synthesis when there is one, else
+    `say` with a timeout and one retry (SpeechStalled when both stall)."""
+    key = voice or ""
+    if key in _SPEECH:
+        aiff.write_bytes(_SPEECH[key])
+        return
+    say: List[str] = ["/usr/bin/say"] + (["-v", voice] if voice else []) + ["-o", str(aiff), SENTENCE]
+    for _ in range(SAY_ATTEMPTS):
+        try:
+            subprocess.run(say, check=True, capture_output=True, timeout=SAY_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            continue                       # subprocess.run kills the wedged `say` before raising
+        _SPEECH[key] = aiff.read_bytes()
+        return
+    raise SpeechStalled(f"say did not finish in {SAY_TIMEOUT_S} s, {SAY_ATTEMPTS} times: speech synthesis "
+                        "stalled (the macOS speech service, not the code under test)")
 
 
 def make_known_speech(out: Path, shape: str = DEFAULT_SHAPE) -> str:
@@ -79,8 +116,7 @@ def make_known_speech(out: Path, shape: str = DEFAULT_SHAPE) -> str:
     out.parent.mkdir(parents=True, exist_ok=True)
     aiff = out.with_name(out.stem + ".speech.aiff")
     voice = available_voice()
-    say: List[str] = ["/usr/bin/say"] + (["-v", voice] if voice else []) + ["-o", str(aiff), SENTENCE]
-    subprocess.run(say, check=True, capture_output=True)
+    write_speech(aiff, voice)
     r = subprocess.run([
         tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y",
         "-f", "lavfi", "-i", f"testsrc=size=320x240:rate=30:duration={DURATION_SECONDS}",

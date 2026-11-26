@@ -494,6 +494,77 @@ wait_for() {   # wait_for <out dir>: poll until run.log has OUTCOME
 
 # ── Host side (inside the LaunchAgent) ────────────────────────────────────
 
+# >>> out_put
+# out_put <file> [append|replace|cat]: the run's summary.txt and testbed block are written (and read
+# back) only here, by the run.log rule (Codex #315-2): never through a link, never a file with a
+# second name (#486: plain `>>` / `>` followed a link a lane planted in the run folder). append
+# (default) adds stdin; replace writes stdin to a new file and renames it over the name (rename
+# replaces a link itself, never what it names; a folder there is refused); cat prints the file.
+# A refusal says so on stderr (run.log) and exits 125. Memory: one summary (KBs) in hand.
+OUT_PUT_PY='
+import os, stat, sys
+path = sys.argv[1]
+mode = sys.argv[2] if len(sys.argv) > 2 else "append"
+name = os.path.basename(path)
+
+def refuse(why):
+    print("[m4_run] refused: %s %s" % (name, why), file=sys.stderr)
+    sys.exit(125)
+
+def plain(fd):
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+        os.close(fd)
+        refuse("has a second name or is not a plain file")
+
+def write_all(fd, data):
+    while data:
+        data = data[os.write(fd, data):]
+
+if mode == "cat":
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        sys.exit(0)
+    except OSError as error:
+        refuse("cannot be read safely (%s)" % type(error).__name__)
+    plain(fd)
+    with os.fdopen(fd, "rb") as f:
+        sys.stdout.buffer.write(f.read())
+    sys.exit(0)
+data = sys.stdin.buffer.read()
+if mode == "append":
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | os.O_NOFOLLOW, 0o644)
+    except OSError as error:
+        refuse("cannot be written safely (%s)" % type(error).__name__)
+    plain(fd)
+    write_all(fd, data)
+    os.close(fd)
+elif mode == "replace":
+    temporary = "%s.%d.out-put" % (path, os.getpid())
+    try:
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    except OSError as error:
+        refuse("cannot be written safely (%s)" % type(error).__name__)
+    write_all(fd, data)
+    os.close(fd)
+    try:
+        if os.path.isdir(path) and not os.path.islink(path):
+            raise IsADirectoryError(path)
+        os.rename(temporary, path)
+    except OSError as error:
+        os.unlink(temporary)
+        refuse("cannot be replaced (%s)" % type(error).__name__)
+else:
+    refuse("unknown mode %s" % mode)
+'
+out_put() {
+    python3 -c "$OUT_PUT_PY" "$@"
+}
+# <<< out_put
+
+
 # run_bounded <secs> <log> <cwd> <cmd…>: run cmd in its own process group,
 # output appended to log; past the budget, TERM then KILL the group, then
 # TERM any app-under-test left running from THIS testbed's DerivedData (the
@@ -584,8 +655,12 @@ summarize_plan() {   # summarize_plan <plan> <log> <rc> <secs>
     local plan="$1" log="$2" rc="$3" secs="$4" flag=()
     [ "$rc" = 124 ] && flag=(--timeout)
     # `${a[@]+"${a[@]}"}`: an empty array under `set -u` on /bin/bash 3.2.
-    python3 "$SCRIPT_DIR/m4_run_summary.py" "$plan" "$log" "$rc" "$secs" ${flag[@]+"${flag[@]}"} \
-        --tsv "$OUT/$plan.tests.tsv" >>"$OUT/summary.txt"
+    local text src
+    text="$(python3 "$SCRIPT_DIR/m4_run_summary.py" "$plan" "$log" "$rc" "$secs" ${flag[@]+"${flag[@]}"} \
+        --tsv "$OUT/$plan.tests.tsv")"
+    src=$?
+    [ -z "$text" ] || printf '%s\n' "$text" | out_put "$OUT/summary.txt" || return 1
+    return "$src"
 }
 
 host_ui() {
@@ -598,7 +673,7 @@ host_ui() {
     rc=$?
     echo "ui build exit=$rc secs=$(( $(date +%s) - t0 ))"
     if [ "$rc" != 0 ]; then
-        echo "ui-build: RED rc=$rc (see ui-build.log)" >>"$OUT/summary.txt"
+        echo "ui-build: RED rc=$rc (see ui-build.log)" | out_put "$OUT/summary.txt"
         VERDICT=RED
         return
     fi
@@ -644,8 +719,8 @@ host_deep() {
     verdict_line="$(python3 "$SCRIPT_DIR/m4_run_summary.py" --gauntlet "${result:-/nonexistent}" "$rc" "$secs" \
         ${flag[@]+"${flag[@]}"})"
     vrc=$?
-    echo "$verdict_line" >>"$OUT/summary.txt"
-    echo "  ${line:-(no GAUNTLET line; see gauntlet.log)}" >>"$OUT/summary.txt"
+    echo "$verdict_line" | out_put "$OUT/summary.txt"
+    echo "  ${line:-(no GAUNTLET line; see gauntlet.log)}" | out_put "$OUT/summary.txt"
     case "$vrc" in
         0) ;;
         3) [ "$VERDICT" = GREEN ] && VERDICT=AMBER
@@ -670,21 +745,23 @@ host_suite() {
     secs=$(( $(date +%s) - t0 ))
     echo "suite exit=$rc secs=$secs"
     [ "$rc" = 124 ] && flag=(--timeout)
-    python3 "$SCRIPT_DIR/m4_run_summary.py" --suite "$OUT/suite-row.json" "$rc" "$secs" \
-        --repo "$H_WT" --log "$OUT/suite.log" ${flag[@]+"${flag[@]}"} >>"$OUT/summary.txt"
+    local text
+    text="$(python3 "$SCRIPT_DIR/m4_run_summary.py" --suite "$OUT/suite-row.json" "$rc" "$secs" \
+        --repo "$H_WT" --log "$OUT/suite.log" ${flag[@]+"${flag[@]}"})"
     vrc=$?
+    [ -z "$text" ] || printf '%s\n' "$text" | out_put "$OUT/summary.txt" || vrc=1
     case "$vrc" in
         0) ;;
         4) VERDICT=NORUN
-           WHY="$(sed -n '1s/^suite: NORUN \([^ ]*\).*/\1/p' "$OUT/summary.txt")" ;;
+           WHY="$(out_put "$OUT/summary.txt" cat | sed -n '1s/^suite: NORUN \([^ ]*\).*/\1/p')" ;;
         *) VERDICT=RED ;;
     esac
     # The next run refuses a dirty testbed: say now whether this one left it clean.
     dirty="$(git -C "$H_WT" status --porcelain --untracked-files=no 2>/dev/null)"
     if [ -n "$dirty" ]; then
-        echo "  testbed worktree NOT clean after the run (the next run will refuse it): $(printf '%s' "$dirty" | tr '\n' ';')" >>"$OUT/summary.txt"
+        echo "  testbed worktree NOT clean after the run (the next run will refuse it): $(printf '%s' "$dirty" | tr '\n' ';')" | out_put "$OUT/summary.txt"
     else
-        echo "  testbed worktree clean after the run" >>"$OUT/summary.txt"
+        echo "  testbed worktree clean after the run" | out_put "$OUT/summary.txt"
     fi
 }
 
@@ -695,7 +772,7 @@ host_sensors() {
     local t0 rc secs line
     t0=$(date +%s)
     if [ ! -f "$H_WT/scripts/run_sensors.sh" ]; then
-        echo "sensors: NORUN this ref has no scripts/run_sensors.sh" >>"$OUT/summary.txt"
+        echo "sensors: NORUN this ref has no scripts/run_sensors.sh" | out_put "$OUT/summary.txt"
         printf '{}\n' >"$OUT/sensors-row.json"; VERDICT=NORUN; WHY="sensors: no sensor lane in this ref"; return
     fi
     run_bounded "$SENSORS_BUDGET" "$OUT/sensors.log" "$H_WT" /bin/bash "$H_WT/scripts/run_sensors.sh" --derived-data "$H_DD"
@@ -704,11 +781,11 @@ host_sensors() {
     echo "sensors exit=$rc secs=$secs"
     line="$(grep -E '^sensor lane (GREEN|RED)' "$OUT/sensors.log" 2>/dev/null | tail -1)"
     python3 -c 'import json,sys; print(json.dumps({"line": sys.argv[1], "rc": int(sys.argv[2])}))' "$line" "$rc" >"$OUT/sensors-row.json"
-    echo "sensors (SMOKE: the sensor lane in place of the full suite): ${line:-no result line} (rc=$rc, ${secs}s)" >>"$OUT/summary.txt"
+    echo "sensors (SMOKE: the sensor lane in place of the full suite): ${line:-no result line} (rc=$rc, ${secs}s)" | out_put "$OUT/summary.txt"
     # GREEN only with a positive count of tests run (Codex #336 F8: a bare GREEN or zero tests proves nothing).
     case "$rc:$line" in
         0:"sensor lane GREEN ("[1-9]*" tests)") ;;
-        124:*) echo "sensors: RED TIMEOUT after ${secs}s" >>"$OUT/summary.txt"; VERDICT=RED ;;
+        124:*) echo "sensors: RED TIMEOUT after ${secs}s" | out_put "$OUT/summary.txt"; VERDICT=RED ;;
         *) VERDICT=RED ;;
     esac
 }
@@ -742,22 +819,22 @@ host_corpus() {   # host_corpus <sha> <stamp>
     case "$rc" in
         0|1|3|4)
             if [ -f "$cout/corpus-summary.txt" ]; then
-                python3 "$SCRIPT_DIR/testbed_host.py" show "$cout/corpus-summary.txt" --under "$cout" >>"$OUT/summary.txt"
+                python3 "$SCRIPT_DIR/testbed_host.py" show "$cout/corpus-summary.txt" --under "$cout" | out_put "$OUT/summary.txt"
             else
-                echo "corpus $CORPUS_LANE: RED no summary was written (rc=$rc; see corpus.log on the host)" >>"$OUT/summary.txt"
+                echo "corpus $CORPUS_LANE: RED no summary was written (rc=$rc; see corpus.log on the host)" | out_put "$OUT/summary.txt"
             fi ;;
-        2) echo "corpus $CORPUS_LANE: RED refused by the harness (rc=2; the reason is in corpus.log on the M4)" >>"$OUT/summary.txt"
+        2) echo "corpus $CORPUS_LANE: RED refused by the harness (rc=2; the reason is in corpus.log on the M4)" | out_put "$OUT/summary.txt"
            # The one refusal Rick must act on at the M4 itself is named here, in fixed words matched
            # on the access probe's own phrases; no text of the log is copied (#315-3).
            if [ -f "$cout/corpus.log" ] && [ ! -L "$cout/corpus.log" ]; then
                if grep -qF "macOS is waiting for permission to read the external volume" "$cout/corpus.log"; then
-                   echo "  the M4 is waiting for a privacy prompt on its screen: click Allow (Screen Sharing), or grant the corpus Python Removable Volumes / Full Disk Access in System Settings (path in corpus.log)" >>"$OUT/summary.txt"
+                   echo "  the M4 is waiting for a privacy prompt on its screen: click Allow (Screen Sharing), or grant the corpus Python Removable Volumes / Full Disk Access in System Settings (path in corpus.log)" | out_put "$OUT/summary.txt"
                elif grep -qF "macOS does not let this Python read the external volume" "$cout/corpus.log"; then
-                   echo "  macOS denied this Python access to the external volume: grant it Removable Volumes / Full Disk Access in System Settings on the M4 (path in corpus.log)" >>"$OUT/summary.txt"
+                   echo "  macOS denied this Python access to the external volume: grant it Removable Volumes / Full Disk Access in System Settings on the M4 (path in corpus.log)" | out_put "$OUT/summary.txt"
                fi
            fi ;;
         124) ;;
-        *) echo "corpus $CORPUS_LANE: RED the harness stopped (rc=$rc; see corpus.log on the M4)" >>"$OUT/summary.txt" ;;
+        *) echo "corpus $CORPUS_LANE: RED the harness stopped (rc=$rc; see corpus.log on the M4)" | out_put "$OUT/summary.txt" ;;
     esac
     case "$rc" in
         0) ;;
@@ -765,7 +842,7 @@ host_corpus() {   # host_corpus <sha> <stamp>
            AMBER_WHY="corpus $CORPUS_LANE: see the summary" ;;
         4) [ "$VERDICT" = RED ] || VERDICT=NORUN
            WHY="corpus $CORPUS_LANE: this ref has no engine for the lane" ;;
-        124) echo "corpus $CORPUS_LANE: RED TIMEOUT after ${secs}s" >>"$OUT/summary.txt"; VERDICT=RED ;;
+        124) echo "corpus $CORPUS_LANE: RED TIMEOUT after ${secs}s" | out_put "$OUT/summary.txt"; VERDICT=RED ;;
         *) VERDICT=RED ;;
     esac
 }
@@ -802,10 +879,10 @@ host_testbed() {   # host_testbed <sha> <stamp>
     block="$(python3 "$SCRIPT_DIR/m4_run_summary.py" --testbed "$OUT/lanes.tsv" "$sha" "$(( $(date +%s) - t0 ))" ${smoke_flag[@]+"${smoke_flag[@]}"})"
     vrc=$?
     # The block is built from the lanes' facts files: it reaches a caller only through the show door.
-    printf '%s\n' "$block" >"$OUT/testbed-block.raw"
-    python3 "$SCRIPT_DIR/testbed_host.py" show "$OUT/testbed-block.raw" --under "$OUT" >"$OUT/testbed-block.txt"
-    { cat "$OUT/testbed-block.txt"; echo "— the lanes' own lines —"; cat "$OUT/summary.txt"; } >"$OUT/summary.txt.new" \
-        && mv "$OUT/summary.txt.new" "$OUT/summary.txt"
+    printf '%s\n' "$block" | out_put "$OUT/testbed-block.raw" replace
+    python3 "$SCRIPT_DIR/testbed_host.py" show "$OUT/testbed-block.raw" --under "$OUT" | out_put "$OUT/testbed-block.txt" replace
+    { out_put "$OUT/testbed-block.txt" cat; echo "— the lanes' own lines —"; out_put "$OUT/summary.txt" cat; } \
+        | out_put "$OUT/summary.txt" replace
     AMBER_WHY="$words"; WHY="$words"
     case "$vrc" in
         0) VERDICT=GREEN; WHY="" ;;
@@ -881,7 +958,7 @@ host_main() {   # __host <lane> <sha> <stamp>
         echo "OUTCOME RED testbed $H_WT is not at $sha"
         exit 1
     fi
-    : >"$OUT/summary.txt"
+    : | out_put "$OUT/summary.txt" replace
     VERDICT=GREEN
     AMBER_WHY=""
     WHY=""
@@ -927,7 +1004,7 @@ host_main() {   # __host <lane> <sha> <stamp>
     # A SMOKE run says so on its OUTCOME line too (Codex #336 F7).
     [ "$SMOKE" = 1 ] && WHY="SMOKE (a stratified subset: the harness, the host and the code run end to end; never a baseline)${WHY:+ · $WHY}"
     echo "OUTCOME $VERDICT $(date '+%F %T') lane=$lane sha=${sha:0:9}${WHY:+ — $WHY}"
-    sed 's/^/  /' "$OUT/summary.txt"
+    out_put "$OUT/summary.txt" cat | sed 's/^/  /'
     case "$VERDICT" in GREEN|AMBER) return 0 ;; *) return 1 ;; esac
 }
 
