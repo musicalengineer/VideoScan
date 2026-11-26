@@ -35268,6 +35268,21 @@
     {
       "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
       "kind": "python",
+      "path": "tests/test_m4_run_out_put.py",
+      "stage": "unit",
+      "suites": [
+        "test_m4_run_out_put.py"
+      ],
+      "tests": [
+        "test_a_planted_link_is_never_written_or_read_through",
+        "test_a_second_name_or_a_folder_is_refused_and_left_as_it_was",
+        "test_append_and_replace_a_plain_file",
+        "test_no_summary_or_block_write_is_a_plain_redirection"
+      ]
+    },
+    {
+      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
+      "kind": "python",
       "path": "tests/test_m4_run_suite_lane.py",
       "stage": "regression",
       "suites": [
@@ -41478,6 +41493,10 @@
         },
         {
           "name": "tests/test_known_speech_fixture.py",
+          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
+        },
+        {
+          "name": "tests/test_m4_run_out_put.py",
           "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
         },
         {
