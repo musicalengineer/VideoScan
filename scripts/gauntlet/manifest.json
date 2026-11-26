@@ -4663,6 +4663,26 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDatabaseRestoreTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogDatabaseRestoreTests",
+        "CatalogDatabaseRestoreScaleTests"
+      ],
+      "tests": [
+        "countsComeBackExactly",
+        "failureMidCopyRollsBack",
+        "fileStopRefuses",
+        "generationRefusals",
+        "hundredThousandRowBackupRestoresWithinBudget",
+        "pageSizeRefused",
+        "poisonedAndReadOnlyRefused",
+        "restoreThenRelaunchThenAdopt",
+        "unsealedSourceRefused"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogHardKillTests.swift",
       "stage": "regression",
       "suites": [
@@ -4670,6 +4690,17 @@
       ],
       "tests": [
         "randomKillsLeaveACommittedPrefix"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogRestoreHardKillTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogRestoreHardKillTests"
+      ],
+      "tests": [
+        "randomKillsLeaveLiveOrBackup"
       ]
     },
     {
@@ -10549,7 +10580,7 @@
         "heldCatalogRefuses",
         "jsonAuthorityRefuses",
         "jsonBundleRefusedDatabaseUnchanged",
-        "sqliteBundleRefused",
+        "sqliteBundleGoesToRestore",
         "twelveThousandRows"
       ]
     },
@@ -10971,7 +11002,7 @@
         "focusesAnUnfocusedTable",
         "hiddenSelectionPromotesNothing",
         "hookGuardsOnTheWindowAndCleansUp",
-        "importCatalogMovedOffCommandI",
+        "importCatalogBecameRestoreFromBackupWithNoShortcut",
         "installedOnceAtTheWindowRoot",
         "keepsOnlyVisibleInRowOrder",
         "leavesItAloneWhenItOrAChildAlreadyHasIt",
@@ -11674,6 +11705,27 @@
         "tenThousandJitteringPassesConverge",
         "toolbarBodyNeverWalksRecords",
         "volumeTableBuildsNoFormatterPerCell"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogRestoreFromBackupTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogRestoreFromBackupTests",
+        "CatalogRestoreFromBackupSensorTests"
+      ],
+      "tests": [
+        "atHighWaterRefused",
+        "cancelledChangesNothing",
+        "doorNeverReplacesTheFile",
+        "heldCatalogRefused",
+        "manifestMismatchRefused",
+        "missingLatchRefused",
+        "restoreStopRelaunchAdopt",
+        "shaMismatchRefused",
+        "storeRefusalGivesHoldBack",
+        "trashFailureGivesHoldBack"
       ]
     },
     {
@@ -43251,9 +43303,9 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 1055,
+      "expected_floor": 1065,
       "name": "regression",
-      "package_expected_floor": 351,
+      "package_expected_floor": 361,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -43283,6 +43335,9 @@
         "VideoScanCoreTests.CatalogCommitB25Tests",
         "VideoScanCoreTests.CatalogCommitB26Tests",
         "VideoScanCoreTests.CatalogHardKillTests",
+        "VideoScanCoreTests.CatalogRestoreHardKillTests",
+        "VideoScanCoreTests.CatalogDatabaseRestoreTests",
+        "VideoScanCoreTests.CatalogDatabaseRestoreScaleTests",
         "VideoScanCoreTests.CatalogDiskFullTests",
         "VideoScanCoreTests.CatalogFolderDoorsTests",
         "VideoScanCoreTests.CatalogWriteCornerDiskTests",
@@ -43372,6 +43427,8 @@
         "VideoScanTests/CatalogPurgeMarkerTests",
         "VideoScanTests/CatalogQuitCornerTests",
         "VideoScanTests/CatalogRescanRefusedReplacementTests",
+        "VideoScanTests/CatalogRestoreFromBackupSensorTests",
+        "VideoScanTests/CatalogRestoreFromBackupTests",
         "VideoScanTests/CatalogSQLiteSnapshotTests",
         "VideoScanTests/CatalogScopedSaveBaselineTests",
         "VideoScanTests/CatalogSearchBudgetSensorTests",

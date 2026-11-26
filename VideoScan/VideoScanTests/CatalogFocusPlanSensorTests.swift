@@ -184,18 +184,19 @@ struct CatalogInfoShortcutSensorTests {
         #expect(!pane.contains(".keyboardShortcut(\"i\""), "the hidden ⌘I Button is back")
     }
 
-    @Test func importCatalogMovedOffCommandI() throws {
+    @Test func importCatalogBecameRestoreFromBackupWithNoShortcut() throws {
         let app = try code("VideoScanApp.swift")
-        let start = try #require(app.range(of: "Button(\"Import Catalog…\")"))
-        let next = app[start.upperBound...].prefix(160)
-        #expect(next.contains(".keyboardShortcut(\"i\", modifiers: [.command, .shift])"), "Import Catalog… is ⇧⌘I")
-        #expect(!next.contains(".keyboardShortcut(\"i\", modifiers: [.command])"))
-        // JSON gone, slice 2b (QA r1 NIT, 2026-10-21): every bundle is
-        // refused until Restore (GH #343), so the item is disabled and says why.
-        let after = app[start.upperBound...].prefix(400)
-        #expect(after.contains(".disabled(true)"), "Import Catalog… must be disabled until Restore exists")
-        #expect(after.contains(".help(VideoScanModel.importCatalogComingHelp)"))
-        #expect(VideoScanModel.importCatalogComingHelp == "Restore from a catalog.sqlite backup is coming (GH #343)")
+        // GH #343: the Import Catalog… item (⇧⌘I since 2026-10-06, disabled
+        // since slice 2b until Restore existed) is Restore from Backup… now —
+        // it replaces the catalog, so it carries NO shortcut, and ⌘I stays
+        // Catalog Info (Finder's rule).
+        #expect(!app.contains("Button(\"Import Catalog…\")"), "Import Catalog… is gone (it was never a merge)")
+        let start = try #require(app.range(of: "Button(\"Restore from Backup…\")"))
+        let next = app[start.upperBound...].prefix(240)
+        #expect(!next.contains(".keyboardShortcut("), "Restore from Backup… must have no shortcut")
+        #expect(next.contains("catalogModel.restoreFromBackupViaPanel()"))
+        #expect(next.contains(".disabled(catalogModel.isReadOnly)"))
+        #expect(next.contains(".help(VideoScanModel.restoreFromBackupHelp)"))
     }
 
     @Test func catalogInfoIsAFocusScopedMenuItem() throws {

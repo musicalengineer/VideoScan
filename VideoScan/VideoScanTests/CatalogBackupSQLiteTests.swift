@@ -1,5 +1,5 @@
 // CatalogBackupSQLiteTests.swift
-// File ▸ Back Up Catalog… and Import Catalog… under catalog.sqlite
+// File ▸ Back Up Catalog… and the bundle decision (Restore from Backup…) under catalog.sqlite
 // (2026-10-19, "JSON gone by Friday"). The bundle carries a sealed
 // catalog.sqlite (CatalogBackupSeal) instead of a catalog.json built from
 // memory; Import never merges into catalog.sqlite.
@@ -264,30 +264,28 @@ struct CatalogBackupImportTests {
         #expect(after.counts == before.counts && after.generation == before.generation)
     }
 
-    @Test("a catalog.sqlite bundle is refused (no merge, no safe Restore yet) and the database is unchanged")
-    func sqliteBundleRefused() async throws {
+    @Test("a catalog.sqlite bundle goes to Restore (GH #343), never a merge — deciding reads nothing and changes nothing")
+    func sqliteBundleGoesToRestore() async throws {
         let scene = try CutoverScene.make("bk_imp_sqlite"); defer { scene.cleanup() }
         try await scene.launchOnSQLite()
-        _ = try backedUp(await scene.model.backUpCatalog(to: scene.backupURL, sideFiles: scene.sandboxSideFiles))
+        let summary = try backedUp(await scene.model.backUpCatalog(to: scene.backupURL, sideFiles: scene.sandboxSideFiles))
         let fingerprint = try scene.databaseFingerprint()
-        guard case .refuse(let words) = scene.model.bundleImportDecision(for: scene.backupURL) else {
-            Issue.record("a catalog.sqlite bundle must be refused"); return
-        }
-        #expect(words.contains("never merged into catalog.sqlite"), Comment(rawValue: words))
-        #expect(words.contains("no safe Restore"), Comment(rawValue: words))
+        let generation = try #require(summary.manifest.catalogDatabase?.generation)
+        #expect(scene.model.bundleImportDecision(for: scene.backupURL) == .restore(generation: generation))
         #expect(try scene.databaseFingerprint() == fingerprint)
     }
 
-    @Test("decision table: every bundle refuses — a catalog.json bundle in words on any Mac (JSON gone, slice 2b), a catalog.sqlite bundle until Restore exists")
+    @Test("decision table: a catalog.json bundle refused in words on any Mac (JSON gone, slice 2b); a catalog.sqlite bundle restores only under catalog.sqlite")
     func decisionTable() {
         typealias M = VideoScanModel
         #expect(M.bundleImportDecision(kind: .legacyJSON, isSQLiteAuthority: false) == .refuse(M.jsonBundleRefusedWords))
         #expect(M.bundleImportDecision(kind: .legacyJSON, isSQLiteAuthority: true) == .refuse(M.jsonBundleRefusedWords))
-        for kind: BundleImporter.CatalogKind in [.sqlite(generation: 7), .sqlite(generation: nil), .none] {
-            for authority in [true, false] {
-                guard case .refuse = M.bundleImportDecision(kind: kind, isSQLiteAuthority: authority) else {
-                    Issue.record("\(kind) on sqlite=\(authority) must refuse"); continue
-                }
+        #expect(M.bundleImportDecision(kind: .sqlite(generation: 7), isSQLiteAuthority: true) == .restore(generation: 7))
+        #expect(M.bundleImportDecision(kind: .sqlite(generation: nil), isSQLiteAuthority: true) == .restore(generation: nil))
+        for (kind, authority): (BundleImporter.CatalogKind, Bool) in [(.sqlite(generation: 7), false), (.sqlite(generation: nil), false),
+                                                                       (.none, true), (.none, false)] {
+            guard case .refuse = M.bundleImportDecision(kind: kind, isSQLiteAuthority: authority) else {
+                Issue.record("\(kind) on sqlite=\(authority) must refuse"); continue
             }
         }
     }

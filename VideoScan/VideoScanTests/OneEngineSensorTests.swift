@@ -90,6 +90,7 @@ struct OneEngineSensorTests {
         "App/BundleImporter.swift": "import temp",
         "Catalog/CatalogStore.swift": "catalog backup rotation",
         "Catalog/CatalogBackupSeal.swift": "its own sealed-copy temp file (renamed on success)",
+        "Catalog/CatalogBackupRestore.swift": "its own .restore-<uuid> work folder (copies only; the safety copy goes to the Trash first)",
         "Catalog/CatalogViewerSnapshot.swift": "its own snapshot temp file (renamed on success)",
         "Catalog/CatalogSync.swift": "sync staging dirs",
         "Catalog/CatalogWriteError.swift": "rotated error log",

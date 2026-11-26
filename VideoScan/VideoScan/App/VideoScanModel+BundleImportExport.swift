@@ -14,10 +14,10 @@ import UniformTypeIdentifiers
 //     memory committed first, VACUUM INTO off the main actor, the copy
 //     reopened read-only and checked. A held, blocked or read-only catalog —
 //     or a Mac whose catalog is not catalog.sqlite — refuses in words.
-//   * Import Catalog never merges into catalog.sqlite. A JSON bundle is
-//     refused ("from before the database switch"); a catalog.sqlite bundle
-//     is refused too, because there is no safe Restore yet (replacing the
-//     live database needs its own design — see `bundleImportDecision`).
+//   * Nothing is ever merged into catalog.sqlite. A JSON bundle is refused
+//     ("from before the database switch"); a catalog.sqlite bundle goes to
+//     File ▸ Restore from Backup… (GH #343, CatalogBackupRestore.swift),
+//     which REPLACES the catalog with the backup's — see `bundleImportDecision`.
 //   * JSON gone, slice 2b (2026-10-21): the old JSON merge (a catalog.json
 //     bundle on a Mac still on catalog.json — `BundleImporter.read`,
 //     `applyBundlePayload`) is retired; a JSON bundle is refused in words on
@@ -36,13 +36,14 @@ enum CatalogBackupOutcome {
     case refused(String)
 }
 
-/// What Import Catalog may do with a chosen bundle. One case today — every
-/// bundle is refused (the JSON merge left 2026-10-21); a Restore of a
-/// catalog.sqlite bundle would be the next case. (A one-case enum ≈ a C++
-/// tagged result whose other alternatives are not written yet.)
+/// What Restore from Backup… may do with a chosen bundle (the JSON merge
+/// left 2026-10-21; Restore arrived with GH #343). (≈ a C++ tagged result.)
 enum BundleImportDecision: Equatable {
     /// Nothing is imported; the words say why.
     case refuse(String)
+    /// A sealed catalog.sqlite on a Mac whose catalog is catalog.sqlite:
+    /// CatalogBackupRestore verifies it, asks, and replaces the catalog.
+    case restore(generation: Int?)
 }
 
 /// The files around the catalog that a backup also carries. Production
@@ -274,7 +275,7 @@ extension VideoScanModel {
         words.prefix(1).uppercased() + words.dropFirst() + (words.hasSuffix(".") ? "" : ".")
     }
 
-    // MARK: - Import Catalog
+    // MARK: - Restore from Backup… (was Import Catalog…)
 
     /// The refusal for a pre-switch (catalog.json) bundle — on every Mac
     /// since JSON gone, slice 2b (2026-10-21): no catalog.json backup is read.
@@ -282,28 +283,25 @@ extension VideoScanModel {
         "this backup is from before the database switch (it holds catalog.json), and VideoScan no longer reads "
             + "catalog.json backups; nothing was changed — the backup is intact"
 
-    /// File ▸ Import Catalog…'s help while it is disabled (QA r1 NIT on
-    /// slice 2b): every bundle is refused until Restore exists.
-    nonisolated static let importCatalogComingHelp = "Restore from a catalog.sqlite backup is coming (GH #343)"
+    /// File ▸ Restore from Backup…'s help (GH #343).
+    nonisolated static let restoreFromBackupHelp =
+        "Replace the catalog with the one in a backup made by Back Up Catalog…. The catalog as it is goes to the Trash first; "
+            + "the restored catalog opens read-only until you adopt it."
 
-    /// What Import Catalog may do with a bundle holding `kind` on a Mac
-    /// whose authority is (or is not) catalog.sqlite: today, refuse — with
-    /// words. Nothing is ever merged into catalog.sqlite, and a catalog.json
-    /// bundle is never read (slice 2b retired the old JSON merge, the last
-    /// reader of a catalog.json backup). A catalog.sqlite bundle is refused
-    /// as well: a proper Restore would REPLACE the live database (close the
-    /// store, keep this Mac's high-water witnesses so the restored copy
-    /// opens read-only below them, then Adopt) — that is a new door with
-    /// its own design, not a merge, and it does not exist yet.
+    /// What Restore from Backup… may do with a bundle holding `kind` on a
+    /// Mac whose authority is (or is not) catalog.sqlite. Nothing is ever
+    /// MERGED into catalog.sqlite, and a catalog.json bundle is never read
+    /// (slice 2b retired the old JSON merge). A catalog.sqlite bundle on a
+    /// catalog.sqlite Mac goes to the Restore door (GH #343), which replaces
+    /// the live catalog INTO the open store and keeps this Mac's high-water
+    /// witnesses, so the restored copy opens read-only until Adopt.
     nonisolated static func bundleImportDecision(kind: BundleImporter.CatalogKind,
                                                  isSQLiteAuthority: Bool) -> BundleImportDecision {
         switch (kind, isSQLiteAuthority) {
         case (.legacyJSON, _):
             return .refuse(jsonBundleRefusedWords)
         case (.sqlite(let generation), true):
-            let at = generation.map { " (generation \($0))" } ?? ""
-            return .refuse("this backup holds a sealed catalog.sqlite\(at); backups are never merged into catalog.sqlite, "
-                + "and VideoScan has no safe Restore yet, so nothing was changed — the backup is intact")
+            return .restore(generation: generation)
         case (.sqlite, false):
             return .refuse("this backup holds catalog.sqlite, but this Mac's catalog is still catalog.json; "
                 + "it can't be merged into catalog.json, so nothing was changed")
@@ -318,13 +316,14 @@ extension VideoScanModel {
                                   isSQLiteAuthority: catalogCutover.isSQLiteAuthority)
     }
 
-    /// UI entry point: show an open panel, decide, and say why nothing was
-    /// imported (REFUSED line in the one sink + an alert). Nothing in the
-    /// bundle is read beyond manifest.json and which catalog file it holds.
-    func importBundleViaPanel() {
+    /// UI entry point: show an open panel, decide, and either say why
+    /// nothing was restored (REFUSED line in the one sink + an alert) or
+    /// hand the bundle to the Restore door (CatalogBackupRestore), which
+    /// verifies it, asks, restores and presents the outcome.
+    func restoreFromBackupViaPanel() {
         let panel = NSOpenPanel()
-        panel.title = "Import Catalog"
-        panel.message = "Choose a VideoScan backup (.videoscanbundle) from another Mac."
+        panel.title = "Restore from Backup"
+        panel.message = "Choose a VideoScan backup (.videoscanbundle). Its catalog will replace this one; you will see its date and size before anything changes."
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.allowsMultipleSelection = false
@@ -332,8 +331,19 @@ extension VideoScanModel {
 
         switch bundleImportDecision(for: url) {
         case .refuse(let words):
-            catalogAuthorityNote("REFUSED Import Catalog of \(url.lastPathComponent) — \(words)")
-            Self.showErrorAlert(title: "Not Imported", message: Self.sentence(words))
+            catalogAuthorityNote("REFUSED Restore from Backup of \(url.lastPathComponent) — \(words)")
+            Self.showErrorAlert(title: "Not Restored", message: Self.sentence(words))
+        case .restore:
+            guard !Self.backupRunning, let context = CatalogBackupRestore.Context.live(model: self) else {
+                let words = Self.backupRunning ? "a backup is being made — try again when it finishes"
+                    : "this Mac has no catalog.sqlite open for writing"
+                catalogAuthorityNote("REFUSED Restore from Backup of \(url.lastPathComponent) — \(words)")
+                Self.showErrorAlert(title: "Not Restored", message: Self.sentence(words))
+                return
+            }
+            Task { @MainActor in
+                CatalogBackupRestore.present(await CatalogBackupRestore.run(bundle: url, context: context))
+            }
         }
     }
 }

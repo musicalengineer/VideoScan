@@ -528,6 +528,10 @@ struct ArchiveVolumeProtectionSourceSensor {
         // consumed by the rename on success — app data, never a catalog record's media.
         "VideoScan/MediaOps/BalanceAudioJob.swift": 1, "VideoScan/App/BundleExporter.swift": 2,
         "VideoScan/Catalog/CatalogBackupSeal.swift": 1, "VideoScan/Catalog/CatalogViewerSnapshot.swift": 1,
+        // CatalogBackupRestore (GH #343): its own .restore-<uuid> work folder beside catalog.sqlite
+        // (the staged backup copy; prefix-checked before the call). The safety copy of the catalog
+        // reaches the Trash through MediaTrash.move, never this call.
+        "VideoScan/Catalog/CatalogBackupRestore.swift": 1,
         "VideoScan/App/BundleImporter.swift": 2, "VideoScan/Media/CaptionRunner.swift": 2,
         "VideoScan/Catalog/CatalogStore.swift": 1, "VideoScan/Catalog/CatalogSync.swift": 3,
         "VideoScan/Catalog/CatalogWriteError.swift": 1, "VideoScan/MediaOps/CleanupJob.swift": 4,

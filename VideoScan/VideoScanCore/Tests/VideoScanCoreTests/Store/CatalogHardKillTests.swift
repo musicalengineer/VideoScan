@@ -135,12 +135,17 @@ final class HardKillChild: @unchecked Sendable {
     }
 
     static func start(_ helper: URL, database: URL, output: URL) throws -> HardKillChild {
+        try start(helper, arguments: ["commit-loop", database.path], output: output)
+    }
+
+    /// Any helper mode (GH #343: `restore-once …`, CatalogRestoreHardKillTests).
+    static func start(_ helper: URL, arguments: [String], output: URL) throws -> HardKillChild {
         var actions: posix_spawn_file_actions_t?
         posix_spawn_file_actions_init(&actions)
         defer { posix_spawn_file_actions_destroy(&actions) }
         posix_spawn_file_actions_addopen(&actions, STDOUT_FILENO, output.path, O_WRONLY | O_CREAT | O_TRUNC, 0o644)
         posix_spawn_file_actions_adddup2(&actions, STDOUT_FILENO, STDERR_FILENO)
-        let argv = [helper.path, "commit-loop", database.path].map { strdup($0) }
+        let argv = ([helper.path] + arguments).map { strdup($0) }
         defer { argv.forEach { free($0) } }
         var cArgs: [UnsafeMutablePointer<CChar>?] = argv + [nil]
         var pid: pid_t = 0

@@ -8,6 +8,7 @@
 // second process that really dies proves what a crash leaves on disk.
 //
 //   catalog-crash-helper commit-loop <catalog.sqlite>
+//   catalog-crash-helper restore-once <catalog.sqlite> <backup> <generation> <step-delay-µs>   (GH #343, below)
 //
 // Opens the catalog through GRDBCatalogRepository with the PRODUCTION
 // durability (.archival: synchronous=FULL, fullfsync, F_FULLFSYNC'd
@@ -33,8 +34,32 @@ import VideoScanCore
 setvbuf(stdout, nil, _IOLBF, 0)
 
 let arguments = CommandLine.arguments
+
+// GH #343 — `restore-once <catalog.sqlite> <sealed backup> <expected generation> <step delay µs>`:
+// opens the catalog (.archival), prints READY, restores the backup INTO it
+// through `restore(fromSealedCopy:…)` one page per step, sleeping `step
+// delay` after each step so a SIGKILL can land mid-copy, prints STEP <n>
+// <total> per step and RESTORED <outcome> at the end (then exit 0).
+// CatalogRestoreHardKillTests kills it at a random moment and reopens.
+if arguments.count == 6, arguments[1] == "restore-once", let expected = Int(arguments[4]), let delay = UInt32(arguments[5]) {
+    let repository = GRDBCatalogRepository(host: "crash-helper", durability: .archival)
+    let opened = await repository.open(at: URL(fileURLWithPath: arguments[2]))
+    guard opened == .readWrite else {
+        print("OPEN \(opened)")
+        exit(3)
+    }
+    print("READY generation \(await repository.generation)")
+    let outcome = await repository.restore(fromSealedCopy: URL(fileURLWithPath: arguments[3]), expectedGeneration: expected,
+                                           pagesPerStep: 1) { copied, total in
+        print("STEP \(copied) \(total)")
+        usleep(delay)
+    }
+    print("RESTORED \(outcome)")
+    exit(0)
+}
+
 guard arguments.count == 3, arguments[1] == "commit-loop" else {
-    FileHandle.standardError.write(Data("usage: catalog-crash-helper commit-loop <catalog.sqlite>\n".utf8))
+    FileHandle.standardError.write(Data("usage: catalog-crash-helper commit-loop <catalog.sqlite> | restore-once <catalog.sqlite> <backup> <generation> <step-delay-µs>\n".utf8))
     exit(64)
 }
 
