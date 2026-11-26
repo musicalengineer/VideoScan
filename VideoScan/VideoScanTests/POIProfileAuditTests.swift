@@ -21,16 +21,32 @@ struct POIProfileAuditTests {
         return p
     }
 
-    @Test("Libby's edit tonight: name, surname and aliases in one line, display name first")
+    @Test("Libby's edit: one line, the living person by nickname, name-field values withheld (#466)")
     func libbyEdit() {
         let id = UUID()
         let before = profile("Libby", aliases: ["Libby", "Elizabeth"], uuid: id)
-        let after = profile("Elizabeth", aliases: ["Libby"], surname: "Breen", uuid: id)
+        let after = profile("Elizabeth", aliases: ["Libby"], surname: "Pellowe", uuid: id)
         let diff = POIProfileAudit.changes(before: before, after: after)
         #expect(diff.map(\.field) == ["name", "surname", "aliases"])
         let line = POIProfileAudit.line(action: .edited, before: before, after: after)
-        #expect(line.hasPrefix("[people] edited Libby (\(id.uuidString.prefix(8))) — Elizabeth: "), Comment(rawValue: line))
-        #expect(line.contains("name 'Libby' → 'Elizabeth'; surname — → 'Breen'; aliases 'Libby, Elizabeth' → 'Libby'"), Comment(rawValue: line))
+        #expect(line == "[people] edited Libby (\(id.uuidString.prefix(8))): name changed; surname changed; aliases changed",
+                Comment(rawValue: line))
+        // DECISIONS 2026-11-25: never a living person's surname in the local log.
+        #expect(!line.contains("Pellowe"), Comment(rawValue: line))
+        // The journal (App Support, not the log) still keeps the values.
+        #expect(diff.contains(POIProfileAudit.Change(field: "surname", from: "", to: "Pellowe")))
+    }
+
+    @Test("a deceased person's edit names them in full and shows the values (#466)")
+    func deceasedEditShowsValues() {
+        let id = UUID()
+        var before = profile("Gus", aliases: ["Grampa Gus"], uuid: id)
+        before.deathdate = Date(timeIntervalSince1970: 0)
+        var after = before
+        after.surname = "Trevanion"
+        let line = POIProfileAudit.line(action: .edited, before: before, after: after)
+        #expect(line == "[people] edited Gus Trevanion (\(id.uuidString.prefix(8))): surname — → 'Trevanion'",
+                Comment(rawValue: line))
     }
 
     @Test("a save that changes only a threshold or the crop is 'no identity field changed' (SENSOR)")
@@ -43,11 +59,13 @@ struct POIProfileAuditTests {
         #expect(POIProfileAudit.line(action: .edited, before: before, after: after).hasSuffix("saved, no identity field changed"))
     }
 
-    @Test("added / deleted / restored lines name the person by display name and short uuid")
+    @Test("added / deleted / restored lines name the living person by nickname and short uuid, no surname (#466)")
     func otherActions() {
-        let p = profile("Daniel", aliases: ["Dan"], surname: "Breen", middle: "Richard")
+        let p = profile("Daniel", aliases: ["Dan"], surname: "Pellowe", middle: "Ambrose")
         let added = POIProfileAudit.line(action: .added, before: nil, after: p)
-        #expect(added.hasPrefix("[people] added Dan (") && added.contains("— Daniel: name 'Daniel'; middleName 'Richard'; surname 'Breen'; aliases 'Dan'"), Comment(rawValue: added))
+        #expect(added.hasPrefix("[people] added Dan (") && added.contains("): name set; middleName set; surname set; aliases set"),
+                Comment(rawValue: added))
+        #expect(!added.contains("Pellowe"), Comment(rawValue: added))
         #expect(POIProfileAudit.line(action: .deleted, before: p, after: nil).hasPrefix("[people] deleted Dan ("))
         #expect(POIProfileAudit.line(action: .restored, before: nil, after: p).hasPrefix("[people] restored Dan ("))
     }

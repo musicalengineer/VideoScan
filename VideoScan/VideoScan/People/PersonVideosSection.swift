@@ -432,7 +432,7 @@ struct PersonVideosSection: View {
         let current = POIProfile.listAll().first { $0.uuid == profile.uuid } ?? profile
         page = PersonVideos.page(for: current, in: catalogModel)
         loaded = true
-        appLog.write("People: \(current.displayName)'s page — \(page.curated.count) shown "
+        appLog.write("People: \(PersonLogName.of(profile: current))'s page — \(page.curated.count) shown "
             + "(\(page.picksWithoutMaybes.count) picked, cap \(PersonVideoPage.curatedCap)); "
             + "\(page.catalogVideos) videos / \(page.catalogFiles) files in the Catalog; "
             + "\(page.hiddenBeforeBirth) dated before birth, \(page.maybeCount) maybe, "

@@ -153,7 +153,8 @@ extension VideoScanModel {
             return 0
         case .write(let name):
             if name != identity.name {
-                appLog.write("Catalog: tagging \(name) (the search was keyed by \(identity.name); the person was renamed while it ran)")
+                appLog.write("Catalog: tagging \(PersonLogName.named(name)) (the search was keyed by "
+                    + "\(PersonLogName.named(identity.name)); the person was renamed while it ran)")
             }
             return applyDetectedPeople(confirmed: confirmed, suspected: suspected, person: name)
         }

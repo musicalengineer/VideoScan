@@ -23,7 +23,7 @@ enum CatalogPersonLink {
     static func showAll(of profile: POIProfile, in store: CatalogPersonFilterStore) -> Int {
         let person = CatalogPerson(profile)
         store.select(person)
-        appLog.write("People tab: See all in the Catalog \u{2014} Person \u{25BE} \(person.name)")
+        appLog.write("People tab: See all in the Catalog \u{2014} Person \u{25BE} \(PersonLogName.of(profile: profile))")
         return MainTab.catalog.rawValue
     }
 }

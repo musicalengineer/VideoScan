@@ -125,7 +125,7 @@ enum PersonPageHides {
         do {
             try profile.save(writingFeaturedVideos: true)
         } catch {
-            appLog.write("People tab: could not save \(profile.displayName)'s page — \(error.localizedDescription)")
+            appLog.write("People tab: could not save \(PersonLogName.of(profile: profile))'s page — \(error.localizedDescription)")
             return nil
         }
         NotificationCenter.default.post(name: FeaturedVideos.changed, object: profileUUID)

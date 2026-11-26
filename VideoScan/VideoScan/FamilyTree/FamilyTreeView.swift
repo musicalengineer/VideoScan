@@ -488,7 +488,7 @@ struct FamilyTreeView: View, Equatable {
                         // The crop wins on the card immediately (session
                         // override) and on relaunch (recorded as THE choice).
                         model.setPhotoOverride(cropped, for: source.personID)
-                        appLog.write("Family Tree: saved card photo \(url.lastPathComponent) for \(source.personName)")
+                        appLog.write("Family Tree: saved card photo \(url.lastPathComponent) for \(source.assetPerson.logName)")
                         do {
                             try FamilyPhotoAdjustSheet.recordChoice(url, source: source)
                             model.notePhotoChoiceWritten()

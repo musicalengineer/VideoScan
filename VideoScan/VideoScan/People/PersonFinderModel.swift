@@ -286,7 +286,7 @@ final class ScanJob: ObservableObject, Identifiable {
         videosWithHits = filtered.count
         // High-level narration to videoscan.log — matches the "Starting search…"
         // line emitted in startJobAfterLoad.
-        let personName = assignedProfile?.name ?? "(global)"
+        let personName = assignedProfile.map { PersonLogName.of(profile: $0) } ?? "(global)"
         let volumeName = URL(fileURLWithPath: searchPath).lastPathComponent
         let elapsed = taskStarted.map { Int(Date().timeIntervalSince($0)) } ?? 0
         appLog.write("Finished search for \(personName) on \(volumeName): \(filtered.count) video(s) with hits in \(elapsed)s")
@@ -468,7 +468,7 @@ final class PersonFinderModel: ObservableObject {
         guard case .one(let profile) = resolveActiveProfile() else { return }
         settings.referencePath = profile.referencePath
         settings.save()
-        appLog.write("[people] healed reference path for '\(profile.name)': \(path) → \(profile.referencePath)")
+        appLog.write("[people] healed reference path for '\(PersonLogName.of(profile: profile))': \(path) → \(profile.referencePath)")
     }
 
     /// True when this process is a unit-test host. Mirrors the multi-signal
@@ -851,6 +851,8 @@ final class PersonFinderModel: ObservableObject {
         let uuid: UUID          // the folder key — what undo restores to
         let trashURL: URL       // exact destination returned by trashPOIFolder
         let timestamp: Date     // when the delete happened, for diagnostics
+        /// How the log names the person (PersonLogName, DECISIONS 2026-11-25).
+        var logName: String = ""
     }
 
     /// The banner observes this. nil = no banner shown.
@@ -881,7 +883,7 @@ final class PersonFinderModel: ObservableObject {
         if let quarantine = profile.quarantine {
             lastUndoError = POIProfileFileStore.Failure
                 .quarantined(folder: quarantine.folder, reason: quarantine.reason).errorDescription
-            appLog.write("[people] delete refused for quarantined '\(profile.name)' in '\(quarantine.folder)'")
+            appLog.write("[people] delete refused for quarantined '\(PersonLogName.of(profile: profile))' in '\(quarantine.folder)'")
             return false
         }
         // Swift's `lowercased()` ≈ C's tolower() on the whole string.
@@ -904,7 +906,7 @@ final class PersonFinderModel: ObservableObject {
             return false
         }
         osLog.info("deletePOI: moved \(name, privacy: .public) (\(profile.id, privacy: .public)) → \(dest.path, privacy: .public)")
-        appLog.write("[people] deleted '\(name)' \(profile.id) → \(dest.path)")
+        appLog.write("[people] deleted '\(PersonLogName.of(profile: profile))' \(profile.id) → \(dest.deletingLastPathComponent().path)/")
         POIProfileAudit.record(action: .deleted, before: profile, after: nil)
 
         // 3. Refresh in-memory gallery. Clear active selection / loaded
@@ -940,7 +942,8 @@ final class PersonFinderModel: ObservableObject {
         //    target's folder stays in .trash/ but is no longer one-tap
         //    recoverable (matches the spec; manual recovery still works).
         lastDeletedPOI = LastDeletedPOI(name: profile.displayName, uuid: profile.uuid,
-                                        trashURL: dest, timestamp: Date())
+                                        trashURL: dest, timestamp: Date(),
+                                        logName: PersonLogName.of(profile: profile))
         lastUndoError = nil
         return true
     }
@@ -976,7 +979,7 @@ final class PersonFinderModel: ObservableObject {
             if let back = savedProfiles.first(where: { $0.uuid == snap.uuid }) {
                 POIProfileAudit.record(action: .restored, before: nil, after: back)
             } else {
-                appLog.write("[people] restored '\(snap.name)' \(snap.uuid.uuidString) ← \(dest.path)")
+                appLog.write("[people] restored '\(snap.logName)' \(snap.uuid.uuidString) ← \(dest.path)")
             }
             lastDeletedPOI = nil
             lastUndoError = nil

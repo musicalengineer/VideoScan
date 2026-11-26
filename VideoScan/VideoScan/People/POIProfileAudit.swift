@@ -6,8 +6,9 @@
 // kinship saves, photo adds and folder renames logged. Now EVERY profile
 // write, add, delete and undo produces:
 //   • one human line in the app log ("[people] edited Libby (4670A796):
-//     name 'Libby' → 'Elizabeth'; surname — → 'Breen'; aliases [Libby,
-//     Elizabeth] → [Libby]"), and
+//     name changed; surname changed; aliases changed" for a living person —
+//     the name-field VALUES of the living stay out of the log, DECISIONS
+//     2026-11-25; a deceased person's line shows them), and
 //   • one JSON line in an append-only journal beside the profiles
 //     (App Support/VideoScan/people-audit/people-audit.jsonl; a test host
 //     gets a per-process scratch folder — the MediaLedger discipline), so
@@ -106,23 +107,38 @@ enum POIProfileAudit {
         return out
     }
 
+    /// The fields whose VALUES can carry a surname. For a living person the
+    /// app-log line says only that they changed (DECISIONS 2026-11-25: never
+    /// a living person's surname in the local log); the journal keeps the
+    /// values.
+    static let nameFields: Set<String> = ["name", "middleName", "surname", "maidenName", "suffix", "aliases", "titles"]
+
     /// The app-log line. `before == nil` = added; `after == nil` = deleted.
+    /// The person is named by `PersonLogName` (nickname or first name when
+    /// living, full name when deceased).
     static func line(action: Action, before: POIProfile?, after: POIProfile?) -> String {
         let subject = after ?? before
-        let display = subject?.displayName ?? "?"
+        let display = subject.map { PersonLogName.of(profile: $0) } ?? "?"
         let short = subject.map { String($0.uuid.uuidString.prefix(8)) } ?? "?"
-        var head = "[people] \(action.rawValue) \(display) (\(short))"
-        if let s = subject, s.displayName != s.name { head += " — \(s.name)" }
+        let head = "[people] \(action.rawValue) \(display) (\(short))"
+        let living = subject.map {
+            LifeStatus.privacyVerdict(deathdate: $0.deathdate, birthdate: $0.birthdate) == .living
+        } ?? true
+        func withheld(_ change: Change) -> Bool { living && nameFields.contains(change.field) }
         switch action {
         case .added:
             let facts = changes(before: nil, after: after).filter { $0.field != "kinships" && $0.field != "notes" }
-            return head + (facts.isEmpty ? "" : ": " + facts.map { "\($0.field) \(quote($0.to))" }.joined(separator: "; "))
+            return head + (facts.isEmpty ? "" : ": " + facts.map {
+                withheld($0) ? "\($0.field) set" : "\($0.field) \(quote($0.to))"
+            }.joined(separator: "; "))
         case .deleted, .restored:
             return head
         case .edited:
             let diff = changes(before: before, after: after)
             if diff.isEmpty { return head + ": saved, no identity field changed" }
-            return head + ": " + diff.map { "\($0.field) \(quote($0.from)) → \(quote($0.to))" }.joined(separator: "; ")
+            return head + ": " + diff.map {
+                withheld($0) ? "\($0.field) changed" : "\($0.field) \(quote($0.from)) → \(quote($0.to))"
+            }.joined(separator: "; ")
         }
     }
 

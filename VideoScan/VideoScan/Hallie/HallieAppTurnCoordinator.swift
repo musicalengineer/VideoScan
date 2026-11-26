@@ -410,7 +410,8 @@ enum HallieAppTurnCoordinator {
                     throw CyberBrainWriter.WriteError.unsafeRoot("Application Support unavailable")
                 }
                 let receipt = try CyberBrainWriter.record(testimony, rootURL: root)
-                appLog.write("Hallie: kept testimony \(receipt.itemID) about \(receipt.canonicalName) (told by \(testimony.speakerName))")
+                appLog.write("Hallie: kept testimony \(receipt.itemID) about \(PersonLogName.named(receipt.canonicalName)) "
+                    + "(told by \(PersonLogName.named(testimony.speakerName)))")
             },
             recordPhotoCaption: { caption in
                 try ViewerWriteGuard.check("HallieAppTurnCoordinator.recordPhotoCaption")
@@ -1328,13 +1329,14 @@ enum HallieAppTurnCoordinator {
                         result = result.adding(attachments: decision.attachments)
                     }
                     if let note = decision.suppressedNote {
-                        appLog.write("[hallie] photo offer suppressed: \(canonicalName) (\(note))")
+                        appLog.write("[hallie] photo offer suppressed: \(PersonLogName.named(canonicalName, matches: graphMatches)) (\(note))")
                     }
                     if let error = decision.folderError {
                         // Photo presentation is optional.  Preserve the
                         // grounded biography and record why no request card
                         // was offered; never reinterpret the failed write.
-                        appLog.write("Hallie: photo request unavailable for \(canonicalName): \(error)")
+                        appLog.write("Hallie: photo request unavailable for "
+                            + "\(PersonLogName.named(canonicalName, matches: graphMatches)): \(error)")
                     }
                 }
                 // "I have 3 photos and 1 document of her in the archive —

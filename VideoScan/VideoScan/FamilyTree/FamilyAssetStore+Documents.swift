@@ -305,11 +305,14 @@ final class PersonDocumentLog: @unchecked Sendable {
         }
     }
 
+    /// The app-log line may name the person (`logSubject` → `PersonLogName`,
+    /// DECISIONS 2026-11-25), so the os_log copy is private as a whole —
+    /// names never reach the public unified-log stream (codex #861).
     func write(_ line: String, privateName: String? = nil) {
         if let privateName {
-            documentLog.notice("\(line.replacingOccurrences(of: privateName, with: "<name>"), privacy: .public) [\(privateName, privacy: .private)]")
+            documentLog.notice("\(line, privacy: .private) [\(privateName, privacy: .private)]")
         } else {
-            documentLog.notice("\(line, privacy: .public)")
+            documentLog.notice("\(line, privacy: .private)")
         }
         appLog.write(line)
         let sink = lock.withLock { extraSink }
@@ -518,7 +521,7 @@ extension FamilyAssetStore {
         PersonDocumentLog.shared.write(
             "[tree] added \(kind.displayName) for \(Self.logSubject(person, folder: target)) — "
             + "\(document.filename), \(Self.displayBytes(data.count))",
-            privateName: person?.name)
+            privateName: person?.logName)
         return document
     }
 
@@ -642,7 +645,7 @@ extension FamilyAssetStore {
         PersonDocumentLog.shared.write(
             "[tree] removed \(document.kind.displayName) for \(Self.logSubject(person, folder: target)) — "
             + "\(document.filename) moved to Documents/\(Self.documentsTrashFolderName)/",
-            privateName: person?.name)
+            privateName: person?.logName)
     }
 
     /// Same, deriving the person folder from the row's resolved `fileURL`.
@@ -817,17 +820,18 @@ extension FamilyAssetStore {
         return f.string(fromByteCount: Int64(count))
     }
 
-    /// "LZ7X-ABC" — the person's KEY (FamilySearch ID, else GEDCOM pointer),
-    /// never their name: the app log is not the place for family names (QA
-    /// 2026-10-01 P3-1; the os_log line still carries the name as private).
-    /// A folder name can contain a name too, so it is never used: without a
-    /// key the subject is an opaque reference to the folder (the first 8
-    /// hex digits of the SHA-256 of its name) — stable across lines, so one
-    /// folder's diagnostics can be told apart, and meaningless on its own.
+    /// "Mary (LZ7X-ABC)" — the person as the log names them
+    /// (`PersonLogName`, DECISIONS 2026-11-25: full name when deceased,
+    /// first name when living, never a living surname) plus their KEY
+    /// (FamilySearch ID, else GEDCOM pointer). A folder name can contain a
+    /// full name, so it is never used: without a person the subject is an
+    /// opaque reference to the folder (the first 8 hex digits of the
+    /// SHA-256 of its name) — stable across lines, meaningless on its own.
     /// The os_log copy of each line carries the folder name as private.
     static func logSubject(_ person: FamilyAssetPerson?, folder: URL) -> String {
-        if let key = person?.familySearchID ?? person?.gedcomID, !key.isEmpty { return key }
-        let ref = sha256Hex(Data(folder.lastPathComponent.utf8)).prefix(8)
-        return "a person with no ID (folder ref \(ref))"
+        let ref = "folder ref \(sha256Hex(Data(folder.lastPathComponent.utf8)).prefix(8))"
+        guard let person else { return "a person with no ID (\(ref))" }
+        if let key = person.familySearchID ?? person.gedcomID, !key.isEmpty { return "\(person.logName) (\(key))" }
+        return "\(person.logName) (no ID, \(ref))"
     }
 }

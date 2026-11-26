@@ -1280,6 +1280,9 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// relaunch) opens on the same person. Explicit save, not `didSet`.
     private func rememberFocus() {
         guard isLive, let id = selectedID, let person = graph?.people[id] else { return }
+        // An ID (FamilySearch ID, else the @I pointer), never a name: the
+        // preferences plist holds no family names (GH #466, alert 18;
+        // pinned by FamilyTreeDefaultFocusTests).
         let key = person.familySearchID ?? id
         guard key != rememberedFocusKey else { return }
         rememberedFocusKey = key
@@ -1404,7 +1407,7 @@ final class FamilyTreeLiveModel: ObservableObject {
             appLog.write("Family Tree: select ignored — no person \(id) in the installed tree")
             return
         }
-        appLog.write("Family Tree: selected \(graph?.people[id]?.name ?? id) (\(id))")
+        appLog.write("Family Tree: selected \(graph?.people[id].map { PersonLogName.of($0) } ?? id) (\(id))")
         selectedID = id
         // Focus (Hallie / People tab / Home) lands here too, so one sensor
         // covers every relayout the user can trigger.
@@ -2226,7 +2229,7 @@ final class FamilyTreeLiveModel: ObservableObject {
             return []
         }
         if shouldLog {
-            appLog.write("Family Tree: context menu opened on \(person.name) (\(personID))")
+            appLog.write("Family Tree: context menu opened on \(PersonLogName.of(person)) (\(personID))")
         }
         // GH #230: the death year narrows the Record Finder's year windows;
         // recorded service (not a US draft registration) adds the UK
@@ -2409,7 +2412,7 @@ final class FamilyTreeLiveModel: ObservableObject {
                     try ruling.save(to: directory, log: { appLog.write($0) })
                 }
                 identityRulingsUnsaved = false
-                appLog.write("Family Tree: \(hidden ? "HID" : "un-hid") \(person.name) (\(fsid)) — "
+                appLog.write("Family Tree: \(hidden ? "HID" : "un-hid") \(PersonLogName.of(person)) (\(fsid)) — "
                     + "\(updated.suppressedFamilySearchIDs.count) record(s) now hidden")
             } catch {
                 appLog.write("Family Tree: could not save the identity ruling — \(error.localizedDescription)")

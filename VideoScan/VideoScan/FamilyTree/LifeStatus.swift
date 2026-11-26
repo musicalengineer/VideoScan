@@ -128,6 +128,29 @@ enum LifeStatus: String, Sendable, Equatable {
         return of(person, in: graph, now: now, calendar: calendar)
     }
 
+    /// The same conservative rule over bare facts (DECISIONS 2026-10-10:
+    /// living = no death date, or born after now − 100 without one), for a
+    /// caller with no tree record — a People-tab profile, a bare name with a
+    /// birth year. Unknown dates are living. Used by `PersonLogName`.
+    static func privacyVerdict(deathRecorded: Bool, birthYear: Int?,
+                               now: Date = Date(),
+                               calendar: Calendar = .current) -> LifeStatus {
+        if deathRecorded { return .deceased }
+        if let birthYear, birthYear <= calendar.component(.year, from: now) - presumedLivingYears {
+            return .presumedDeceased
+        }
+        return .living
+    }
+
+    /// The bare-facts rule over a profile's dates.
+    static func privacyVerdict(deathdate: Date?, birthdate: Date?,
+                               now: Date = Date(),
+                               calendar: Calendar = .current) -> LifeStatus {
+        privacyVerdict(deathRecorded: deathdate != nil,
+                       birthYear: birthdate.map { calendar.component(.year, from: $0) },
+                       now: now, calendar: calendar)
+    }
+
     // MARK: - People-tab profile
 
     /// The verdict for a People-tab profile: a recorded death wins; a pinned
