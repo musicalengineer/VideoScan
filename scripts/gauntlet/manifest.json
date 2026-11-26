@@ -39319,6 +39319,18 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/NetworkWalkCancelCheckpointTests.swift",
+      "stage": "regression",
+      "suites": [
+        "NetworkWalkCancelCheckpointTests"
+      ],
+      "tests": [
+        "cancelledNetworkWalkSavesNoCheckpoint",
+        "completedNetworkWalkStillSavesCheckpoint"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/TestPreferencesTests.swift",
       "stage": "unit",
       "suites": [
@@ -39355,6 +39367,35 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/DossierPropagationDigestIdentityTests.swift",
+      "stage": "regression",
+      "suites": [
+        "DossierPropagationDigestIdentityTests"
+      ],
+      "tests": [
+        "archiveFixityIsAWholeFileDigestToo",
+        "disagreeingFixities_propagateNothing",
+        "sameDigestDifferentSample_propagates",
+        "sameDigest_propagatesAsBefore",
+        "sameSampleDifferentDigest_backfillCopiesNoOCRDates",
+        "sameSampleDifferentDigest_writebackCopiesNoTranscript",
+        "sameSampleNoDigest_propagatesNothing"
+      ]
+    },
+    {
+      "blocked_reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ProductionShapeDossierDigestTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ProductionShapeDossierDigestTests"
+      ],
+      "tests": [
+        "everyWrittenValueHasASameDigestDonor"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchiveDateProvenanceTruthTests.swift",
       "stage": "unit",
       "suites": [
@@ -39366,6 +39407,21 @@
         "machineDateIsNotAUserDate",
         "noDayNoYearNoUserDate",
         "usersDateRebuilds"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ContentHashBackfillVolumeIdentityTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ContentHashBackfillVolumeIdentityTests"
+      ],
+      "tests": [
+        "aRefusalIsCountedAndNamedInTheLog",
+        "hasherRefusesOnTheOpenedDescriptor",
+        "recordOnAnotherVolumeIsNotSigned",
+        "recordOnThisVolumeIsSigned",
+        "recordWithNoVolumeEvidenceIsNotSigned"
       ]
     }
   ],
@@ -43416,9 +43472,13 @@
         {
           "name": "VideoScan/VideoScanTests/VerifyAudioPacketShapeTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ProductionShapeDossierDigestTests.swift",
+          "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 1079,
+      "expected_floor": 1093,
       "name": "regression",
       "package_expected_floor": 366,
       "package_selectors": [
@@ -43686,7 +43746,10 @@
         "VideoScanTests/VolumeRescueNeverReplacesTests",
         "VideoScanTests/ArchivedInspectorDateTests",
         "VideoScanTests/ArchivedTwinDateTests",
-        "VideoScanTests/ArchivedRenameRefusalTests"
+        "VideoScanTests/ArchivedRenameRefusalTests",
+        "VideoScanTests/NetworkWalkCancelCheckpointTests",
+        "VideoScanTests/DossierPropagationDigestIdentityTests",
+        "VideoScanTests/ContentHashBackfillVolumeIdentityTests"
       ]
     },
     {

@@ -7,15 +7,16 @@ import Foundation
 // Same physical file gets cataloged once per volume it lives on; each
 // scan ran its own Whisper / VLM / OCR pass on the same audio + frames
 // but produced slightly different output (recognition non-determinism).
-// Propagation picks the "best" result per partialMD5 group and applies
-// it to every member, so a search hits the file via any copy.
+// Propagation picks the "best" result per whole-file-digest group (GH #413;
+// it was partialMD5) and applies it to every member, so a search hits the
+// file via any copy. The fixtures' `md5:` key names that digest.
 //
 // Tests cover both:
 //   1. The pure "best wins" selectors (longest non-empty transcript,
 //      largest count of captions, etc.) — testable without spinning up
 //      a VideoScanModel.
 //   2. The end-to-end propagation when applied to a group of records
-//      sharing a partialMD5.
+//      sharing a whole-file digest.
 
 @MainActor
 @Suite("DossierPropagation")
@@ -47,6 +48,8 @@ struct DossierPropagationTests {
         r.fullPath = path
         r.filename = (path as NSString).lastPathComponent
         r.partialMD5 = md5
+        // GH #413: "copies" share a whole-file digest; the md5 key names it.
+        r.contentFixity = DossierBackfillVerdictBudgetTests.wholeFileFixity(group: md5, size: r.sizeBytes)
         r.streamTypeRaw = streamType.rawValue
         r.audioTranscript = transcript
         r.audioTranscriptModel = transcriptModel
@@ -202,14 +205,14 @@ struct DossierPropagationTests {
 
     /// regression: records with empty partialMD5 must NEVER receive
     /// propagation — without a content hash we can't safely identify
-    /// siblings. The `propagateDossierToMD5Duplicates(of:)` entry point
+    /// siblings. The `propagateDossierToContentCopies(of:)` entry point
     /// must short-circuit.
     @Test func propagation_skipsEmptyMD5() {
         let model = VideoScanModel()
         let target = makeRecord(path: "/A", md5: "", transcript: "kept text")
         let candidateSibling = makeRecord(path: "/B", md5: "", transcript: "different text")
         model.records = [target, candidateSibling]
-        model.propagateDossierToMD5Duplicates(of: target)
+        model.propagateDossierToContentCopies(of: target)
         #expect(target.audioTranscript == "kept text",
                 "Empty-MD5 records must never be siblings — keep their own transcript")
         #expect(candidateSibling.audioTranscript == "different text",

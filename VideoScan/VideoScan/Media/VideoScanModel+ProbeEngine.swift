@@ -117,7 +117,7 @@ extension VideoScanModel {
         var drained = 0         // outcomes drained (pairs with completions)
         var pending: [URL] = []
         var pendingHead = 0     // pending[pendingHead...] is the FIFO tail
-        var abortedDuringWalk = false
+        var walkEnd = ProbeWalkEnd.complete
 
         let stream = walkDirectoryStream(
             root: root,
@@ -139,7 +139,7 @@ extension VideoScanModel {
 
         await withTaskGroup(of: ProbeOutcome.self) { probeGroup in
             walk: for await url in stream {
-                if Task.isCancelled { break }
+                if Task.isCancelled { walkEnd = .cancelled; break }
                 discoveredCount += 1
                 allDiscoveredPaths.append(url.path)
                 // Discovery increment SYNCHRONOUSLY before the enqueue —
@@ -172,7 +172,7 @@ extension VideoScanModel {
                     if await handleProbeOutcome(outcome, totalFiles: discoveredCount, discoveryFinal: false,
                                                 ctx: ctx, state: &state) {
                         probeGroup.cancelAll()
-                        abortedDuringWalk = true
+                        walkEnd = .aborted
                         break walk
                     }
                 }
@@ -192,6 +192,11 @@ extension VideoScanModel {
                 }
             }
 
+            // GH #164: the stream's iterator also ends (nil) on a cancelled
+            // task, so the loop can finish "normally" without reaching the
+            // check above.
+            walkEnd = walkEnd.seeing(cancelled: Task.isCancelled)
+
             let totalFiles = discoveredCount
             target.filesFound = totalFiles
             // Denominator is now FINAL — flips the row out of isWalking so
@@ -200,27 +205,9 @@ extension VideoScanModel {
             dashboard.markVolumeWalkComplete(volumeRoot: root, totalFiles: totalFiles, generation: scanGen)
             log("  Found \(totalFiles) video files on \(volName)")
 
-            // Save checkpoint after walk completes so a crash during probing
-            // can resume without re-walking the entire directory tree.
-            // (Not after an abort that cut the walk short — a checkpoint
-            // from a partial walk would resume as if discovery were
-            // complete and feed the prune chain.)
-            if rootIsNetwork && !abortedDuringWalk {
-                // Checkpoint honesty (QA 2026-07-02): if the walk hit
-                // enumeration errors, the checkpoint must say so — a resume
-                // completes only the ADMITTED paths, and without the flag it
-                // would finalize as "complete" and prune records under the
-                // directories this walk never read.
-                let checkpoint = ScanCheckpoint(
-                    volumePath: root,
-                    startedAt: Date(),
-                    discoveredPaths: allDiscoveredPaths,
-                    totalDiscovered: totalFiles,
-                    skipChecksums: skipHashingCaptured,
-                    walkHadEnumerationErrors: (audit?.directoryEnumerationErrors ?? 0) > 0
-                )
-                ScanCheckpointStorage.save(checkpoint)
-                log("  💾 Checkpoint saved (\(totalFiles) files) — scan is resumable if interrupted")
+            if rootIsNetwork {
+                saveNetworkWalkCheckpoint(walkEnd, root: root, volName: volName, paths: allDiscoveredPaths,
+                                          skipChecksums: skipHashingCaptured, audit: audit)
             }
 
             // Drain: every outcome goes through the SAME handler as the
@@ -228,7 +215,7 @@ extension VideoScanModel {
             // `pending` (FIFO) until the queue is empty. On cancel nothing
             // new is enqueued — at most `liveBound` children exist to tear
             // down, which is the whole point of the fix.
-            if !abortedDuringWalk {
+            if walkEnd != .aborted {
                 while let outcome = await probeGroup.next() {
                     drained += 1
                     live -= 1
@@ -272,6 +259,33 @@ extension VideoScanModel {
     /// trivial.
     nonisolated static func probeGroupLiveChildBound(probesLimit: Int) -> Int {
         max(16, 4 * max(1, probesLimit))
+    }
+
+    /// The post-walk checkpoint of a NETWORK root: saved after a complete
+    /// walk so a crash during probing can resume without re-walking the
+    /// tree. Never after a walk that was cut short — by the unmount abort or
+    /// by a user cancel (GH #164) — because a checkpoint of a partial walk
+    /// resumes as if discovery were complete and feeds the prune chain.
+    func saveNetworkWalkCheckpoint(_ end: ProbeWalkEnd, root: String, volName: String, paths: [String],
+                                   skipChecksums: Bool, audit: DiscoveryAuditCollector?) {
+        guard end == .complete else {
+            appLog.write("Checkpoint NOT saved for \(volName): the walk was \(end) after \(paths.count) file(s) — a partial walk is never resumable as complete (GH #164)")
+            return
+        }
+        // Checkpoint honesty (QA 2026-07-02): if the walk hit enumeration
+        // errors, the checkpoint must say so — a resume completes only the
+        // ADMITTED paths, and without the flag it would finalize as
+        // "complete" and prune records under the directories never read.
+        let checkpoint = ScanCheckpoint(
+            volumePath: root,
+            startedAt: Date(),
+            discoveredPaths: paths,
+            totalDiscovered: paths.count,
+            skipChecksums: skipChecksums,
+            walkHadEnumerationErrors: (audit?.directoryEnumerationErrors ?? 0) > 0
+        )
+        ScanCheckpointStorage.save(checkpoint)
+        log("  💾 Checkpoint saved (\(paths.count) files) — scan is resumable if interrupted")
     }
 
     /// The body of one probe child task, shared by both probe groups and
@@ -1035,4 +1049,25 @@ extension VideoScanModel {
             return false
         }
     }
+}
+
+/// How a probe group's directory walk ended (GH #164: one value, not two
+/// Bools). Only a `.complete` walk may leave a resumable checkpoint; only an
+/// `.aborted` one skips the drain (the unmount abort already cancelled the
+/// children). ≈ a C++ `enum class` with a helper member function.
+enum ProbeWalkEnd: String, Sendable, CustomStringConvertible {
+    /// The stream ended with every directory read.
+    case complete
+    /// The consecutive-failure abort fired during the walk.
+    case aborted
+    /// The task was cancelled (Stop) before or during the walk.
+    case cancelled
+
+    /// A complete-looking end on a cancelled task is a cancel: the stream's
+    /// iterator returns nil on cancellation, indistinguishable from the end.
+    func seeing(cancelled: Bool) -> ProbeWalkEnd {
+        self == .complete && cancelled ? .cancelled : self
+    }
+
+    var description: String { rawValue }
 }
