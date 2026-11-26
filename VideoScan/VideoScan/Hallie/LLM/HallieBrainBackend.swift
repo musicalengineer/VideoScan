@@ -171,17 +171,12 @@ protocol HallieBrainBackend: NLQueryTranslating {
     func warmUp() async
 }
 
+/// `composePlainText(system:user:dataClass:)` lives on the type itself
+/// (OllamaFailoverTranslator.swift) with its data-class gate: familyMedia
+/// goes only to hosts on this Mac (GH #450).
 extension OllamaFailoverTranslator: HallieBrainBackend {
     var provider: HallieBrainProvider { .local }
     var modelName: String { template.model }
-
-    /// The local brain runs on Rick's own machines, so every class may go
-    /// to it. (A host row written as an https:// URL is a remote Ollama —
-    /// pre-existing behaviour, tracked separately.)
-    func composePlainText(system: String, user: String,
-                          dataClass: HallieDataClass) async throws -> String {
-        try await composePlainText(system: system, user: user)
-    }
 }
 
 /// START/OUTCOME for every brain call, through the one log sink, naming the
@@ -219,7 +214,9 @@ struct HallieLoggedBrain: HallieBrainBackend {
             let ms = Int((clock.now - started) / .milliseconds(1))
             let reason = HallieBrainLog.failureReason(error, afterMs: ms)
             write("[hallie] brain OUTCOME op=\(op) brain=\(brainLabel) failed ms=\(ms) reason=\(reason)")
-            if let afterFailure {
+            // A familyMedia refusal promised zero dials; the after-failure
+            // line would probe /api/ps on the first host (Codex #450 P2).
+            if let afterFailure, !Self.isFamilyMediaRefusal(error) {
                 let write = write
                 Task.detached(priority: .utility) {
                     if let line = await afterFailure() { write(line) }
@@ -227,6 +224,11 @@ struct HallieLoggedBrain: HallieBrainBackend {
             }
             throw error
         }
+    }
+
+    private static func isFamilyMediaRefusal(_ error: Error) -> Bool {
+        if case HallieBrainError.familyMediaRefused = error { return true }
+        return false
     }
 
     func translate(_ text: String) async throws -> NLQuerySpec {
@@ -267,5 +269,16 @@ enum HallieBrainHistoryPolicy {
         for provider: HallieBrainProvider
     ) -> [HallieGroundedComposer.HistoryTurn] {
         provider == .cloud ? [] : history
+    }
+
+    /// The class a compose call carries once prior turns ride along with it
+    /// (GH #450). An earlier answer may quote a transcript or a caption and a
+    /// HistoryTurn does not record its source, so a call that carries ANY
+    /// history is familyMedia: the Local brain then phrases it only on this
+    /// Mac, never on a remote host row. Pass the history AFTER `history(_:for:)`
+    /// — Cloud gets none, so its class is unchanged.
+    static func dataClass(_ base: HallieDataClass,
+                          carrying history: [HallieGroundedComposer.HistoryTurn]) -> HallieDataClass {
+        history.isEmpty ? base : max(base, .familyMedia)
     }
 }

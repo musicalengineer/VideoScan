@@ -297,6 +297,39 @@ struct FilenameDatePatternTests {
     func patterns(name: String, expected: String) {
         #expect(m(name) == expected, "\(name)")
     }
+
+    /// GH #232 (folded into #118): the month matchers ran before the bare
+    /// year's guard, so a dimension or a camera counter next to a month word
+    /// or a two-digit suffix became a month ("May_1920x1080.mov" → 1920-05).
+    /// Every matcher that reads a 4-digit run as a year now asks the same
+    /// "is this run a year at all?" question.
+    @Test("a dimension or a camera counter is never a month's year (GH #232)",
+          arguments: [
+            ("May_1920x1080.mov",                    "-"),
+            ("June 1080x1920.mov",                   "-"),
+            ("Dec-2000kbps.mp4",                     "-"),
+            ("Portrait 1080x1920-05.mov",            "-"),
+            ("IMG_2004-03.MOV",                      "-"),
+            ("DSC_2001_05.mov",                      "-"),
+            ("100_2005-06.MOV",                      "-"),
+            ("101_2005-06.MOV",                      "-"),                // DCF folder 100-999
+            ("1000_2005-06.MOV",                     "-"),
+            // Still months: a real year beside a month word or a suffix.
+            // Codex #232 round 1: a 1-2 digit tape / reel / part number
+            // before an explicit year-month is not a camera counter.
+            ("Tape1_1998-09.mov",                    "1998-09 month"),
+            ("Tape2-2003-07.avi",                    "2003-07 month"),
+            ("Reel_1_1985-12.mov",                   "1985-12 month"),
+            ("Part 12_1994-06.dv",                   "1994-06 month"),
+            ("Tape1_1998.mov",                       "1998 year"),
+            ("May_1994_1920x1080.mov",               "1994-05 month"),
+            ("June 1994 cookout.dv",                 "1994-06 month"),
+            ("Tape 1998-09.avi",                     "1998-09 month"),
+            ("Christmas 1990 1920x1080.mov",         "1990 year"),
+          ] as [(String, String)])
+    func monthMatchersHonourTheYearGuard(name: String, expected: String) {
+        #expect(m(name) == expected, "\(name)")
+    }
 }
 
 // MARK: - Placement (ArchivePathResolver) — the RickGuitar sensor

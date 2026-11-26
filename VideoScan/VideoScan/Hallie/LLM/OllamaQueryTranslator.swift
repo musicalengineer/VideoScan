@@ -156,6 +156,12 @@ struct OllamaQueryTranslator: NLQueryTranslating {
     var probeTimeoutSeconds: Double = 3
     var transport: Transport = .urlSession
 
+    /// The session `.urlSession` dials through. Production: the one Ollama
+    /// session, which refuses every HTTP redirect (GH #450 round 2 —
+    /// `OllamaHTTP`). Tests inject `OllamaHTTP.makeSession(configuration:)`
+    /// over a URLProtocol stub, so they exercise the same redirect policy.
+    var session: URLSession = OllamaHTTP.session
+
     /// Where "this host's build cannot do structured output" is
     /// remembered for the rest of the process. Defaults to the shared
     /// process-wide memo; tests inject their own so one test's discovery
@@ -315,7 +321,7 @@ struct OllamaQueryTranslator: NLQueryTranslating {
         case .urlSession:
             var request = URLRequest(url: url, timeoutInterval: probeTimeoutSeconds)
             request.httpMethod = "GET"
-            payload = try? await URLSession.shared.data(for: request).0
+            payload = try? await session.data(for: request).0
         case .fake(let handler):
             payload = await handler(urlString, Data()).data
         case .curl:
@@ -367,7 +373,7 @@ struct OllamaQueryTranslator: NLQueryTranslating {
         case .urlSession:
             var request = URLRequest(url: url, timeoutInterval: probeTimeoutSeconds)
             request.httpMethod = "GET"
-            payload = try? await URLSession.shared.data(for: request).0
+            payload = try? await session.data(for: request).0
         case .fake(let handler):
             payload = await handler(urlString, Data()).data
         case .curl:
@@ -404,7 +410,7 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             var request = URLRequest(url: url, timeoutInterval: probeTimeoutSeconds)
             request.httpMethod = "GET"
             do {
-                let (_, response) = try await URLSession.shared.data(for: request)
+                let (_, response) = try await session.data(for: request)
                 if let http = response as? HTTPURLResponse, http.statusCode != 200 {
                     return .serverError(status: http.statusCode, detail: "probe")
                 }
@@ -725,7 +731,7 @@ struct OllamaQueryTranslator: NLQueryTranslating {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = body
             do {
-                let (payload, response) = try await URLSession.shared.data(for: request)
+                let (payload, response) = try await session.data(for: request)
                 // The status used to be discarded, so a 500 fell through
                 // to JSON decoding and surfaced as "unusable output" —
                 // which reads as the model's fault and, worse, is NOT
