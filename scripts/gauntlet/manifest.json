@@ -34752,6 +34752,20 @@
       ]
     },
     {
+      "blocked_reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>",
+      "kind": "python",
+      "path": "tests/test_known_speech_fixture.py",
+      "stage": "unit",
+      "suites": [
+        "test_known_speech_fixture.py"
+      ],
+      "tests": [
+        "test_say_has_a_timeout_and_one_stall_is_retried",
+        "test_the_sentence_is_synthesised_once_per_process",
+        "test_two_stalls_end_in_seconds_with_the_cause_named"
+      ]
+    },
+    {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
       "path": "tests/test_label_queue_to_manifest.py",
@@ -41459,6 +41473,10 @@
         {
           "name": "tests/test_check_models.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_known_speech_fixture.py",
+          "reason": "Python script-test adapter pending (GH #436: the gauntlet has no Python kind; a gauntlet-wide gap). Run directly: venv/bin/python3 -m pytest <file>"
         },
         {
           "name": "tests/test_migrate_data.py",
