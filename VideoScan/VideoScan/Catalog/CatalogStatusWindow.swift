@@ -48,7 +48,11 @@ struct CatalogStatusWindow: View {
     @ObservedObject private var queue: CatalogStatusUpdateQueue
     @ObservedObject private var cutover: CatalogCutoverState
     @StateObject private var info: CatalogDatabaseInfoModel
-    @State private var showValidate = false
+    /// GH #339: the held-back rows' count and their read-only list.
+    @ObservedObject private var heldBack: HeldBackStore
+    /// ONE sheet slot (never two chained `.sheet(isPresented:)` — they race
+    /// the dismiss animation): Check Now… or Held back at import's Show….
+    @State private var sheet: StatusSheet?
     @Environment(\.openWindow) private var openWindow
 
     init(model: VideoScanModel, center: MediaFileOperationsCenter, orchestrator: CaptionOrchestrator,
@@ -59,6 +63,7 @@ struct CatalogStatusWindow: View {
         self._freshness = ObservedObject(wrappedValue: model.catalogFreshness)
         self._queue = ObservedObject(wrappedValue: model.catalogStatusUpdateQueue)
         self._cutover = ObservedObject(wrappedValue: model.catalogCutover)
+        self._heldBack = ObservedObject(wrappedValue: model.heldBack)
         // Its "unknown — …" facts reach the log once per change (F6).
         self._info = StateObject(wrappedValue: CatalogDatabaseInfoModel(sources: sources,
                                                                         log: { [weak model] in model?.catalogStatusNote($0) }))
@@ -73,6 +78,7 @@ struct CatalogStatusWindow: View {
                 CatalogActionBriefHeader(brief: .catalogStatus)
                 catalogLead
                 threeLines
+                if let open = heldBack.openCount { heldBackRow(open) }
                 if cutover.canReopen || cutover.canAdopt { restore }
                 GroupBox {
                     CatalogStatusBand(
@@ -101,9 +107,32 @@ struct CatalogStatusWindow: View {
         .accessibilityIdentifier("catalogStatus.window")
         .task { await info.refresh() }
         .onChange(of: freshness.state.lines) { _, _ in Task { await info.refresh() } }
-        .sheet(isPresented: $showValidate) {
-            ValidateCatalogSheet(model: model, center: center)
+        .sheet(item: $sheet) { which in
+            switch which {
+            case .validate: ValidateCatalogSheet(model: model, center: center)
+            case .heldBack: HeldBackSheet(store: heldBack, center: center, isReadOnly: model.isReadOnly)
+            }
         }
+    }
+
+    // MARK: Held back at import (GH #339)
+
+    /// "Held back at import: 2,110 — why" and Show… (the read-only list). O(1).
+    private func heldBackRow(_ open: Int) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Image(systemName: "tray.full").foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(HeldBackWords.statusLine(open)).font(.headline)
+                    .accessibilityIdentifier("catalogStatus.heldBack")
+                Text(HeldBackWords.statusHelp).font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 8)
+            Button(HeldBackWords.showButton) { sheet = .heldBack }
+                .accessibilityIdentifier("catalogStatus.heldBack.show")
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.06)))
     }
 
     // MARK: The Catalog indicator's lead
@@ -165,7 +194,7 @@ struct CatalogStatusWindow: View {
             Spacer(minLength: 8)
             switch line.kind {
             case .database:
-                Button("Check Now…") { showValidate = true }
+                Button("Check Now…") { sheet = .validate }
                     .disabled(model.isReadOnly)
                     .help(CatalogActionBrief.validateCatalog.help)
                     .accessibilityIdentifier("catalogStatus.checkNow")
@@ -196,6 +225,13 @@ struct CatalogStatusWindow: View {
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.12)))
         .accessibilityIdentifier("catalogStatus.restore")
     }
+}
+
+/// The window's one sheet slot. A SINGLE shared id: switching cases never
+/// dismisses-and-re-presents (the chained-sheet rule).
+enum StatusSheet: Identifiable {
+    case validate, heldBack
+    var id: Int { 0 }
 }
 
 /// Pure words for the window's lead.

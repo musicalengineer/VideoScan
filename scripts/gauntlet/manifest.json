@@ -39302,6 +39302,72 @@
       ]
     },
     {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogHeldBackRowsTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogHeldBackRowsTests",
+        "HeldBackCuratedTests"
+      ],
+      "tests": [
+        "ISOLATION_aFileTheCatalogDoesNotHoldIsRefusedAndNothingIsWritten",
+        "ISOLATION_aRowWithAnIntegrityFindingIsRefusedByTheDDLAndTheWriteRollsBack",
+        "ISOLATION_anUnknownTagIsAProblem",
+        "ISOLATION_noRawRowIsUnreadable",
+        "ISOLATION_textThatIsNotARecordIsUnreadableWithWords",
+        "ISOLATION_wrongTypesAndForeignValuesAreProblemsNeverValues",
+        "SCALE_twoThousandRowsReadInUnderASecond",
+        "TRUTH_aStoredConflictReadsBackWithTheCopiesValuesNeverAsNothingSet",
+        "aDateConfidenceWithoutADateIsIgnored",
+        "aResolveWritesOnlyTheResolutionColumnsAndASecondSaysAlreadyResolved",
+        "aWholeRecordReadsItsCuratedMembers",
+        "everyRowReadsBackWholeAndTheOpenCountIsTheUnresolvedRows"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HeldBackReviewTests.swift",
+      "stage": "regression",
+      "suites": [
+        "HeldBackReviewTests",
+        "HeldBackRound2Tests"
+      ],
+      "tests": [
+        "alreadyBackBindsToTheFileNow",
+        "alreadyBackNeedsIdentity",
+        "alreadyPresentIsDurable",
+        "archivedSiblingKeepsDate",
+        "batchConflictSameContent",
+        "batchConflictSameDestination",
+        "batchResolvePure",
+        "batchResolveScale",
+        "carrySkipsChangedIdentity",
+        "closureWriterIsImportCarry",
+        "confirmationCoversCurrentFields",
+        "failedClosureStaysVisible",
+        "failedInspectionIsNotGone",
+        "offersWords",
+        "proofBindsToDestination",
+        "sampledCollisionIsReal",
+        "sampledIsLikely",
+        "storedConflictIsNeverNothingSet",
+        "storedConflictSurvivesRelaunchAndIsNeverCarried"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HeldBackSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "HeldBackSensorTests"
+      ],
+      "tests": [
+        "jobWritesNothing",
+        "oneWriter",
+        "sheetConfirmsAndStaysO1"
+      ]
+    },
+    {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchivedInspectorDateTests.swift",
       "stage": "regression",
@@ -39479,6 +39545,37 @@
       ],
       "tests": [
         "theRuleKeepsExactlyTheUnchangedFiles"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HeldBackTests.swift",
+      "stage": "unit",
+      "suites": [
+        "HeldBackPlanTests",
+        "HeldBackProofTests",
+        "HeldBackCarryTests"
+      ],
+      "tests": [
+        "acrossRoleFlip",
+        "archivedKeepsDate",
+        "carryAndRelaunch",
+        "changedFileSkipped",
+        "duringHold",
+        "editInsideDebounce",
+        "fields",
+        "groupWordsAreEvidence",
+        "groups",
+        "jobOffersOnlyProven",
+        "jobPlan",
+        "neverOverwrite",
+        "noWriteWithoutConfirmation",
+        "offerBlocking",
+        "offlineIsNeverGone",
+        "poisonedRowInTheTable",
+        "sampledAndNone",
+        "scale",
+        "wholeFile"
       ]
     }
   ],
@@ -42276,7 +42373,7 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 4135,
+      "expected_floor": 4157,
       "name": "unit",
       "package_expected_floor": 1027,
       "package_selectors": [
@@ -43077,7 +43174,11 @@
         "VideoScanTests/CatalogTagSortRealisticShapeTests",
         "VideoScanTests/TestDefaultsWriteSensorTests",
         "VideoScanTests/TestPreferencesTests",
-        "VideoScanTests/ArchiveDateProvenanceTruthTests"
+        "VideoScanTests/ArchiveDateProvenanceTruthTests",
+        "VideoScanTests/HeldBackSensorTests",
+        "VideoScanTests/HeldBackPlanTests",
+        "VideoScanTests/HeldBackProofTests",
+        "VideoScanTests/HeldBackCarryTests"
       ]
     },
     {
@@ -43539,9 +43640,9 @@
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 1118,
+      "expected_floor": 1137,
       "name": "regression",
-      "package_expected_floor": 366,
+      "package_expected_floor": 378,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -43601,7 +43702,9 @@
         "VideoScanCoreTests.CatalogCloseDrainTests",
         "VideoScanCoreTests.EraCanaryCommandTests",
         "VideoScanCoreTests.CatalogCommitFailsAfterPhaseOneTests",
-        "VideoScanCoreTests.CatalogSpaceFloorTests"
+        "VideoScanCoreTests.CatalogSpaceFloorTests",
+        "VideoScanCoreTests.CatalogHeldBackRowsTests",
+        "VideoScanCoreTests.HeldBackCuratedTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
@@ -43609,6 +43712,8 @@
       ],
       "selectors": [
         "VideoScanTests/AdvJunkDeleteHeldTests",
+        "VideoScanTests/HeldBackReviewTests",
+        "VideoScanTests/HeldBackRound2Tests",
         "VideoScanTests/AdvRelocateBucketBHeldTests",
         "VideoScanTests/AdvRelocateBucketBPresentFileTests",
         "VideoScanTests/AdvRelocateClosingSummaryTests",

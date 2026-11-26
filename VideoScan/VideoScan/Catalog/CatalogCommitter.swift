@@ -382,6 +382,29 @@ final class CatalogCommitter {
         return saveRefusal() ?? baseline.waiting[id]?.words ?? "its current values could not be stored"
     }
 
+    /// GH #339, Held Back at Import ▸ Carry Selected…: the records Rick
+    /// confirmed a carry onto, committed NOW through the commit door under
+    /// its own writer (`import carry`: the provenance lands in
+    /// generation_history and row_knowledge). Only these rows. nil = every
+    /// one is stored; else the words — the caller closes no held-back row.
+    /// (The same synchronous commit as the marker door, another door name.)
+    func commitCarried(ids: Set<UUID>) -> String? {
+        if let why = saveRefusal() { return why }
+        if commit(.importCarry, owner: nil, scope: .only(ids)) { return nil }
+        return saveRefusal() ?? ids.lazy.compactMap { self.baseline.waiting[$0]?.words }.first ?? "the rows could not be stored"
+    }
+
+    /// GH #339 (Codex #385 #5): BEFORE a carry touches these records, the
+    /// person's own pending edits on them (typed inside the 2 s debounce)
+    /// are committed now through the ordinary save door — durable, and
+    /// attributed to the person, not to `import carry`. nil = every one is
+    /// durable (a clean row is); else the words, and the carry writes nothing.
+    func commitPending(ids: Set<UUID>) -> String? {
+        if let why = saveRefusal() { return why }
+        if commitNow(ids: ids) { return nil }
+        return saveRefusal() ?? ids.lazy.compactMap { self.baseline.waiting[$0]?.words }.first ?? "the rows could not be stored"
+    }
+
     /// A safety copy of catalog.sqlite is about to be sealed (`VACUUM INTO`,
     /// B2.3): what is in memory is committed FIRST, so the copy holds what
     /// the person sees — including an edit typed inside the 2 s debounce
@@ -436,6 +459,9 @@ final class CatalogCommitter {
         /// The background helper's observations (schema v1.13), from its
         /// journal through JournalApplier — the only road in (design §3.4).
         case observations = "background observations"
+        /// GH #339: a held-back row closed after Rick confirmed carrying its
+        /// tag / date / place onto a proven moved copy (HeldBackStore).
+        case heldBack = "held back at import"
 
         var change: String { self == .folders ? "a folder change" : "a \(rawValue) change" }
     }
@@ -447,10 +473,13 @@ final class CatalogCommitter {
     /// ONE synchronous write of a side-table change, on the main actor like
     /// every commit here. nil = committed; else the words, and nothing was
     /// written. Records are not touched: their baseline is unaffected (the
-    /// store tracks the generation itself).
-    func commitSideTables(_ what: String, via table: SideTable, _ body: (any CatalogTransaction) throws -> Void) -> String? {
+    /// store tracks the generation itself). `writer`: the generation_history
+    /// writer (a person's decision is `.ui`; GH #339's closure after a carry
+    /// is `.importCarry`, Codex #385 #9).
+    func commitSideTables(_ what: String, via table: SideTable, as writer: CatalogWriter = .ui,
+                          _ body: (any CatalogTransaction) throws -> Void) -> String? {
         if let why = saveRefusal() { return why }
-        switch repository.writeBlocking(as: .ui, body) {
+        switch repository.writeBlocking(as: writer, body) {
         case .committed(let generation):
             knownGeneration = generation   // codex cycle #116 F3: the quit copy's header stamp
             sink("Catalog store: OUTCOME commit generation \(generation) via \(table.rawValue) — \(what)")

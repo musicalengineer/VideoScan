@@ -1810,6 +1810,14 @@ final class VideoScanModel: ObservableObject {
     /// authority; unattached it shows nothing and refuses.
     let provenanceEstimates = ProvenanceEstimateStore()
 
+    /// Held back at import (GH #339, DECISIONS 2026-11-25 evening): the rows
+    /// the October import kept in `quarantine` — Catalog Status's count, the
+    /// read-only list, Find Moved Copies' offers and Rick's confirmed carry
+    /// (HeldBackStore.swift; rule 12: state behind a seam, no model
+    /// extension). Attached to the committer when catalog.sqlite becomes the
+    /// authority; unattached it shows nothing and refuses.
+    let heldBack = HeldBackStore()
+
     /// The background helper's journal into catalog.sqlite (schema v1.13,
     /// JournalApplier.swift; rule 12: state behind a seam). Attached to the
     /// committer when catalog.sqlite becomes the authority; its journal is

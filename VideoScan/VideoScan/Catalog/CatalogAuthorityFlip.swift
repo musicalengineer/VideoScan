@@ -385,6 +385,7 @@ extension VideoScanModel {
         publicMarks.attach(PublicMarkCatalogBacking(committer: committer))
         Task { [weak self] in _ = await self?.publicMarks.load() }
         attachProvenanceEstimatesToCatalog(committer)
+        attachHeldBackToCatalog(committer)
         // The background helper's observations (schema v1.13): its journal
         // beside catalog.json, applied through this committer at launch and
         // every 5 minutes; Catalog Status hears the waiting / refused counts.
@@ -438,6 +439,28 @@ extension VideoScanModel {
                                                                               version: self.promotionIndexVersion)?.filename
                                    })
         Task { [weak self] in _ = await self?.provenanceEstimates.load() }
+    }
+
+    /// Held back at import (GH #339): the count Catalog Status shows is read
+    /// now; the list, Find Moved Copies and the carry run only when Rick asks.
+    /// Every carry goes through this committer (`commitCarried`, then the
+    /// `.heldBack` side-table door).
+    private func attachHeldBackToCatalog(_ committer: CatalogCommitter) {
+        heldBack.note = { [weak self] line in
+            self?.log("Held back: " + line)
+            appLog.write("[held-back] " + line)
+        }
+        heldBack.records = { [weak self] in self?.records ?? [] }
+        heldBack.recordForID = { [weak self] id in self?.record(forID: id) }
+        heldBack.isDateReadOnly = { [weak self] record in self?.isDateReadOnly(record) ?? true }
+        heldBack.didCarry = { [weak self] record, date, place in
+            guard let self else { return }
+            self.noteCatalogMutated()
+            if date { self.noteUserDateEdited(record) }
+            if place { self.noteUserPlaceEdited(record) }
+        }
+        heldBack.attach(HeldBackCatalogBacking(committer: committer))
+        Task { [weak self] in _ = await self?.heldBack.refreshCount() }
     }
 
     /// The catalog's generation for a synchronous stamp: catalog.sqlite's as

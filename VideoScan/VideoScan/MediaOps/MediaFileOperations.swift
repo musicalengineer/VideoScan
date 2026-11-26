@@ -516,6 +516,16 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
     static let remeasureSoundLevels = Self("remeasureSoundLevels", hasDetailView: false,
         style: .init(badge: "Re-measure", logVerb: "re-measure sound levels", fill: .init(0.80, 0.20, 0.60)))
 
+    // Find Moved Copies (2026-11-25, GH #339) — dusty plum: a reading verb
+    // that writes nothing (it proves held-back rows' moved copies by content
+    // and hands offers to Held Back at Import; the carry is Rick's own act).
+    /// "Held Back at Import ▸ Find Moved Copies" (DECISIONS 2026-11-25
+    /// evening, item 3): reads each same-name, same-size live file in full
+    /// (or its sampled hash) and compares it with the held-back row's stored
+    /// hash. FindMovedCopiesJob.
+    static let findMovedCopies = Self("findMovedCopies", hasDetailView: false,
+        style: .init(badge: "Moved Copies", logVerb: "find moved copies", fill: .init(0.45, 0.30, 0.45)))
+
     /// Every kind, in declaration order — what `CaseIterable.allCases` was.
     /// A new kind goes here too (MediaFileOperationKindTests.allPinsEveryKindInDeclarationOrder
     /// pins the list and count).
@@ -526,7 +536,7 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
         .findSimilarFootage, .bindFixity, .lockArchive, .compareFootage, .fingerprintBackfill,
         .showAgain, .checkCopies, .fillFullHashes, .cleanupTrash, .fingerprintSound, .auditCatalog,
         .verifyCatalog, .validateCatalog, .findMaster, .indexFrames, .estimateProvenance,
-        .remeasureSoundLevels,
+        .remeasureSoundLevels, .findMovedCopies,
     ]
 
     /// Badge text — rendered in small caps by the row view.

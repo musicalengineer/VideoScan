@@ -390,6 +390,7 @@ struct ArchivedDateReadOnlyTests {
         "ArchiveAngel/Promote/ArchiveAngelFamilyStamp.swift": "stampDateIfMissing — called only via ArchiveAngelFamilyFacts.stampDate, which consults the seam",
         "Catalog/InspectorDateEdit.swift": "the Inspector's \"When was this?\" field — refused when isDateReadOnly (GH #221: Update… only)",
         "MediaOps/VideoScanModel+RepairLifecycle.swift": "undoConfirmRepair restores the repair's own pre-confirm snapshot (the carry itself goes through carryHandEnteredDate)",
+        "HeldBack/HeldBackStore.swift": "GH #339 carry — Rick's confirmed carry of a held-back row's date; isDateReadOnly at plan time and again at the write, an empty field only",
         // Exempt: the filing itself, the one door, and Rick's hand.
         "Archive/PromoteToArchiveJob+Steps.swift": "Promote dates the archive copy it just registered — the filing act",
         "Archive/VideoScanModel+MasterArchive.swift": "registerPromotedCopy / orphan copy — builds the new archive record",
