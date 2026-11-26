@@ -594,11 +594,13 @@ class Confine:
             whole = False
         return freed, whole
 
-    def scan_at(self, dir_fd: int, name: str):
+    def scan_at(self, dir_fd: int, name: str, removable: "bool | None" = None):
         """(what removing the entry would give back, BLOCKED). Blocked: a mount, a folder that could not
         be opened or listed (the scan is not whole: #324 S3), or a protected folder by (device, inode).
         Given back: regular files with one name and no lock flag, in folders with no lock flag (F7, #323
-        R5); a blocked tree gives back nothing (#324 S6)."""
+        R5) that this process may write — remove_at never changes a mode or a flag, so a file in a
+        folder it cannot write stays, and is not counted (#486, Codex #326); a blocked tree gives back
+        nothing (#324 S6). `removable`: may names be unlinked in `dir_fd` (None: ask the kernel)."""
         try:
             info = _lstat_at(dir_fd, name)
         except Refused:
@@ -607,8 +609,10 @@ class Confine:
             return 0, False
         if (info.st_dev, info.st_ino) in self.protected_ids:
             return 0, True
+        if removable is None:
+            removable = _writable(dir_fd)
         if not stat.S_ISDIR(info.st_mode):
-            return _reclaim(info), False
+            return (_reclaim(info) if removable else 0), False
         try:
             fd = os.open(name, O_DIR, dir_fd=dir_fd)
         except OSError:
@@ -622,8 +626,9 @@ class Confine:
             except OSError:
                 return 0, True
             total, blocked = 0, False
+            inner = _writable(fd)
             for entry in entries:
-                got, stop = self.scan_at(fd, entry)
+                got, stop = self.scan_at(fd, entry, inner)
                 total += got
                 if stop:
                     return 0, True
@@ -638,6 +643,14 @@ def _where(fd: int) -> str:
         return fcntl.fcntl(fd, fcntl.F_GETPATH, bytes(1024)).split(b"\0", 1)[0].decode("utf-8", "surrogateescape")
     except (OSError, AttributeError, ValueError, TypeError):
         return ""
+
+
+def _writable(dir_fd: int) -> bool:
+    """May this process unlink names in the open folder `dir_fd` (write and search on it)?"""
+    try:
+        return os.access(".", os.W_OK | os.X_OK, dir_fd=dir_fd)
+    except (OSError, NotImplementedError):
+        return False
 
 
 def _reclaim(info) -> int:
@@ -1183,14 +1196,20 @@ def _clean(conf: Confine, cur_fd: int, mine: str, phase: str, disk) -> str:
         sizes = [0 if blocked else size for size, blocked in (conf.scan_at(conf.caches_fd, name) for name in conf.caches)]
         if free + sum(sizes) >= target:
             cache_bytes = 0
-            for name in conf.caches:
+            for i, name in enumerate(conf.caches):
                 got, whole = conf.remove(conf.caches_fd, name)
                 cache_bytes += got
-                if not whole:
-                    refused += 1
                 free, total = disk(root)
                 if free >= target:
                     break
+                if not whole:
+                    refused += 1
+                    # #486: a cache that did not go whole changes the forecast; the rest go only if
+                    # they can still reach the floor (a rebuild for nothing is all cost).
+                    rest = [0 if b else size for size, b in (conf.scan_at(conf.caches_fd, n) for n in conf.caches[i + 1:])]
+                    if free + sum(rest) < target:
+                        caches_note = "; build caches kept (%.1f GB would not reach the floor)" % (sum(rest) / 1e9)
+                        break
             parts.append("build caches %.2f GB" % (cache_bytes / 1e9))
             removed += cache_bytes
         else:

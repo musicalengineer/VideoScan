@@ -35402,6 +35402,7 @@
       ],
       "tests": [
         "test_a_cache_that_was_there_at_the_start_and_was_written_is_named_as_changed",
+        "test_a_cache_whose_removal_fails_makes_the_rest_be_forecast_again",
         "test_a_cleanup_that_fails_never_costs_the_run_its_outcome",
         "test_a_coverage_cache_that_is_a_link_is_never_followed",
         "test_a_hard_link_to_a_protected_file_loses_only_its_own_name",
@@ -35432,6 +35433,7 @@
         "test_f6_a_cleanup_past_its_budget_stops_and_still_says_one_line",
         "test_f6_a_fifo_never_stalls_the_cleanup_or_the_sampler",
         "test_f7_bytes_with_a_second_name_are_not_counted_as_reclaimable",
+        "test_files_in_a_folder_that_cannot_be_written_are_not_counted_toward_the_floor",
         "test_finished_runs_and_dead_corpus_work_go_whatever_the_disk_says",
         "test_no_lock_held_is_refused",
         "test_old_coverage_bundles_and_logs_go_and_the_newest_and_the_published_stay",
