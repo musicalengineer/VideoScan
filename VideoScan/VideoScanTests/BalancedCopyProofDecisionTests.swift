@@ -241,8 +241,13 @@ struct BalancedCopyProofDecisionTests {
         // The same codec in other packets: bytes, count or times.
         for change in [{ $0.packetSHA256 = Self.otherHash }, { $0.packets = 75 }, { $0.timingSHA256 = Self.otherTimesHash }]
             as [(inout Proof.CarriedStream) -> Void] {
-            let stored = Proof.decide(Self.facts { change(&$0.balanced.carried[0]) })
-            #expect(stored.differences.map(\.kind) == [.encoding, .encoding], "\(stored)")
+            let decided = Proof.decide(Self.facts { change(&$0.balanced.carried[0]) })
+            // 75 packets read in a QuickTime copy that showed 50 frames: that copy's hidden picture is named too (Codex #394).
+            let hidden = decided.differences.filter { $0.what.hasPrefix("hidden picture in the edit list") }
+            #expect(hidden.map(\.heldBy) == (decided.evidence?.streams[0].packets == 50 && decided.differences.contains {
+                $0.what.contains("75 in the balanced copy") } ? [.balancedCopy] : []), "\(decided)")
+            let stored = (differences: decided.differences.filter { !$0.what.hasPrefix("hidden picture") }, evidence: decided.evidence)
+            #expect(stored.differences.map(\.kind) == [.encoding, .encoding], "\(decided)")
             #expect(stored.differences.map(\.heldBy) == [nil, .original], "the packets' other data is the original's (GH #483)")
             #expect(stored.differences[0].what.hasPrefix("picture stream 0 (prores) is not stored in the same packets"))
             #expect(stored.evidence?.streams[0].packetIdentical == false)
@@ -694,7 +699,9 @@ struct BalancedCopyProofDecisionTests {
             }
             // Picture packets that differ also name what the original's packets carry besides the picture (GH #483).
             let packetsDiffer = ["codec", "packet bytes", "packet count", "packet times"].contains(name)
-            #expect(differs.count == (packetsDiffer ? 2 : 1) && !outcome.isProven, "\(name): \(differs)")
+            // 75 packets read in a QuickTime original that showed 50 frames also names its hidden picture (Codex #394).
+            let hiddenToo = name == "packet count" ? 1 : 0
+            #expect(differs.count == (packetsDiffer ? 2 : 1) + hiddenToo && !outcome.isProven, "\(name): \(differs)")
             // With any refusal on top, the refusal wins.
             for (poisonName, poison) in Self.poisons {
                 var f = Self.facts(change)

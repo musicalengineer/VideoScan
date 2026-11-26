@@ -524,9 +524,11 @@ enum BalancedCopyProof {
             /// The original's packet digest and count.
             var packetSHA256: String
             var packets: Int
-            /// FFmpeg found closed captions in the original's decoded frames.
-            /// They ride inside the packets, so they were compared byte for
-            /// byte only where `packetIdentical`.
+            /// FFmpeg found closed captions in BOTH files' decoded frames and
+            /// the two decoder configurations (extradata) are the same bytes
+            /// (`BalancedCopyProof.captionsCompared`). Captions ride in the
+            /// packets or the configuration, so they were compared byte for
+            /// byte only where this AND `packetIdentical` hold.
             var captioned = false
         }
         /// The original's channel that is NOT in the copy, as measured.

@@ -48,6 +48,82 @@ extension QuickTimePatch {
         }
         throw NotThatFile()
     }
+
+    /// The PICTURE track of `movie` (whose `moov` is last) with what Codex
+    /// #394 wrote: a `ctts` of (12 frames, 0), (1 frame, 19456), (37 frames, 0)
+    /// and ONE edit of 2 s from media time 0. In a 25 fps, 1/12800 track the
+    /// 13th frame's composition time is 12×512 + 19456 = 25600 ticks = 2.0 s:
+    /// outside the edit. Its packet is still read in file order and decoded,
+    /// then dropped — 50 packets read, 49 frames shown, the played length 2 s.
+    static func hidingThirteenthFrame(of movie: Data) throws -> Data {
+        var data = movie
+        guard var moov = atoms(data, from: 0, to: data.count).first(where: { $0.type == "moov" }),
+              moov.offset + moov.size == data.count else { throw NotThatFile() }
+        let movieScale = uint32(data, at: try child("mvhd", of: moov, in: data).offset + 20)
+        for found in atoms(data, from: moov.offset + 8, to: moov.offset + moov.size) where found.type == "trak" {
+            var trak = found
+            let mdia = try child("mdia", of: trak, in: data)
+            let hdlr = try child("hdlr", of: mdia, in: data)
+            guard String(bytes: data[hdlr.offset + 16..<hdlr.offset + 20], encoding: .isoLatin1) == "vide" else { continue }
+            let minf = try child("minf", of: mdia, in: data)
+            let stbl = try child("stbl", of: minf, in: data)
+            guard (try? child("ctts", of: stbl, in: data)) == nil else { throw NotThatFile() }
+            let ctts = bytes(40) + Array("ctts".utf8) + bytes(0) + bytes(3) + [12, 0, 1, 19456, 37, 0].flatMap(bytes)
+            for offset in [moov.offset, trak.offset, mdia.offset, minf.offset, stbl.offset] {
+                data.replaceSubrange(offset..<offset + 4, with: bytes(uint32(data, at: offset) + 40))
+            }
+            data.insert(contentsOf: ctts, at: stbl.offset + stbl.size)
+            moov.size += 40
+            trak.size += 40
+            let elst = bytes(28) + Array("elst".utf8) + bytes(0) + bytes(1) + bytes(2 * movieScale) + bytes(0) + bytes(0x10000)
+            if let edts = try? child("edts", of: trak, in: data) {
+                let old = try child("elst", of: edts, in: data)
+                for offset in [moov.offset, trak.offset, edts.offset] {
+                    data.replaceSubrange(offset..<offset + 4, with: bytes(uint32(data, at: offset) + 28 - old.size))
+                }
+                data.replaceSubrange(old.offset..<old.offset + old.size, with: elst)
+            } else {
+                let tkhd = try child("tkhd", of: trak, in: data)
+                for offset in [moov.offset, trak.offset] {
+                    data.replaceSubrange(offset..<offset + 4, with: bytes(uint32(data, at: offset) + 36))
+                }
+                data.insert(contentsOf: bytes(36) + Array("edts".utf8) + elst, at: tkhd.offset + tkhd.size)
+            }
+            return data
+        }
+        throw NotThatFile()
+    }
+
+    /// `movie` (`moov` last) with an ATSC caption SEI (CEA-608 in ITU-T T.35
+    /// "GA94") appended to its HEVC picture's `hvcC` as one more prefix-SEI
+    /// array: captions in the decoder configuration, in no packet (Codex #394).
+    static func captionInHvcC(of movie: Data) throws -> Data {
+        var data = movie
+        guard let moov = atoms(data, from: 0, to: data.count).first(where: { $0.type == "moov" }),
+              moov.offset + moov.size == data.count else { throw NotThatFile() }
+        for trak in atoms(data, from: moov.offset + 8, to: moov.offset + moov.size) where trak.type == "trak" {
+            let mdia = try child("mdia", of: trak, in: data)
+            let hdlr = try child("hdlr", of: mdia, in: data)
+            guard String(bytes: data[hdlr.offset + 16..<hdlr.offset + 20], encoding: .isoLatin1) == "vide" else { continue }
+            let minf = try child("minf", of: mdia, in: data)
+            let stbl = try child("stbl", of: minf, in: data)
+            let stsd = try child("stsd", of: stbl, in: data)
+            let entry = Atom(type: "", offset: stsd.offset + 16, size: uint32(data, at: stsd.offset + 16))
+            // A visual sample entry's boxes follow its 86-byte header.
+            let hvcC = try child("hvcC", of: entry, in: data, skipping: 86)
+            // NAL header (type 39, layer 0, tid 1), payload type 4, size 17, then the T.35 caption payload and the stop bit.
+            let sei: [UInt8] = [0x4E, 0x01, 0x04, 17, 0xB5, 0x00, 0x31] + Array("GA94".utf8)
+                + [0x03, 0xC2, 0xFF, 0xFC, 0x94, 0x2C, 0xFC, 0x80, 0x80, 0xFF, 0x80]
+            let array: [UInt8] = [39, 0, 1, 0, UInt8(sei.count)] + sei
+            for offset in [moov.offset, trak.offset, mdia.offset, minf.offset, stbl.offset, stsd.offset, entry.offset, hvcC.offset] {
+                data.replaceSubrange(offset..<offset + 4, with: bytes(uint32(data, at: offset) + array.count))
+            }
+            data[hvcC.offset + 8 + 22] += 1  // numOfArrays
+            data.insert(contentsOf: array, at: hvcC.offset + hvcC.size)
+            return data
+        }
+        throw NotThatFile()
+    }
 }
 
 /// H.264 whose every picture carries closed captions the ATSC way: an SEI
@@ -221,6 +297,112 @@ struct BalancedCopyProofCodex310Tests {
     }
 }
 
+@Suite("Balanced copy proof — Codex #394: a frame outside the edit read in file order; captions in the decoder configuration", .serialized)
+struct BalancedCopyProofCodex394Tests {
+
+    typealias Proof = BalancedCopyProof
+    typealias Media = BalancedCopyProofMedia
+    typealias Lab = BalancedCopyProofLab
+    private let fm = FileManager.default
+
+    private func captionedFrames(of path: String) async -> Int {
+        await Lab.output(ToolLocator.ffprobePath,
+                         ["-v", "error", "-select_streams", "v:0", "-show_frames", "-show_entries", "frame=pts:frame_side_data",
+                          "-of", "compact", path])
+            .split(separator: "\n").filter { $0.contains("Closed Captions") }.count
+    }
+
+    @Test("P1 (media): H.264 whose 13th frame's composition time falls outside a 2 s edit — 50 packets read in rising file order, 49 shown, length unchanged — against a balanced FFV1/MKV copy names the ORIGINAL's hidden picture",
+          .timeLimit(.minutes(3)), arguments: ["mov", "mp4"])
+    func frameOutsideTheEditIsNamed(_ ext: String) async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let dir = try Media.scratch("hidden13_\(ext)")
+        defer { try? fm.removeItem(at: dir) }
+        let whole = try Lab.make("whole.\(ext)", in: dir,
+                                 video: ["-c:v", "libx264", "-preset", "veryfast", "-bf", "0", "-g", "25", "-pix_fmt", "yuv420p",
+                                         "-video_track_timescale", "12800"])
+        let original = dir.appendingPathComponent("test_hidden13.\(ext)").path
+        try QuickTimePatch.hidingThirteenthFrame(of: try Data(contentsOf: URL(fileURLWithPath: whole)))
+            .write(to: URL(fileURLWithPath: original))
+        // By another road: 50 stored, 50 packets read in rising file order, 49 shown, still 2 s.
+        let counts = await Lab.output(ToolLocator.ffprobePath, ["-v", "error", "-select_streams", "v:0", "-count_frames", "-count_packets",
+                                                                "-show_entries", "stream=nb_frames,nb_read_frames,nb_read_packets,duration",
+                                                                "-of", "csv=p=0", original])
+        #expect(counts == "2.000000,50,49,50", "duration, stored, shown, read: \(counts)")
+        let positions = await Lab.output(ToolLocator.ffprobePath, ["-v", "error", "-select_streams", "v:0", "-show_entries",
+                                                                   "packet=pos", "-of", "csv=p=0", original])
+            .split(separator: "\n").compactMap { Int($0) }
+        #expect(positions.count == 50 && zip(positions, positions.dropFirst()).allSatisfy { $1 > $0 }, "the packets rise")
+
+        let jobCopy = try await Media.balance(original)
+        let copy = dir.appendingPathComponent("test_hidden13_balanced_ffv1.mkv").path
+        try BalanceAudioTestMedia.runFFmpeg(["-i", original, "-i", jobCopy, "-map", "0:v", "-map", "1:a", "-c:v", "ffv1",
+                                             "-c:a", "copy", "-fps_mode", "passthrough"], output: copy)
+        let outcome = await Proof.measure(original: original, balanced: copy)
+        guard outcome.playsTheSame else {
+            Issue.record("the 49 shown frames and the sound play the same: \(outcome)")
+            return
+        }
+        let hidden = outcome.differences.filter { $0.what.contains("hidden picture") }
+        #expect(hidden == [Proof.Difference(kind: .playback, heldBy: .original,
+                                            what: "hidden picture in the edit list (stream 0): 50 frames stored, 49 shown"
+                                                + " — not compared with the other file")], "\(outcome.differences)")
+        #expect(!outcome.isProven)
+    }
+
+    @Test("P1 (media): HEVC whose caption SEI rides in the hvcC configuration — the copy's configuration lacks it, every packet identical — names the ORIGINAL's captions and never claims them compared",
+          .timeLimit(.minutes(3)))
+    func captionsInTheConfigurationAreNamed() async throws {
+        try #require(BalanceAudioTestMedia.toolsAvailable)
+        let dir = try Media.scratch("hvcc_captions")
+        defer { try? fm.removeItem(at: dir) }
+        let plain = try Lab.make("plain.mp4", in: dir,
+                                 video: ["-c:v", "libx265", "-preset", "ultrafast", "-x265-params", "log-level=error",
+                                         "-tag:v", "hvc1", "-pix_fmt", "yuv420p"])
+        let original = dir.appendingPathComponent("test_hvcc_captioned.mp4").path
+        try QuickTimePatch.captionInHvcC(of: try Data(contentsOf: URL(fileURLWithPath: plain)))
+            .write(to: URL(fileURLWithPath: original))
+        let copy = try await Media.balance(plain)
+        // By another road: captions in the original only; the same packets; the same pixels.
+        #expect(await captionedFrames(of: original) > 0)
+        #expect(await captionedFrames(of: copy) == 0)
+        #expect(await Lab.packetHash(of: original, stream: "v:0") == (await Lab.packetHash(of: copy, stream: "v:0")))
+
+        let outcome = await Proof.measure(original: original, balanced: copy)
+        guard outcome.playsTheSame else {
+            Issue.record("the pictures and the sound play the same: \(outcome)")
+            return
+        }
+        #expect(outcome.evidence?.streams.first?.packetIdentical == true, "\(outcome)")
+        #expect(outcome.evidence?.streams.first?.captioned == false, "captions not compared")
+        let captions = outcome.differences.filter { $0.kind == .captions }
+        #expect(captions.map(\.heldBy) == [.original], "\(outcome.differences)")
+        #expect(captions.allSatisfy { $0.what.hasSuffix(" — not compared with the other file") })
+        let line = Proof.logLine(original: original, balanced: copy, outcome: outcome)
+        #expect(!line.contains("compared byte for byte"), "\(line)")
+        #expect(line.contains("[closed captions] the original holds closed captions (CEA-608/708) in picture stream 0"))
+
+        // The job's copy of the captioned original: both carry captions. Measured 2026-11-26 (FFmpeg 9.0.2), its mov muxer
+        // rewrites hvcC, so the configurations differ and the captions are named for each file, never claimed compared;
+        // with the same configuration bytes they would be compared and claimed. Either way: claimed ⇔ nothing named.
+        let faithfulCopy = try await Media.balance(original)
+        #expect(await captionedFrames(of: faithfulCopy) > 0)
+        let faithful = await Proof.measure(original: original, balanced: faithfulCopy)
+        func configuration(_ path: String) async -> String {
+            await Lab.output(ToolLocator.ffprobePath, ["-v", "error", "-show_data_hash", "sha256", "-select_streams", "v:0",
+                                                       "-show_entries", "stream=extradata_hash", "-of", "csv=p=0", path])
+        }
+        let originalConfiguration = await configuration(original)
+        #expect(originalConfiguration.hasPrefix("SHA256:"))
+        let sameConfiguration = originalConfiguration == (await configuration(faithfulCopy))
+        let named = faithful.differences.filter { $0.kind == .captions }.map(\.heldBy)
+        #expect(faithful.playsTheSame && faithful.evidence?.streams.first?.captioned == sameConfiguration, "\(faithful)")
+        #expect(named == (sameConfiguration ? [] : [.original, .balancedCopy]), "\(faithful.differences)")
+        #expect(Proof.logLine(original: original, balanced: faithfulCopy, outcome: faithful)
+            .contains("compared byte for byte") == sameConfiguration)
+    }
+}
+
 @Suite("Balanced copy proof — GH #483 rules: positions, stored frames, the caption detector, what is named")
 struct BalancedCopyProofCodex310RuleTests {
 
@@ -314,7 +496,26 @@ struct BalancedCopyProofCodex310RuleTests {
         // Frames stored and never handed to the decoder (an empty edit, a cut that keeps the length).
         #expect(Table.differs(Proof.decide(Table.facts { $0.original.carried[0].storedFrames = 60 })) == [
             "[playback instructions] the original holds hidden picture in the edit list (stream 0): 60 frames stored, "
-            + "50 handed to the decoder — not compared with the other file"])
+            + "50 shown — not compared with the other file"])
+        // Frames read in rising file order and decoded but NOT shown (a composition time outside the edit, Codex #394):
+        // stored or read beyond what was shown is named; the decode pass's count is what was shown.
+        let shown49: (inout Proof.Facts) -> Void = { $0.originalRead?.pictures[0]?.frames = 49; $0.balancedRead?.pictures[0]?.frames = 49 }
+        // `poisoned`: the decode passes' own counts stay as set (`facts` would re-derive them whole).
+        let byStored = Proof.decide(Table.poisoned { shown49(&$0); $0.original.carried[0].storedFrames = 50 })
+        #expect(byStored.differences.filter { $0.heldBy == .original } == [Proof.Difference(
+            kind: .playback, heldBy: .original,
+            what: "hidden picture in the edit list (stream 0): 50 frames stored, 49 shown — not compared with the other file")],
+                "\(byStored)")
+        #expect(byStored.playsTheSame && !byStored.isProven)
+        let byRead = Proof.decide(Table.poisoned(shown49))
+        #expect(byRead.differences.filter { $0.heldBy == .original }.map(\.what)
+                == ["hidden picture in the edit list (stream 0): 50 packets read, 49 frames shown — not compared with the other file"],
+                "\(byRead)")
+        #expect(byRead.differences.filter { $0.heldBy == .balancedCopy }.map(\.what).first?
+            .hasPrefix("hidden picture in the edit list (stream 0): 50 packets read, 49 frames shown") == true, "the copy's own")
+        // Not a QuickTime file: frames dropped are not an edit list's (the copy here is Matroska).
+        let mkvCopy = Proof.decide(Table.poisoned { shown49(&$0); $0.balanced.container = "matroska,webm"; $0.balanced.sound[0].channelLayout = "" })
+        #expect(!mkvCopy.differences.contains { $0.heldBy == .balancedCopy && $0.what.contains("hidden") }, "\(mkvCopy)")
         // Every stored frame handed over, or more (long-GOP lists each edit's tail): nothing to name.
         #expect(Proof.decide(Table.facts { $0.original.carried[0].storedFrames = 50 }).isProven)
         #expect(Proof.decide(Table.facts { $0.original.carried[0].storedFrames = 40 }).isProven)
@@ -368,6 +569,31 @@ struct BalancedCopyProofCodex310RuleTests {
         #expect(evidence.streams.first?.captioned == true && evidence.streams.first?.packetIdentical == true)
         #expect(Proof.logLine(original: "/o.mov", balanced: "/b.mov", outcome: compared)
             .contains("stored packets identical, sha256 \(Table.pictureHash) (50), closed captions inside them compared byte for byte"))
+        // Identical packets but the captions not compared (Codex #394): they can ride in the decoder configuration.
+        let suffix = " — not compared with the other file"
+        let lostInConfig = Proof.decide(Self.captioned(original: [0], copy: [], packetsDiffer: false))
+        #expect(lostInConfig.differences == [Proof.Difference(
+            kind: .captions, heldBy: .original,
+            what: "closed captions (CEA-608/708) in picture stream 0; the balanced copy's frames carry none though the picture "
+                + "packets are identical" + suffix)], "\(lostInConfig)")
+        #expect(lostInConfig.evidence?.streams.first?.captioned == false)
+        #expect(!Proof.logLine(original: "/o", balanced: "/b", outcome: lostInConfig).contains("byte for byte"))
+        var configDiffers = Self.captioned(original: [0], copy: [], packetsDiffer: false)
+        configDiffers.balanced.carried[0].configuration.extradataSHA256 = "other"
+        #expect(Proof.decide(configDiffers).differences.first?.what == "closed captions (CEA-608/708) in picture stream 0; the "
+                + "balanced copy's frames carry none though the picture packets are identical (captions can ride in the decoder "
+                + "configuration, written differently)" + suffix)
+        var bothConfigDiffers = Self.captioned(original: [0], copy: [0], packetsDiffer: false)
+        bothConfigDiffers.balanced.carried[0].configuration.extradataSHA256 = "other"
+        let bothDiffer = Proof.decide(bothConfigDiffers)
+        #expect(bothDiffer.differences.filter { $0.kind == .captions }.map(\.heldBy) == [.original, .balancedCopy], "\(bothDiffer)")
+        #expect(bothDiffer.differences.contains { $0.kind == .decoderConfiguration })
+        #expect(!Proof.logLine(original: "/o", balanced: "/b", outcome: bothDiffer).contains("byte for byte"))
+        let copyNotLooked = Proof.decide(Self.captioned(original: [0], copy: nil, packetsDiffer: false))
+        #expect(copyNotLooked.differences.map(\.what) == ["closed captions (CEA-608/708) in picture stream 0; the balanced "
+                                                          + "copy's frames were not looked at for captions" + suffix])
+        let onlyCopy = Proof.decide(Self.captioned(original: [], copy: [0], packetsDiffer: false))
+        #expect(onlyCopy.differences.map(\.heldBy) == [.balancedCopy] && !onlyCopy.isProven, "\(onlyCopy)")
         // No captions, identical packets: nothing said about captions.
         let plain = Proof.decide(Self.captioned(original: [], copy: [], packetsDiffer: false))
         #expect(plain.isProven && !Proof.logLine(original: "/o", balanced: "/b", outcome: plain).contains("captions"))
@@ -378,7 +604,9 @@ struct BalancedCopyProofCodex310RuleTests {
         let named: [(String, (inout Proof.Facts) -> Void)] = [
             ("repeat", { $0.original.carried[0].positionsRise = false }),
             ("stored frames", { $0.original.carried[0].storedFrames = 51 }),
-            ("captions lost", { $0.balanced.carried[0].packetSHA256 = Table.otherHash; $0.originalRead?.captioned = [0] })
+            ("captions lost", { $0.balanced.carried[0].packetSHA256 = Table.otherHash; $0.originalRead?.captioned = [0] }),
+            ("frame not shown", { $0.originalRead?.pictures[0]?.frames = 49; $0.balancedRead?.pictures[0]?.frames = 49 }),
+            ("captions in the configuration", { $0.originalRead?.captioned = [0]; $0.balancedRead?.captioned = [] })
         ]
         for (name, change) in named {
             var f = Table.facts { _ in }
