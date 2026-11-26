@@ -280,7 +280,8 @@ extension VideoScanModel {
                 filename: r.filename, volume: r.displayVolumeLabel, stream: r.streamTypeRaw,
                 duration: r.durationSeconds, pixels: r.pixelCount, codec: r.displayCodec,
                 dossier: r.dossierChannelCount, size: r.sizeBytes, date: r.resolvedDateSortKey,
-                place: r.resolvedPlaceSortKey, people: r.peopleSortKey))
+                place: r.resolvedPlaceSortKey, people: r.peopleSortKey,
+                tag: r.tagSortKey, duplicate: r.duplicateSortKey))
     }
 
     /// The one door a finished job's derivative enters the catalog by:

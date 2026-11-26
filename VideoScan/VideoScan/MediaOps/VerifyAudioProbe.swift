@@ -576,6 +576,8 @@ enum VerifyAudioRules {
                 ? [.channelImbalance(analysis.classification)] : []
         case .dualMono, .trueStereo:
             return []   // healthy from a channel-balance standpoint
+        case .notMeasured:
+            return []   // not a fact (unreachable: `findings` asks for a complete pass first)
         }
     }
 }

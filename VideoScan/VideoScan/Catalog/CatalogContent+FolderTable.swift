@@ -200,12 +200,12 @@ extension CatalogContent {
                 }
                 .width(min: 90, ideal: 140)
 
-                TableColumn("Tag") { row in
+                TableColumn("Tag", value: \FootageFolderTableRow.tag) { row in
                     if let rec = row.record { tagColumnCell(for: rec) } else { folderSummaryText(folderArchivedWords(row), font: CatalogTableFonts.compact) }
                 }
                 .width(min: 70, ideal: 120)
 
-                TableColumn("Duplicate") { row in
+                TableColumn("Duplicate", value: \FootageFolderTableRow.duplicate) { row in
                     if let rec = row.record { duplicateCell(rec) } else { folderSummaryText("") }
                 }
                 .width(min: 80, ideal: 95)

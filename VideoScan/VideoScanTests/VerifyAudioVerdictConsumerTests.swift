@@ -243,7 +243,7 @@ struct VerifyAudioVerdictBalanceGateTests {
     @Test func partlyMeasuredTrackIsNeverBalanceable() throws {
         let d = MasterArchiveTestSupport.soundDiagnosis(channels: [-18, nil])
         let analysis = try #require(d.balanceAnalysis)
-        #expect(analysis.classification == .leftOnly, "fixture: the unread channel classifies one-sided")
+        #expect(analysis.classification == .notMeasured, "the unread channel is not measured, never one-sided (GH #370)")
         #expect(BalanceAudioFix.refusalReason(for: analysis) != nil)
     }
 

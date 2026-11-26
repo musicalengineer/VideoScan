@@ -170,6 +170,28 @@ extension VideoRecord {
         return confirmed + " ~" + suspected
     }
 
+    /// Sort key for the catalog's Tag column (Rick 2026-11-25): the
+    /// disposition in review order — Important, Recoverable, Unreviewed,
+    /// Suspected Junk, Confirmed Junk — then the workflow tags (a tagged
+    /// row before an untagged one). O(tags) per read: the tags are a short
+    /// list (the cell shows two), sorted and joined once per read.
+    public var tagSortKey: CatalogTagSortKey {
+        CatalogTagSortKey(dispositionRank: mediaDisposition.catalogSortRank,
+                          tags: tags.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+                            .joined(separator: ", "))
+    }
+
+    /// Sort key for the catalog's Duplicate column (Rick 2026-11-25): the
+    /// disposition — Keep, Review, Extra copy, then not analysed — then
+    /// the copy count. One Int, O(1): rank × 1,000,000 + count (a count
+    /// is clamped below a million, far past any real group).
+    public var duplicateSortKey: Int {
+        duplicateDisposition.catalogSortRank * Self.duplicateRankStride
+            + min(max(duplicateGroupCount, 0), Self.duplicateRankStride - 1)
+    }
+
+    public static let duplicateRankStride = 1_000_000
+
     /// Resolution sorted by total pixel count. Files with no resolution
     /// (audio-only, ffprobe failed) sort to the bottom.
     public var pixelCount: Int {
@@ -187,4 +209,57 @@ extension VideoRecord {
 
     /// Same idea for modification date.
     public var dateModifiedSortKey: Date { dateModifiedRaw ?? .distantPast }
+}
+
+// MARK: - Tag / Duplicate column order (Rick 2026-11-25)
+
+/// The Tag column's sort value. A struct, not a string, so the order is
+/// exactly the rule — no locale collation deciding where a rank prefix or
+/// an "untagged" sentinel falls. (For Rick: a POD with `operator<`.)
+public struct CatalogTagSortKey: Comparable, Hashable, Sendable {
+    /// MediaDisposition.catalogSortRank; `Int.max` for a row that is not
+    /// a file (a folder in the folder table), which sorts after every file.
+    public let dispositionRank: Int
+    /// The workflow tags, sorted and joined; "" when untagged.
+    public let tags: String
+
+    public init(dispositionRank: Int, tags: String) {
+        self.dispositionRank = dispositionRank
+        self.tags = tags
+    }
+
+    /// A folder row: no disposition, no tags.
+    public static let notAFile = CatalogTagSortKey(dispositionRank: .max, tags: "")
+
+    public static func < (a: CatalogTagSortKey, b: CatalogTagSortKey) -> Bool {
+        if a.dispositionRank != b.dispositionRank { return a.dispositionRank < b.dispositionRank }
+        if a.tags.isEmpty != b.tags.isEmpty { return !a.tags.isEmpty }      // tagged before untagged
+        return a.tags.localizedStandardCompare(b.tags) == .orderedAscending
+    }
+}
+
+extension MediaDisposition {
+    /// Review order for the Tag column: what to keep first, junk last.
+    public var catalogSortRank: Int {
+        switch self {
+        case .important: return 0
+        case .recoverable: return 1
+        case .unreviewed: return 2
+        case .suspectedJunk: return 3
+        case .confirmedJunk: return 4
+        }
+    }
+}
+
+extension DuplicateDisposition {
+    /// Order for the Duplicate column: Keep, Review, Extra copy, then a
+    /// row duplicate analysis has not judged.
+    public var catalogSortRank: Int {
+        switch self {
+        case .keep: return 0
+        case .review: return 1
+        case .extraCopy: return 2
+        case .none: return 3
+        }
+    }
 }

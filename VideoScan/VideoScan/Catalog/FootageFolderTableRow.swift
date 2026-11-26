@@ -77,6 +77,8 @@ struct FootageFolderTableRow: Identifiable {
     var date: Date { keys.date }
     var place: String { keys.place }
     var people: String { keys.people }
+    var tag: CatalogTagSortKey { keys.tag }
+    var duplicate: Int { keys.duplicate }
 }
 
 // Deliberately NOT Equatable (GH #350, QA r1): an equal row VALUE could let
@@ -138,7 +140,7 @@ enum FootageFolderSort {
         let rowComparator: (SortOrder) -> KeyPathComparator<FootageFolderTableRow>
     }
 
-    /// Computed, not stored: eleven small values per call (a header click,
+    /// Computed, not stored: thirteen small values per call (a header click,
     /// a compose), and no shared mutable global for Swift 6 to flag.
     static var columns: [Column] { [
         Column(key: .filename, record: \VideoRecord.filename, row: \FootageFolderTableRow.filename,
@@ -174,6 +176,12 @@ enum FootageFolderSort {
         Column(key: .people, record: \VideoRecord.peopleSortKey, row: \FootageFolderTableRow.people,
                recordComparator: { KeyPathComparator(\VideoRecord.peopleSortKey, order: $0) },
                rowComparator: { KeyPathComparator(\FootageFolderTableRow.people, order: $0) }),
+        Column(key: .tag, record: \VideoRecord.tagSortKey, row: \FootageFolderTableRow.tag,
+               recordComparator: { KeyPathComparator(\VideoRecord.tagSortKey, order: $0) },
+               rowComparator: { KeyPathComparator(\FootageFolderTableRow.tag, order: $0) }),
+        Column(key: .duplicate, record: \VideoRecord.duplicateSortKey, row: \FootageFolderTableRow.duplicate,
+               recordComparator: { KeyPathComparator(\VideoRecord.duplicateSortKey, order: $0) },
+               rowComparator: { KeyPathComparator(\FootageFolderTableRow.duplicate, order: $0) }),
     ] }
 
     static func column(forRecord keyPath: PartialKeyPath<VideoRecord>) -> Column? {

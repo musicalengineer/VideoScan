@@ -64,7 +64,7 @@ extension BalancedCopyProof {
         switch c {
         case .leftOnly, .mono: return 0
         case .rightOnly: return 1
-        case .dualMono, .trueStereo, .silent, .multichannel: return nil
+        case .dualMono, .trueStereo, .silent, .multichannel, .notMeasured: return nil
         }
     }
 

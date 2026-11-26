@@ -9609,6 +9609,8 @@
         "leftOnly",
         "mono",
         "multichannel",
+        "parseGapIsNeverSilence",
+        "parseGapIsNotMeasured",
         "parserEmpty",
         "parserGarbageIsSilent",
         "parserOverallAndDefaults",
@@ -12485,6 +12487,27 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogTagDuplicateSortTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogTagDuplicateSortLogicTests",
+        "CatalogTagDuplicateSortScaleTests",
+        "CatalogTagDuplicateSortSensorTests"
+      ],
+      "tests": [
+        "aFolderRowSortsAfterEveryFile",
+        "aHugeOrNegativeCountNeverCrossesIntoTheNextDisposition",
+        "bothTablesGiveTagAndDuplicateASortKey",
+        "duplicateSortsByDispositionThenCopyCount",
+        "hundredThousandRowsSortInsideTheBudget",
+        "tagOrderDoesNotDependOnInsertionOrder",
+        "tagSortsByDispositionInReviewOrder",
+        "theFolderSortMappingCarriesBothColumns",
+        "withinADispositionTaggedRowsComeFirstThenByTag"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogTests.swift",
@@ -15199,6 +15222,8 @@
         "aMaybeIsShownUntickedWithRunAFullVerifyFirst",
         "aMeasuredCandidateIsTickedAndBecomesTheRecipe",
         "aMeasuredMatchNamesTheFileAndCarriesIt",
+        "aPairedPictureSaysItsSoundComesFromItsPair",
+        "aPairedPictureWhoseCardNeverSaidNoSoundKeepsTheQuietNote",
         "addSoundIsItsOwnPass",
         "anUnreachableSoundFileIsRefusedBeforeAnyWrite",
         "countsOnlyCheckedFilesWithTheNoSoundRow",
@@ -41858,7 +41883,7 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 4068,
+      "expected_floor": 4081,
       "name": "unit",
       "package_expected_floor": 1027,
       "package_selectors": [
@@ -42649,7 +42674,10 @@
         "VideoScanTests/SoundLevelsRemeasureScaleTests",
         "VideoScanTests/SoundLevelsRemeasureIsolationTests",
         "VideoScanTests/SoundLevelsRemeasureMediaMatrixTests",
-        "VideoScanTests/SoundLevelsRemeasureSensorTests"
+        "VideoScanTests/SoundLevelsRemeasureSensorTests",
+        "VideoScanTests/CatalogTagDuplicateSortLogicTests",
+        "VideoScanTests/CatalogTagDuplicateSortScaleTests",
+        "VideoScanTests/CatalogTagDuplicateSortSensorTests"
       ]
     },
     {
