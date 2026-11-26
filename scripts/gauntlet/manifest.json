@@ -4600,7 +4600,8 @@
       ],
       "tests": [
         "ballastIsNotInheritedByChildren",
-        "diskFullCommitRefusesAndRetries"
+        "diskFullCommitRefusesAndRetries",
+        "relaunchAfterDiskFullRefusalOpensReadWrite"
       ]
     },
     {
@@ -37809,6 +37810,18 @@
       ]
     },
     {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitFailsAfterPhaseOneTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitFailsAfterPhaseOneTests"
+      ],
+      "tests": [
+        "bodyFailureKeepsItsWords",
+        "commitFailureIsNamed"
+      ]
+    },
+    {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ProvenanceEstimateTests.swift",
       "stage": "unit",
@@ -43253,7 +43266,7 @@
       ],
       "expected_floor": 1055,
       "name": "regression",
-      "package_expected_floor": 351,
+      "package_expected_floor": 354,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -43311,7 +43324,8 @@
         "VideoScanCoreTests.CatalogRealityFutureEvidenceTests",
         "VideoScanCoreTests.LateMeasurementAfterFinishTests",
         "VideoScanCoreTests.CatalogCloseDrainTests",
-        "VideoScanCoreTests.EraCanaryCommandTests"
+        "VideoScanCoreTests.EraCanaryCommandTests",
+        "VideoScanCoreTests.CatalogCommitFailsAfterPhaseOneTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",

@@ -9,7 +9,8 @@
 //   Case 1  disk full at COMMIT — refused with the disk's words; integrity ok;
 //           the edits are still pending in memory; the same edits land once
 //           space returns; the high-water witnesses are NOT ahead of the
-//           database after the refusal (GH #338 — known issue at `.nearlyFull`).
+//           database after the refusal (GH #338: the pages are flushed to
+//           the WAL before phase 1, so the disk is found full first).
 //   Case 2  disk full half-way through a multi-commit job — the earlier
 //           commits stay, the failed one rolls back whole, the caller is told.
 //   Floor   fail-fast (Rick's scope note): a commit on a volume with almost
@@ -54,7 +55,7 @@ struct CatalogWriteCornerDiskTests {
         defer { volume.detach() }
         let database = try volume.copyCatalog(from: scene.databaseFolder)
 
-        var session = try await CommitSession.open(database)
+        let session = try await CommitSession.open(database)
         _ = try await session.commitNotes("c1-before")
         let before = await session.generation
         let stored = try CatalogDiskFullTests.noteCount(database, "c1-before")
@@ -79,28 +80,12 @@ struct CatalogWriteCornerDiskTests {
         let sidecar = CatalogHighWater.read(besideDatabaseAt: database)
         let ledger = CatalogHighWaterLedger.read(besideDatabaseAt: database)
         let witnessesAhead = sidecar != .value(before) || ledger != .value(before)
-        if depth == .nearlyFull {
-            withKnownIssue("GH #338: SQLITE_FULL at COMMIT after phase 1 leaves catalog.highwater(.log) at g+1") {
-                #expect(!witnessesAhead, "\(depth): sidecar \(sidecar), log \(ledger), database \(before)")
-            }
-        } else {
-            #expect(!witnessesAhead, "\(depth): sidecar \(sidecar), log \(ledger), database \(before)")
-        }
+        #expect(!witnessesAhead, "\(depth): sidecar \(sidecar), log \(ledger), database \(before)")
 
-        // Space returns — the volume reports it (returnSpace): the same edits (reuseEdits) land.
+        // Space returns — the volume reports it (returnSpace): the same edits
+        // (reuseEdits) land in the SAME session — no reopen (GH #338).
         try await volume.returnSpace(ballast)
-        var retried = await session.commitNotesOutcome("c1-during", reuseEdits: true)
-        if case .refused = retried {
-            // Today at .nearlyFull the session refuses its own retry (#338);
-            // the app's answer is Reopen. A reopen that comes back read-only
-            // is the #338 symptom the test above already tracks.
-            await session.close()
-            session = try await CommitSession.open(database, requireReadWrite: false)
-            if case .readOnly = session.opened, case .value(let mark) = CatalogHighWater.read(besideDatabaseAt: database) {
-                _ = await session.repository.adopt(toHighWater: mark)
-            }
-            retried = await session.commitNotesOutcome("c1-during", reuseEdits: false)
-        }
+        let retried = await session.commitNotesOutcome("c1-during", reuseEdits: true)
         #expect(retried.isCommitted, "\(depth): the retained edits did not land once space returned: \(retried.brief)")
         await session.close()
         #expect(try CatalogDiskFullTests.noteCount(database, "c1-during") == stored, "\(depth)")

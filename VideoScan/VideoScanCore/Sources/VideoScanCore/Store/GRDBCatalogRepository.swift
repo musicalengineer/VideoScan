@@ -29,13 +29,15 @@
 //     until a person adopts; a sidecar below the generation is raised by
 //     compare-and-raise, never lowered;
 //   - a write is ONE immediate transaction: body, then the generation CAS
-//     (`changes() == 1` or `.generationMismatch`), then phase 1 — the
+//     (`changes() == 1` or `.generationMismatch`), then the history row,
+//     then every dirty page flushed to the WAL (GH #338: a full disk refuses
+//     HERE, while the witnesses still read g), then phase 1 — the
 //     sidecar must read EXACTLY this session's generation g (codex C′ #5),
-//     it is raised to g+1 and the log gains a line — then the history row,
-//     then COMMIT (phase 2). A crash between the phases leaves the
-//     witnesses above the generation, which the next open reports as
-//     read-only; a session that finds the mark moved from under it refuses
-//     every later write until it is reopened;
+//     it is raised to g+1 and the log gains a line — then COMMIT (phase 2).
+//     A crash between the phases leaves the witnesses above the generation,
+//     which the next open reports as read-only; a session that finds the
+//     mark moved from under it, or whose own COMMIT failed after phase 1
+//     (named as such, #338), refuses every later write until it is reopened;
 //   - the session's CAS expectation lives in a box the serialized write
 //     reads and updates (codex C′ #6): two writes queued on one repository
 //     commit g+1 then g+2, while a stale SECOND repository still gets
@@ -728,13 +730,44 @@ public actor GRDBCatalogRepository: CatalogRepository {
             // write on this repository has committed and updated the box.
             let expected = session.generation
             var outcome: CatalogWriteOutcome = .refused(reason: "the transaction did not run")
-            try db.inTransaction(.immediate) {
-                outcome = try steps(db, expected: expected, body)
-                if case .committed = outcome { return .commit }
-                return .rollback
+            do {
+                try db.inTransaction(.immediate) {
+                    outcome = try steps(db, expected: expected, body)
+                    if case .committed = outcome { return .commit }
+                    return .rollback
+                }
+            } catch {
+                // `.committed` here means every step ran and phase 1 raised the
+                // witnesses to `generation` — it was COMMIT itself that failed.
+                // GH #338: say THAT, not "another writer published …" on the
+                // next save. Whether the frames reached the disk is not knowable
+                // here (an fsync error), so the witnesses stay (F8r3: never
+                // lowered) and only a reopen — which runs the restore check —
+                // may decide.
+                guard case .committed(let generation) = outcome else { throw error }
+                let reason = "the save of generation \(generation) failed at COMMIT (\(GRDBCatalogRepository.words(error))) "
+                    + "after its high-water mark was written"
+                session.flagReopen(reason)
+                return .refused(reason: "\(reason) — the changes are kept in memory; reopen the catalog")
             }
             if case .committed(let generation) = outcome { session.commit(generation); session.noteSidecarsOnce(fileGuard) }
             return outcome
+        }
+
+        /// GH #338: write every page this transaction dirtied to the WAL now
+        /// (`sqlite3_db_cacheflush` — the frames carry no commit flag, so no
+        /// reader and no recovery sees them; ROLLBACK discards them). Run
+        /// before phase 1 so a full disk refuses while the witnesses still
+        /// read this session's generation. nil = flushed; else the words.
+        /// C++ analogy: flushing the write buffer before publishing the
+        /// "I am about to commit" marker, so the marker never outruns the data.
+        private func flushToWAL(_ db: Database) -> String? {
+            guard let connection = db.sqliteConnection else { return "nothing was saved: the catalog connection is closed" }
+            let code = sqlite3_db_cacheflush(connection)
+            guard code != SQLITE_OK else { return nil }
+            let engine = String(cString: sqlite3_errstr(code))
+            return "nothing was saved: \(engine) (SQLite code \(code)) while writing the changes, before the high-water mark moved "
+                + "— the changes are kept in memory; free space on the catalog's disk and save again"
         }
 
         private func steps(_ db: Database, expected: Int,
@@ -750,18 +783,24 @@ public actor GRDBCatalogRepository: CatalogRepository {
                 let found = try Int.fetchOne(db, sql: "SELECT generation FROM generations WHERE id = 1") ?? -1
                 return .generationMismatch(expected: expected, found: found)
             }
-            // GH #359, check 2 of 3: before phase 1 — no witness is raised
-            // beside a file that is not the one this session opened.
-            if let words = session.fileStop(fileGuard) { return .refused(reason: words) }
-            // Phase 1 (F8r3): the external mark says `next` BEFORE the commit.
-            if let problem = publishMark(expected: expected, next: next) {
-                return .refused(reason: problem)
-            }
             // Part 2b: the history row carries what `files` holds at this commit.
             let filesLive = try Int.fetchOne(db, sql: "SELECT count(*) FROM files WHERE removal_state IS NULL") ?? 0
             let filesTotal = try Int.fetchOne(db, sql: "SELECT count(*) FROM files") ?? 0
             try db.execute(sql: "INSERT INTO generation_history (generation, committed_at, host, writer, files_live, files_total, kind, from_generation) VALUES (?, ?, ?, ?, ?, ?, 'commit', NULL)",
                            arguments: [next, now, host, door.rawValue, filesLive, filesTotal])
+            // GH #359, check 2 of 3: before the flush and phase 1 — no frame is
+            // written and no witness raised beside a file that is not the one
+            // this session opened.
+            if let words = session.fileStop(fileGuard) { return .refused(reason: words) }
+            // GH #338: every page this transaction changed goes to the WAL NOW,
+            // before phase 1, so a full disk is met while no witness has moved.
+            // Uncommitted frames are invisible to readers and to recovery; a
+            // rollback discards them. COMMIT is then left with one commit frame.
+            if let words = flushToWAL(db) { return .refused(reason: words) }
+            // Phase 1 (F8r3): the external mark says `next` BEFORE the commit.
+            if let problem = publishMark(expected: expected, next: next) {
+                return .refused(reason: problem)
+            }
             try crashBeforeCommit?()
             // GH #359, check 3 of 3: just before COMMIT (phase 1's fsync is a
             // real window). A refusal here rolls back; the witnesses already
