@@ -43,6 +43,7 @@ enum SoundStandingFixture {
         case .mono: return ([-20], nil)
         case .silent: return ([-.infinity, -.infinity], nil)
         case .multichannel: return (Array(repeating: -20, count: 6), nil)
+        case .notMeasured: return ([], nil)
         }
     }
 

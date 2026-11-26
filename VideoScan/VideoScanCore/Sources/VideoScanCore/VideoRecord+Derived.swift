@@ -170,6 +170,27 @@ extension VideoRecord {
         return confirmed + " ~" + suspected
     }
 
+    /// Sort key for the catalog's Tag column (Rick 2026-11-25): the
+    /// disposition in review order — Important, Recoverable, Unreviewed,
+    /// Suspected Junk, Confirmed Junk — then the workflow tags (a tagged
+    /// row before an untagged one). O(1) per read and no allocation: the
+    /// key holds the record's own tags array (a reference-count bump), and
+    /// the comparison does the rest (CatalogTagSortKey).
+    public var tagSortKey: CatalogTagSortKey {
+        CatalogTagSortKey(dispositionRank: mediaDisposition.catalogSortRank, tags: tags)
+    }
+
+    /// Sort key for the catalog's Duplicate column (Rick 2026-11-25): the
+    /// disposition — Keep, Review, Extra copy, then not analysed — then
+    /// the copy count. One Int, O(1): rank × 1,000,000 + count (a count
+    /// is clamped below a million, far past any real group).
+    public var duplicateSortKey: Int {
+        duplicateDisposition.catalogSortRank * Self.duplicateRankStride
+            + min(max(duplicateGroupCount, 0), Self.duplicateRankStride - 1)
+    }
+
+    public static let duplicateRankStride = 1_000_000
+
     /// Resolution sorted by total pixel count. Files with no resolution
     /// (audio-only, ffprobe failed) sort to the bottom.
     public var pixelCount: Int {
@@ -187,4 +208,112 @@ extension VideoRecord {
 
     /// Same idea for modification date.
     public var dateModifiedSortKey: Date { dateModifiedRaw ?? .distantPast }
+}
+
+// MARK: - Tag / Duplicate column order (Rick 2026-11-25)
+
+/// The Tag column's sort value. A struct, not a string, so the order is
+/// exactly the rule — no locale collation deciding where a rank prefix or
+/// an "untagged" sentinel falls. (For Rick: a POD with `operator<`.)
+///
+/// Cost (review 2026-11-25): a header click sorts on the main actor and
+/// reads this key twice per comparison, so neither the read nor the common
+/// comparison allocates. Equal tag lists (the usual case: one disposition,
+/// the same tags on many rows) stop at Array `==` (buffer identity, then
+/// element compare). Two DIFFERENT lists are put in tag order in stack
+/// buffers (`tagOrder`) — no heap allocation on any path.
+public struct CatalogTagSortKey: Comparable, Hashable, Sendable {
+    /// MediaDisposition.catalogSortRank; `Int.max` for a row that is not
+    /// a file (a folder in the folder table), which sorts after every file.
+    public let dispositionRank: Int
+    /// The workflow tags as stored (any order); empty when untagged.
+    public let tags: [String]
+
+    public init(dispositionRank: Int, tags: [String]) {
+        self.dispositionRank = dispositionRank
+        self.tags = tags
+    }
+
+    /// A folder row: no disposition, no tags.
+    public static let notAFile = CatalogTagSortKey(dispositionRank: .max, tags: [])
+
+    public static func < (a: CatalogTagSortKey, b: CatalogTagSortKey) -> Bool {
+        if a.dispositionRank != b.dispositionRank { return a.dispositionRank < b.dispositionRank }
+        if a.tags.isEmpty != b.tags.isEmpty { return !a.tags.isEmpty }      // tagged before untagged
+        if a.tags == b.tags { return false }                                  // fast path: equal lists
+        return tagOrder(a.tags, b.tags) == .orderedAscending
+    }
+
+    /// Order-independent: the same tags in another order are the same key.
+    public static func == (a: CatalogTagSortKey, b: CatalogTagSortKey) -> Bool {
+        guard a.dispositionRank == b.dispositionRank else { return false }
+        return a.tags == b.tags || tagOrder(a.tags, b.tags) == .orderedSame
+    }
+
+    /// Only what `==` can never disagree with (the localized compare may
+    /// call two spellings equal): the rank and how many tags.
+    public func hash(into h: inout Hasher) {
+        h.combine(dispositionRank)
+        h.combine(tags.count)
+    }
+
+    /// The two lists in tag order, compared element by element (a shorter
+    /// list that is a prefix sorts first). Localized standard, the
+    /// Finder's order. No heap allocation: each list is ordered in a stack
+    /// buffer (`withUnsafeTemporaryAllocation` ≈ C++ `alloca`), the strings
+    /// themselves only retained.
+    static func tagOrder(_ a: [String], _ b: [String]) -> ComparisonResult {
+        withOrdered(a) { x in
+            withOrdered(b) { y in
+                for (l, r) in zip(x, y) {
+                    let c = l.localizedStandardCompare(r)
+                    if c != .orderedSame { return c }
+                }
+                return x.count == y.count ? .orderedSame : (x.count < y.count ? .orderedAscending : .orderedDescending)
+            }
+        }
+    }
+
+    /// `body` over `tags` in tag order: an insertion sort in a temporary
+    /// (stack) buffer — the lists are a handful of tags.
+    static func withOrdered<R>(_ tags: [String], _ body: (UnsafeMutableBufferPointer<String>) -> R) -> R {
+        withUnsafeTemporaryAllocation(of: String.self, capacity: tags.count) { buf in
+            _ = buf.initialize(from: tags)
+            for i in buf.indices.dropFirst() {
+                var j = i
+                while j > 0, buf[j - 1].localizedStandardCompare(buf[j]) == .orderedDescending {
+                    buf.swapAt(j - 1, j)
+                    j -= 1
+                }
+            }
+            defer { buf.deinitialize() }
+            return body(buf)
+        }
+    }
+}
+
+extension MediaDisposition {
+    /// Review order for the Tag column: what to keep first, junk last.
+    public var catalogSortRank: Int {
+        switch self {
+        case .important: return 0
+        case .recoverable: return 1
+        case .unreviewed: return 2
+        case .suspectedJunk: return 3
+        case .confirmedJunk: return 4
+        }
+    }
+}
+
+extension DuplicateDisposition {
+    /// Order for the Duplicate column: Keep, Review, Extra copy, then a
+    /// row duplicate analysis has not judged.
+    public var catalogSortRank: Int {
+        switch self {
+        case .keep: return 0
+        case .review: return 1
+        case .extraCopy: return 2
+        case .none: return 3
+        }
+    }
 }

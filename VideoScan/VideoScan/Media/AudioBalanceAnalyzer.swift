@@ -41,6 +41,10 @@ import Foundation
 //   - silent = no channel carries program (nothing to fix).
 //   - multichannel = more than 2 channels; classification only, no fix
 //     in v1.
+//   - notMeasured = no levels at all, or a channel astats never gave a
+//     readable RMS (`rmsMeasured == false`: the parser's −∞ default, NOT a
+//     measurement). Checked FIRST — a parse gap is never silence and never
+//     one-sided (GH #370 part 2). Balance refuses it.
 
 // MARK: - Classification
 
@@ -56,6 +60,12 @@ enum AudioChannelClass: String, Sendable, Equatable {
     case silent
     /// More than 2 channels — classified, not fixable in v1.
     case multichannel
+    /// No levels, or a channel whose RMS could not be read (GH #370).
+    case notMeasured
+
+    /// Balance Audio's refusal for `.notMeasured` (BalanceAudioFix).
+    static let notMeasuredRefusal =
+        "The sound levels were not measured on every channel — run Verify Audio again before balancing."
 
     /// Plain family language for the sheet's headline (friendly-language
     /// convention — no engineering jargon in the UI).
@@ -75,6 +85,8 @@ enum AudioChannelClass: String, Sendable, Equatable {
             return "No sound was found on any channel."
         case .multichannel:
             return "This file has surround (more than 2 channels) sound — balancing isn't supported for it yet."
+        case .notMeasured:
+            return "Sound levels not measured — a channel's level could not be read."
         }
     }
 }
@@ -123,11 +135,11 @@ enum AudioBalanceClassifier {
         channel.rmsDBFS > programFloorDBFS
     }
 
-    /// The classification rules, verbatim from the file header.
+    /// The classification rules, verbatim from the file header. A parse
+    /// gap (or no levels at all) is `.notMeasured` before any other rule.
     static func classify(_ m: AudioBalanceMeasurements) -> AudioChannelClass {
+        guard !m.channels.isEmpty, m.channels.allSatisfy(\.rmsMeasured) else { return .notMeasured }
         switch m.channels.count {
-        case 0:
-            return .silent                       // defensive: no data = nothing to fix
         case 1:
             return carriesProgram(m.channels[0]) ? .mono : .silent
         case 2:

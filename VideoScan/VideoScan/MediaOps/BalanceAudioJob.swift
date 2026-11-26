@@ -161,6 +161,8 @@ enum BalanceAudioFix {
             return "No audio program — there is no sound to balance."
         case .multichannel:
             return "Surround (more than 2 channels) sound isn't supported by Balance Audio yet."
+        case .notMeasured:
+            return AudioChannelClass.notMeasuredRefusal
         }
     }
 
@@ -172,7 +174,7 @@ enum BalanceAudioFix {
         case .leftOnly: return "pan=stereo|c0=c0|c1=c0"
         case .rightOnly: return "pan=stereo|c0=c1|c1=c1"
         case .mono: return "pan=stereo|c0=c0|c1=c0"
-        case .trueStereo, .dualMono, .silent, .multichannel: return nil
+        case .trueStereo, .dualMono, .silent, .multichannel, .notMeasured: return nil
         }
     }
 
@@ -871,7 +873,7 @@ final class BalanceAudioJob: @MainActor MediaFileOperationJob {
         case .leftOnly: fixNote = "left channel copied to both sides"
         case .rightOnly: fixNote = "right channel copied to both sides"
         case .mono: fixNote = "mono sound spread to both speakers"
-        default: fixNote = analysis.classification.rawValue
+        case .trueStereo, .dualMono, .silent, .multichannel, .notMeasured: fixNote = analysis.classification.rawValue
         }
         if !analysis.droppedStreamIndices.isEmpty {
             let list = analysis.droppedStreamIndices.map(String.init).joined(separator: ", ")

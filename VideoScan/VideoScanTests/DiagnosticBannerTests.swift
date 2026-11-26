@@ -104,6 +104,52 @@ struct DiagnosticBannerNoSoundTests {
                                          presence: .silentFilmEra(year: 1972, source: .userDate), advice: nil) == nil)
     }
 
+    /// GH #370 (Rick 2026-11-25): Verify wrote the no-sound row, THEN the
+    /// file was paired with its sound. The live assessment decides: the
+    /// banner stops saying "No sound" and says where the sound is; the
+    /// stored row stays on the card as evidence.
+    @Test func aPairedPictureSaysItsSoundComesFromItsPair() throws {
+        let card = F.card(F.noSound2009)
+        #expect(CheckMediaRules.hasNoSoundRow(card), "fixture: the card still carries the no-sound row")
+        let b = try #require(DiagnosticBanner.noSound(recordID: F.pictureID, card: card,
+                                                      presence: .videoHalfOfPair(soundFile: "test_A01.wav"), advice: nil))
+        #expect(b.severity == .info, "not the yellow warning")
+        #expect(b.id == DiagnosticBanner.pairedSoundID)
+        #expect(b.headline == "No sound track of its own")
+        #expect(b.nextStep == "Its sound comes from its pair, test_A01.wav \u{2014} play or combine the two together.")
+        #expect(b.action == nil, "nothing to repair: the sound is known")
+        #expect(CheckMediaRules.hasNoSoundRow(card), "the card row is evidence; nothing rewrote it")
+    }
+
+    @Test func aPairedPictureWhoseCardNeverSaidNoSoundKeepsTheQuietNote() {
+        let pairCard = F.card(.videoHalfOfPair(soundFile: "test_A01.wav"))
+        #expect(DiagnosticBanner.noSound(recordID: F.pictureID, card: pairCard,
+                                         presence: .videoHalfOfPair(soundFile: "test_A01.wav"), advice: nil) == nil)
+        #expect(DiagnosticBanner.noSound(recordID: F.pictureID, card: nil,
+                                         presence: .videoHalfOfPair(soundFile: "test_A01.wav"), advice: nil) == nil)
+    }
+
+    /// REVIEW (GH #370, reviewer 2026-11-25) — pins DiagnosticBanner.swift:85.
+    /// The paired-sound banner REPLACES Media Info's verdict line
+    /// (MediaInfoSheet.verdictBox). When the card carries another Warning
+    /// (here: timestamps), an info banner downgrades the visible verdict
+    /// from Warning to Info and hides that warning behind the collapsed
+    /// Report card. The pair answers the sound question only; it must never
+    /// soften a non-sound warning.
+    @Test func thePairedSoundBannerNeverHidesAnotherWarning() {
+        var card = F.card(F.noSound2009)
+        card.checks.append(MediaCheck(kind: .timestamps, verdict: .warning,
+                                      sentence: "The timing jumps in 3 places."))
+        #expect(CheckMediaRules.hasNoSoundRow(card), "fixture: the no-sound row is on the card")
+        let b = DiagnosticBanner.noSound(recordID: F.pictureID, card: card,
+                                         presence: .videoHalfOfPair(soundFile: "test_A01.wav"), advice: nil)
+        // Either no banner (the card's own headline, which names the other
+        // warning, shows) or a banner no quieter than the card's worst row.
+        if let b {
+            #expect(b.severity != .info, "an info banner over a card with a Warning row understates the file")
+        }
+    }
+
     /// Get Info over a card written before the rule (no no-sound row):
     /// the live assessment still raises the banner.
     @Test func theLiveAssessmentWinsOverAStaleCard() {

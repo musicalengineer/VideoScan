@@ -46,6 +46,7 @@ private func analysis(_ c: AudioChannelClass,
                                                           differenceRMSDBFS: nil)
         case .multichannel: return AudioBalanceMeasurements(channels: Array(repeating: AudioChannelLevels(rmsDBFS: -20, peakDBFS: -14), count: 6),
                                                             differenceRMSDBFS: nil)
+        case .notMeasured: return AudioBalanceMeasurements(channels: [], differenceRMSDBFS: nil)
         }
     }()
     var a = AudioBalanceAnalysis(classification: c, measurements: measured,

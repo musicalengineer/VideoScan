@@ -413,12 +413,17 @@ extension CatalogContent {
                 }
                 .width(min: 90, ideal: 140)
 
-                TableColumn("Tag") { rec in
+                // Tag: disposition in review order, then the workflow
+                // tags; Duplicate: Keep › Review › Extra copy › not
+                // analysed, then copy count (Rick 2026-11-25). Both keys are
+                // O(1) to read with no allocation; equal tag lists compare in
+                // one Array == (VideoRecord+Derived.swift, CatalogTagSortKey).
+                TableColumn("Tag", value: \VideoRecord.tagSortKey) { rec in
                     tagColumnCell(for: rec)
                 }
                 .width(min: 70, ideal: 120)
 
-                TableColumn("Duplicate") { rec in
+                TableColumn("Duplicate", value: \VideoRecord.duplicateSortKey) { rec in
                     duplicateCell(rec)
                 }
                 .width(min: 80, ideal: 95)

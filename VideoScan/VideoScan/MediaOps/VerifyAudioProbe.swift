@@ -448,7 +448,7 @@ enum VerifyAudioRules {
             case .leftOnly:  return "one-sided audio (left only)"
             case .rightOnly: return "one-sided audio (right only)"
             case .mono:      return "mono audio"
-            default:         return "channel imbalance"
+            case .trueStereo, .dualMono, .silent, .multichannel, .notMeasured: return "channel imbalance"
             }
         case .noAudioStream:
             return "no audio stream"
@@ -576,6 +576,8 @@ enum VerifyAudioRules {
                 ? [.channelImbalance(analysis.classification)] : []
         case .dualMono, .trueStereo:
             return []   // healthy from a channel-balance standpoint
+        case .notMeasured:
+            return []   // not a fact (unreachable: `findings` asks for a complete pass first)
         }
     }
 }

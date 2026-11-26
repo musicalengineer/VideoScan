@@ -572,7 +572,7 @@ struct VerifyAudioSheet: View {
             return "The right channel's sound will be copied to both speakers."
         case .mono:
             return "The mono sound will be spread evenly to both speakers."
-        default:
+        case .trueStereo, .dualMono, .silent, .multichannel, .notMeasured:
             return c.familyDescription
         }
     }

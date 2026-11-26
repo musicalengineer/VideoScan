@@ -127,7 +127,7 @@ enum ArchiveAngelAudioOutcome: Equatable {
         case .leftOnly:  return "One-sided audio — left channel only"
         case .rightOnly: return "One-sided audio — right channel only"
         case .mono:      return monoIsFineNote
-        default:         return c.familyDescription
+        case .trueStereo, .dualMono, .silent, .multichannel, .notMeasured: return c.familyDescription
         }
     }
 

@@ -65,6 +65,8 @@ extension DiagnosticBanner {
     /// The "No sound" banner for a file, or nil when the file has sound,
     /// is the picture half of a known pair, or is silent film from before
     /// 1980 (SoundPresencePolicy decided all three; this only reads it).
+    /// A pair half whose card still carries the no-sound row gets the quiet
+    /// `pairedSound` banner instead (GH #370).
     ///
     /// `card` = the file's Verify card (its Sound track row is the policy's
     /// row); `presence` = a live assessment (Get Info's probe), which wins
@@ -77,9 +79,35 @@ extension DiagnosticBanner {
         // A Problem on the card is the worse news; the banner never hides
         // it (Codex round 2, 2026-10-24).
         guard flagged, (card?.verdict.rank ?? 0) < MediaCheckVerdict.problem.rank else { return nil }
+        // Paired since Verify wrote its row (GH #370, Rick 2026-11-25): the
+        // live assessment decides — the file still has no sound track of its
+        // own, but its sound is known. The card row stays as evidence.
+        // The pair answers the sound question only: when the card has any
+        // other row worse than OK, no banner — the card's own headline,
+        // which names that warning, shows instead (review 2026-11-25).
+        if case .videoHalfOfPair(let soundFile)? = presence {
+            let othersClean = card?.checks.allSatisfy {
+                CheckMediaRules.isNoSoundRow($0) || $0.verdict.rank <= MediaCheckVerdict.ok.rank
+            } ?? true
+            return othersClean ? pairedSound(soundFile) : nil
+        }
         return DiagnosticBanner(id: noSoundID, severity: .warning, symbol: noSoundSymbol,
                                 headline: noSoundHeadline, nextStep: noSoundStep(advice),
                                 action: .repair(MediaRepairPrefill(recordID: recordID, advice: advice)))
+    }
+
+    static let pairedSoundID = "sound.pairedSound"
+    static let pairedSoundHeadline = "No sound track of its own"
+    static let pairedSoundSymbol = "speaker.slash"
+
+    /// The quiet (info) banner for a picture whose stored card says "No
+    /// sound" but which is now the video half of a pair. No action: there
+    /// is nothing to look for.
+    static func pairedSound(_ soundFile: String) -> DiagnosticBanner {
+        DiagnosticBanner(id: pairedSoundID, severity: .info, symbol: pairedSoundSymbol,
+                         headline: pairedSoundHeadline,
+                         nextStep: "Its sound comes from its pair, \(soundFile) \u{2014} play or combine the two together.",
+                         action: nil)
     }
 
     /// The next step, from what the lookup found. Only a measured length

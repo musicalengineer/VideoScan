@@ -170,13 +170,14 @@ struct MediaInfoSheet: View {
     }
 
     /// The pair / silent-film note (quiet); for "No sound" (the banner
-    /// above says it) only the lookup's Reveal / Play. Empty otherwise.
+    /// above says it) only the lookup's Reveal / Play. Empty otherwise, and
+    /// empty when the paired-sound banner above already says it (GH #370).
     @ViewBuilder
     private var soundSection: some View {
         let presence = soundPresence
         if presence.isWarning {
             soundAdviceRow
-        } else if let headline = presence.headline {
+        } else if let headline = presence.headline, noSoundBanner?.id != DiagnosticBanner.pairedSoundID {
             VStack(alignment: .leading, spacing: 6) {
                 Label {
                     VStack(alignment: .leading, spacing: 2) {

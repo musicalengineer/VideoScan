@@ -32,8 +32,8 @@
 //                         (`FootageFolderRowID`) — Table identity must be
 //                         unique. O(visible + folders present).
 //
-// Memory: the index keeps one SortKeys per record (~200 B) plus the
-// families — ~30 MB at 100k rows; the display is one small row per visible
+// Memory: the index keeps one SortKeys per record (~240 B with the Tag and
+// Duplicate keys) plus the families — ~35 MB at 100k rows; the display is one small row per visible
 // record. Nothing is retained per compose.
 //
 // (For Rick: everything here is a `struct`/`enum` — value semantics, copied
@@ -62,12 +62,15 @@ enum FootageFolders {
         var date = Date.distantPast
         var place = ""
         var people = ""
+        /// A folder has neither: both sort after every file ascending.
+        var tag = CatalogTagSortKey.notAFile
+        var duplicate = Int.max
     }
 
     /// The table's sort columns, by name (the KeyPathComparator ↔ key
     /// mapping lives in FootageFolderTableRow.swift, beside the row type).
     enum SortKey: String, CaseIterable, Sendable {
-        case filename, volume, stream, duration, resolution, codec, dossier, size, date, place, people
+        case filename, volume, stream, duration, resolution, codec, dossier, size, date, place, people, tag, duplicate
     }
 
     /// The table's current sort as a value.
@@ -98,6 +101,8 @@ enum FootageFolders {
             .date: { compare($0.date, $1.date) },
             .place: { $0.place.localizedStandardCompare($1.place) },
             .people: { $0.people.localizedStandardCompare($1.people) },
+            .tag: { compare($0.tag, $1.tag) },
+            .duplicate: { compare($0.duplicate, $1.duplicate) },
         ]
 
         private static func compare<T: Comparable>(_ a: T, _ b: T) -> ComparisonResult {

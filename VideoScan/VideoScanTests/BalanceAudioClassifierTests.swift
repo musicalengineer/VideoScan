@@ -48,7 +48,31 @@ struct BalanceAudioClassifierTests {
     func silent() {
         #expect(classify([ch(-.infinity), ch(-.infinity)]) == .silent)
         #expect(classify([ch(-72), ch(-95)]) == .silent)
-        #expect(classify([]) == .silent)
+    }
+
+    /// GH #370 part 2: a channel astats never gave a readable RMS holds the
+    /// parser's −∞ default — not a measurement. It is never silence, never
+    /// one-sided: the class is "not measured", and Balance refuses it.
+    @Test("a parse gap is never silence, never one-sided")
+    func parseGapIsNeverSilence() {
+        let gap = AudioChannelLevels(rmsDBFS: -.infinity, peakDBFS: -.infinity, rmsMeasured: false)
+        #expect(classify([gap, gap]) != .silent)
+        #expect(classify([ch(-18), gap]) != .leftOnly, "never left-only off an unread right channel")
+        #expect(classify([gap, ch(-18)]) != .rightOnly)
+        #expect(classify([gap]) != .silent)
+        #expect(classify([]) != .silent, "no levels at all (a rebuilt filter graph) is not silence either")
+    }
+
+    @Test("a parse gap classifies not measured, and Balance refuses it in those words")
+    func parseGapIsNotMeasured() {
+        let gap = AudioChannelLevels(rmsDBFS: -.infinity, peakDBFS: -.infinity, rmsMeasured: false)
+        for channels in [[gap, gap], [ch(-18), gap], [gap, ch(-18)], [gap], [ch(-18), ch(-18), gap], []] {
+            #expect(classify(channels) == .notMeasured, "\(channels.count) channels")
+        }
+        #expect(BalanceAudioFix.refusalReason(for: .notMeasured) == AudioChannelClass.notMeasuredRefusal)
+        #expect(AudioChannelClass.notMeasuredRefusal.contains("not measured"))
+        #expect(BalanceAudioFix.panFilter(for: .notMeasured) == nil)
+        #expect(AudioChannelClass.notMeasured.familyDescription.hasPrefix("Sound levels not measured"))
     }
 
     @Test("mono: single-channel stream, with and without program")
