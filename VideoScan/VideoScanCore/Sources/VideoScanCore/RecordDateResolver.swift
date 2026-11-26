@@ -453,7 +453,9 @@ public enum FilenameDatePattern {
             for (name, m) in monthNames where prefix.hasSuffix(name) {
                 // Word boundary: the character before the name must not be a letter.
                 let before = prefix.dropLast(name.count).last
-                if before == nil || before?.isLetter == false {
+                // GH #232: the year guard, asked only once a month word
+                // matched (no extra cost on the common no-month name).
+                if before == nil || before?.isLetter == false, isYearRun(s, r) {
                     return Match(year: r.value, month: m, day: nil, precision: .month)
                 }
             }
@@ -467,7 +469,7 @@ public enum FilenameDatePattern {
         for k in 0..<(s.runs.count - 1) {
             let a = s.runs[k], b = s.runs[k + 1]
             guard a.count == 4, b.count == 2, s.separator(a, b) != nil,
-                  s.plausibleYear(a.value), (1...12).contains(b.value) else { continue }
+                  isYearRun(s, a), (1...12).contains(b.value) else { continue }
             return Match(year: a.value, month: b.value, day: nil, precision: .month)
         }
         return nil
@@ -475,24 +477,34 @@ public enum FilenameDatePattern {
 
     // ---- 6. Bare 19xx / 20xx year (year precision)
     static func matchBareYear(_ s: Scan) -> Match? {
-        for r in s.runs where r.count == 4 && s.plausibleYear(r.value) {
-            // Camera counters, not years: "IMG_1995", "DSC2001", "100_2005"
-            // (Kodak folder_frame). Look at what sits just before the
-            // digits, through at most one "_" / "-".
-            var e = r.start
-            if e > 0, s.chars[e - 1] == "_" || s.chars[e - 1] == "-" { e -= 1 }
-            if e > 0, s.chars[e - 1].isNumber { continue }
-            // QA v12 #1: a dimension, bitrate or rate is not a year —
-            // "1920x1080", "1080x1920", "2000k", "2000kbps", "2000fps",
-            // "1920p". Only IMMEDIATE neighbours count ("1994pics" and
-            // "Christmas1995Party" stay years).
-            if s.isMeasurementToken(r) { continue }
-            var start = e
-            while start > 0, s.chars[start - 1].isLetter { start -= 1 }
-            let word = String(s.chars[start..<e]).lowercased()
-            if !word.isEmpty, word.count <= 4, sequencePrefixes.contains(word) { continue }
+        for r in s.runs where r.count == 4 && isYearRun(s, r) {
             return Match(year: r.value, month: nil, day: nil, precision: .year)
         }
         return nil
+    }
+
+    /// Is this 4-digit run a YEAR at all? The one guard every matcher that
+    /// reads a lone 4-digit run as a year asks (GH #232: the month matchers
+    /// used to skip it, so "May_1920x1080.mov" filed as 1920-05). The
+    /// day-precision matchers need none: their shape (ISO, US, YYYYMMDD with
+    /// a valid day) already rules out counters and dimensions.
+    static func isYearRun(_ s: Scan, _ r: DigitRun) -> Bool {
+        guard s.plausibleYear(r.value) else { return false }
+        // Camera counters, not years: "IMG_1995", "DSC2001", "100_2005"
+        // (Kodak folder_frame). Look at what sits just before the
+        // digits, through at most one "_" / "-".
+        var e = r.start
+        if e > 0, s.chars[e - 1] == "_" || s.chars[e - 1] == "-" { e -= 1 }
+        if e > 0, s.chars[e - 1].isNumber { return false }
+        // QA v12 #1: a dimension, bitrate or rate is not a year —
+        // "1920x1080", "1080x1920", "2000k", "2000kbps", "2000fps",
+        // "1920p". Only IMMEDIATE neighbours count ("1994pics" and
+        // "Christmas1995Party" stay years).
+        if s.isMeasurementToken(r) { return false }
+        var start = e
+        while start > 0, s.chars[start - 1].isLetter { start -= 1 }
+        let word = String(s.chars[start..<e]).lowercased()
+        if !word.isEmpty, word.count <= 4, sequencePrefixes.contains(word) { return false }
+        return true
     }
 }
