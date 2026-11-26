@@ -50,8 +50,9 @@ struct CatalogStatusWindow: View {
     @StateObject private var info: CatalogDatabaseInfoModel
     /// GH #339: the held-back rows' count and their read-only list.
     @ObservedObject private var heldBack: HeldBackStore
-    @State private var showValidate = false
-    @State private var showHeldBack = false
+    /// ONE sheet slot (never two chained `.sheet(isPresented:)` — they race
+    /// the dismiss animation): Check Now… or Held back at import's Show….
+    @State private var sheet: StatusSheet?
     @Environment(\.openWindow) private var openWindow
 
     init(model: VideoScanModel, center: MediaFileOperationsCenter, orchestrator: CaptionOrchestrator,
@@ -106,11 +107,11 @@ struct CatalogStatusWindow: View {
         .accessibilityIdentifier("catalogStatus.window")
         .task { await info.refresh() }
         .onChange(of: freshness.state.lines) { _, _ in Task { await info.refresh() } }
-        .sheet(isPresented: $showValidate) {
-            ValidateCatalogSheet(model: model, center: center)
-        }
-        .sheet(isPresented: $showHeldBack) {
-            HeldBackSheet(store: heldBack, center: center, isReadOnly: model.isReadOnly)
+        .sheet(item: $sheet) { which in
+            switch which {
+            case .validate: ValidateCatalogSheet(model: model, center: center)
+            case .heldBack: HeldBackSheet(store: heldBack, center: center, isReadOnly: model.isReadOnly)
+            }
         }
     }
 
@@ -127,7 +128,7 @@ struct CatalogStatusWindow: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
-            Button(HeldBackWords.showButton) { showHeldBack = true }
+            Button(HeldBackWords.showButton) { sheet = .heldBack }
                 .accessibilityIdentifier("catalogStatus.heldBack.show")
         }
         .padding(10)
@@ -193,7 +194,7 @@ struct CatalogStatusWindow: View {
             Spacer(minLength: 8)
             switch line.kind {
             case .database:
-                Button("Check Now…") { showValidate = true }
+                Button("Check Now…") { sheet = .validate }
                     .disabled(model.isReadOnly)
                     .help(CatalogActionBrief.validateCatalog.help)
                     .accessibilityIdentifier("catalogStatus.checkNow")
@@ -224,6 +225,13 @@ struct CatalogStatusWindow: View {
         .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.12)))
         .accessibilityIdentifier("catalogStatus.restore")
     }
+}
+
+/// The window's one sheet slot. A SINGLE shared id: switching cases never
+/// dismisses-and-re-presents (the chained-sheet rule).
+enum StatusSheet: Identifiable {
+    case validate, heldBack
+    var id: Int { 0 }
 }
 
 /// Pure words for the window's lead.

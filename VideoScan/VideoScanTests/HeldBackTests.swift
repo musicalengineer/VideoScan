@@ -320,11 +320,11 @@ struct HeldBackScene {
     }
 
     func generation() async throws -> Int {
-        try await scene.model.catalogCutover.committer!.repository.read { $0.generation }
+        try await #require(scene.model.catalogCutover.committer).repository.read { $0.generation }
     }
 
     func openCountInDatabase() async throws -> Int {
-        try await scene.model.catalogCutover.committer!.repository.read { try $0.heldBackOpenCount() }
+        try await #require(scene.model.catalogCutover.committer).repository.read { try $0.heldBackOpenCount() }
     }
 
     /// One value from a private read-only connection (after the app's commits).
