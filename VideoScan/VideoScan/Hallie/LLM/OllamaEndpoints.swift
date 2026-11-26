@@ -74,6 +74,28 @@ enum OllamaEndpoints {
         return lower.hasPrefix("http://") || lower.hasPrefix("https://")
     }
 
+    /// True when the endpoint is THIS Mac — the only place the Local brain
+    /// may send family media (GH #450; rule 13; DECISIONS 2026-10-10 R6:
+    /// the data-class policy is enforced in the adapter). Decided by the
+    /// HOST the URL actually dials, never by how it is spelled: loopback or
+    /// one of this Mac's own names (`OllamaLocalServerBootstrap
+    /// .currentLocalHostNames()`). A cloud row (`https://ollama.example.com`),
+    /// a userinfo trick (`http://localhost@evil.example`), a look-alike
+    /// (`localhost.example.com`) and another Mac on the LAN are all not this
+    /// Mac. (The fleet Macs are not listed as local in ARCHITECTURE or
+    /// DECISIONS, so they are treated as off this Mac — fail closed.)
+    static func isOnThisMac(_ endpoint: String, thisMacNames: Set<String>) -> Bool {
+        let chat = chatURLString(for: endpoint, defaultPort: 11434)
+        guard let url = URL(string: chat), let host = url.host, !host.isEmpty else { return false }
+        let names = Set(thisMacNames.map(normalizedHost))
+        return names.contains(normalizedHost(host))
+    }
+
+    /// Lower-cased, without a trailing root dot or IPv6 brackets.
+    private static func normalizedHost(_ host: String) -> String {
+        host.trimmingCharacters(in: CharacterSet(charactersIn: ".[]")).lowercased()
+    }
+
     /// Full chat URL for one endpoint.
     ///
     ///   `RicksM4.local`               → http://RicksM4.local:11434/api/chat
