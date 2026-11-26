@@ -37194,6 +37194,7 @@
         "test_published_rows_reach_a_mac_without_the_local_files",
         "test_scale_a_full_size_log_with_fifteen_restarts_parses_inside_the_budget",
         "test_status_precedence_without_findings",
+        "test_tests_are_summed_across_host_launches",
         "test_the_1114_failing_tests_are_named_from_xcodebuilds_own_list",
         "test_the_1114_report_one_frame_down_is_the_known_463_and_the_run_is_not_red",
         "test_the_address_log_of_1107_reads_as_the_known_mlx_finding_not_as_a_crash",
