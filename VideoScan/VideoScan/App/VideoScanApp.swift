@@ -129,6 +129,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// still-running generation) and relies on the `_exit` backstop.
     private var vlmDrainTimedOut = false
 
+    /// Quit-scoped (Codex #381): work this quit already stopped, named in the
+    /// catalog alerts as not restarted when VideoScan stays open; cleared
+    /// when it does.
+    private var stoppedForQuit: [String] = []
+    /// The rescue copy written before the quit was approved (GH #356 /
+    /// Codex #381 P1): willTerminate writes no second copy of the same state.
+    private var quitRescue: CatalogQuitRecovery.RescueCopy?
+
     /// True when the app is launched as a test host (unit tests). Runner
     /// signals only — the shared detector, codex #1713.
     static var isRunningTests: Bool {
@@ -275,6 +283,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if midPair, response == .alertFirstButtonReturn {
                     appLog.write("quit dialog: user chose Finish this file, then quit — waiting up to \(Int(Self.deleteDuplicatesFinishDeadline))s")
                     center.finishInFlightThenSuspendForQuit()
+                    stoppedForQuit.append("Delete Duplicates (suspended after its file; its plan is kept)")
                     Task { @MainActor [weak self] in
                         let settled = await center.waitForDeleteDuplicatesToSettle(deadline: Self.deleteDuplicatesFinishDeadline)
                         // The deadline path revoked "finish this file" and
@@ -293,6 +302,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     appLog.write("quit dialog: user chose \(midPair ? "Stop now" : "Quit Anyway") — stopping \(running) operation(s)"
                                  + (suspending ? " (Delete Duplicates suspended, plan kept for resume)" : ""))
                     center.stopAllForQuit()
+                    stoppedForQuit.append(Self.stoppedOperationsWords(running: running, suspending: suspending))
                     // Two jobs promise the file in flight is put back or
                     // settled before the process goes away — wait for
                     // whichever is active, bounded, and log what was seen.
@@ -372,24 +382,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// is generous, and past it the plan on disk names the file anyway.
     static let deleteDuplicatesStopDeadline: TimeInterval = 60
 
+    /// "2 file operations (Delete Duplicates suspended; its plan is kept)" —
+    /// what a cancelled quit's alert names as stopped (Codex #381 P2).
+    static func stoppedOperationsWords(running: Int, suspending: Bool) -> String {
+        "\(running) file operation\(running == 1 ? "" : "s")"
+            + (suspending ? " (Delete Duplicates suspended; its plan is kept)" : "")
+    }
+
     /// The common end of every `.terminateLater` path, once their jobs have
     /// settled: the dossier/VLM shutdown latch and drain, then the catalog's
     /// final commit (GH #356) — `.terminateCancel` when the commit failed and
     /// the person chose Keep Open. A quit that goes on still ends in
     /// willTerminate's checked save (the rescue copy when it cannot save).
+    /// A cancelled quit (Keep Open, or a rescue copy that could not be
+    /// written — Codex #381) reopens the caption / dossier shutdown latch;
+    /// what the quit already stopped stays stopped and the alerts say so.
     @MainActor
     private func finishQuit() async -> NSApplication.TerminateReply {
         captionOrchestrator?.beginShutdown()
-        await drainVLMForShutdownIfActive()
-        let proceed = await CatalogQuitRecovery.finalCommitBeforeQuit(model: catalogModel, ask: CatalogQuitRecovery.askWithAlert)
-        return proceed ? .terminateNow : .terminateCancel
+        if await drainVLMForShutdownIfActive() { stoppedForQuit.append("the caption / dossier batch") }
+        let decision = await CatalogQuitRecovery.finalCommitBeforeQuit(model: catalogModel, stopped: stoppedForQuit,
+                                                                      ask: CatalogQuitRecovery.askWithAlert, tell: CatalogQuitRecovery.tellWithAlert)
+        if case .quitWithRescue(let copy) = decision { quitRescue = copy }
+        guard decision.proceeds else {
+            captionOrchestrator?.endShutdown()
+            stoppedForQuit = []
+            appLog.write("quit cancelled — VideoScan stays open; the caption / dossier shutdown latch is reopened")
+            return .terminateCancel
+        }
+        return .terminateNow
     }
 
     /// The VLM drain, shared by the immediate quit path and the
     /// finish-this-file-first path. No-op when no batch is active.
-    @MainActor
-    private func drainVLMForShutdownIfActive() async {
-        guard let orch = captionOrchestrator, orch.currentStatus.isActive else { return }
+    /// True when a batch was active (it is cancelled now, drained or not).
+    @MainActor @discardableResult
+    private func drainVLMForShutdownIfActive() async -> Bool {
+        guard let orch = captionOrchestrator, orch.currentStatus.isActive else { return false }
         shutdownLogger.notice("quit requested with VLM batch active — draining (max \(Self.vlmDrainDeadline, format: .fixed(precision: 1))s)")
         appLog.write("shutdown: cancelling dossier/VLM batch, draining in-flight inference")
         let drained = await orch.drainForShutdown(deadline: Self.vlmDrainDeadline)
@@ -397,6 +426,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appLog.write(drained
             ? "shutdown: VLM drain completed"
             : "shutdown: VLM drain deadline expired — proceeding, _exit backstop covers teardown")
+        return true
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -435,7 +465,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // a recovery copy, and every branch is logged (codex 2026-10-17
             // round 2 P1/P2).
             if let model = catalogModel {
-                let outcome = CatalogQuitRecovery.saveAtTermination(model: model)
+                let outcome = CatalogQuitRecovery.saveAtTermination(model: model, rescued: quitRescue)
                 appLog.write("shutdown step: catalog — \(outcome)")
                 // GH #359 (QA r2-2): only after a file-stop — quarantine or
                 // checkpoint this session's -wal and say so; else a no-op.

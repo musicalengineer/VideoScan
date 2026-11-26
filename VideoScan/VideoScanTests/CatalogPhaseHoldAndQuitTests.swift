@@ -391,7 +391,7 @@ struct CatalogQuitRecoverySensorTests {
         #expect(app.components(separatedBy: "await self?.finishQuit() ?? .terminateNow").count == 4, "all three terminateLater paths")
         #expect(!app.contains("NSApp.reply(toApplicationShouldTerminate: true)"), "a path that replies without finishQuit skips the catalog's final commit")
         #expect(app.contains("if suspending || center.hasActivePruneApply {"))
-        #expect(app.contains("CatalogQuitRecovery.saveAtTermination(model: model)"))
+        #expect(app.contains("CatalogQuitRecovery.saveAtTermination(model: model, rescued: quitRescue)"))
         #expect(!app.contains("catalogModel?.saveCatalogNow()"))
         #expect(app.contains("catalogModel?.announceCatalogRecoveryCopies()"))
         for retired in ["ImportToSQLiteQuit", "activeImportToSQLite", "ImportToSQLiteJob"] {

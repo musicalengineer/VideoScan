@@ -42,11 +42,33 @@ public enum CatalogSpaceFloor: Sendable, Equatable {
         return Self.refusal(volume: Self.volume(holding: url), catalogBytes: Self.catalogBytes(url), thresholds: thresholds)
     }
 
+    /// Codex #381 P2: a sealed copy (`VACUUM INTO`, ~ the catalog's size)
+    /// onto the catalog's OWN disk takes the space the next save needs, so it
+    /// meets the same floor. A copy onto another disk (a backup bundle on an
+    /// external drive) is that disk's business — its own write fails if full.
+    /// Same disk = same `st_dev` of the two folders; a target folder whose
+    /// device can't be read counts as the catalog's (the conservative side —
+    /// VACUUM INTO into it would fail anyway).
+    func refusal(forCopyAt target: URL, ofDatabaseAt url: URL) -> String? {
+        guard case .preflight(let thresholds) = self,
+              Self.sameDevice(target.deletingLastPathComponent(), url.deletingLastPathComponent()) != false else { return nil }
+        return Self.refusal(volume: Self.volume(holding: url), catalogBytes: Self.catalogBytes(url), thresholds: thresholds,
+                            lead: "no copy was made", tail: "")
+    }
+
     /// The decision, pure (logic tests drive it with any disk they like).
-    static func refusal(volume: PreflightVolume?, catalogBytes: UInt64, thresholds: PreflightThresholds) -> String? {
+    static func refusal(volume: PreflightVolume?, catalogBytes: UInt64, thresholds: PreflightThresholds,
+                        lead: String = "nothing was saved", tail: String = " The changes are kept in memory.") -> String? {
         let verdict = PreflightGate.decide(.edit, catalogVolume: volume, catalogBytes: catalogBytes, thresholds: thresholds)
         guard case .refused(let words, _, _) = verdict else { return nil }
-        return "nothing was saved — not enough free space. \(words). The changes are kept in memory."
+        return "\(lead) — not enough free space. \(words).\(tail)"
+    }
+
+    /// true/false when both folders' devices read; nil when either can't.
+    static func sameDevice(_ a: URL, _ b: URL) -> Bool? {
+        var sa = stat(), sb = stat()
+        guard stat(a.path, &sa) == 0, stat(b.path, &sb) == 0 else { return nil }
+        return sa.st_dev == sb.st_dev
     }
 
     /// The volume holding `url`'s folder, from statfs(2); nil when it can't be read.

@@ -571,6 +571,11 @@ struct FixityStampVolumeIdentityTests {
             // instant just before the publish — "was the folder moved away",
             // never a stored stamp.
             "VideoScan/Volumes/VolumeCompare.swift": 1,
+            // Catalog free-space floor for a sealed copy (Codex #381 P2): two
+            // LIVE stats of the same instant — the copy's folder vs the
+            // catalog's folder — "is this copy on the catalog's own disk now".
+            // Never a stored stamp.
+            "VideoScanCore/Store/CatalogSpaceFloor.swift": 1,
             // (CatalogKnownCopies — STORED stamps — compares volume UUID +
             // inode, never st_dev: nightly 2026-10-12.)
         ]

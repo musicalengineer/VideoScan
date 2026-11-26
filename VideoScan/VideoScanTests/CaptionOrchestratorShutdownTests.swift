@@ -253,6 +253,27 @@ struct CaptionOrchestratorShutdownTests {
         #expect(orch.currentStatus == .idle, "Refused auto-resume must not flip status, got \(orch.currentStatus)")
     }
 
+    @Test("Keep Open (Codex #381 P2): endShutdown reopens the latch — a captioning start after a cancelled quit runs")
+    func endShutdownReopensTheLatch() async {
+        let (path, cleanup) = makeTmpVideo("vs-drain-keepopen.mp4")
+        defer { cleanup() }
+        let model = VideoScanModel()
+        model.records = [makeRecord(fullPath: path)]
+        let runner = CountingRunner()
+        let orch = CaptionOrchestrator(runnerFactory: { runner })
+
+        let target = CatalogScanTarget(searchPath: NSTemporaryDirectory())
+
+        orch.beginShutdown()
+        await orch.startCaptioning(target: target, model: model)
+        #expect(await runner.callCount() == 0, "the latch refuses while the quit is pending")
+        orch.endShutdown()                        // the person chose Keep Open
+        #expect(!orch.isShuttingDown)
+        await orch.startCaptioning(target: target, model: model)
+        let calls = await runner.callCount()
+        #expect(calls > 0, "after Keep Open a captioning start must run, got \(calls) call(s)")
+    }
+
     @Test("MLX usage flag round-trips and is reset-able")
     func mlxUsageFlagRoundTrip() {
         resetMLXInferenceUsedForTesting()

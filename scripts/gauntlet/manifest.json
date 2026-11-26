@@ -10316,6 +10316,7 @@
         "drainCancelsCooperativeBatch",
         "drainDeadlineExpiresOnStubbornEngine",
         "drainOnIdleIsImmediate",
+        "endShutdownReopensTheLatch",
         "mlxUsageFlagRoundTrip",
         "shutdownLatchRefusesNewBatches"
       ]
@@ -11530,13 +11531,17 @@
         "CatalogQuitCornerTests"
       ],
       "tests": [
+        "editAfterTheRescueGetsItsOwnCopy",
         "editInsideTheDebounceWindowLandsAtQuit",
+        "heldRowsAlreadyDurableAreNotRescued",
         "holdThatClearsIsWaitedOut",
         "holdThatStaysAsksAndKeepOpenKeepsTheEdit",
         "keepOpenChoiceNeedsTheCommitBeforeTerminate",
+        "keepOpenReopensTheShutdownLatch",
         "masterQuitWithFailedFinalCommit",
         "nothingAtRiskQuitsWithoutAQuestion",
         "refusedCommitAsksWithTheCommittersWords",
+        "rescueThatCannotBeWrittenKeepsVideoScanOpen",
         "roleFlipWithAcceptedEditAsksThenRescuesTheDelta",
         "viewerQuitSavesNothingAndSaysNothing"
       ]
@@ -37836,6 +37841,8 @@
         "CatalogSpaceFloorTests"
       ],
       "tests": [
+        "adoptRefusedBelowTheFloor",
+        "copyFloorAppliesOnlyOnTheCatalogDisk",
         "costPerWrite",
         "minimumFloor",
         "multipleOfCatalogAndWAL",
@@ -37843,6 +37850,7 @@
         "realReading",
         "refusalWords",
         "refusedThroughTheDoor",
+        "sealedCopyOnTheCatalogDiskRespectsTheFloor",
         "unreadableAndOff"
       ]
     },
@@ -43289,9 +43297,9 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 1061,
+      "expected_floor": 1065,
       "name": "regression",
-      "package_expected_floor": 363,
+      "package_expected_floor": 366,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",

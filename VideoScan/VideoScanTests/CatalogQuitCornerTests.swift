@@ -83,8 +83,13 @@ struct CatalogQuitCornerTests {
         let shouldTerminate = String(app[start.upperBound..<end.lowerBound])
         #expect(shouldTerminate.contains("CatalogQuitRecovery.quitNeedsNoQuestion(model: catalogModel)"),
                 "applicationShouldTerminate never tries the catalog's final commit")
-        #expect(shouldTerminate.contains("CatalogQuitRecovery.finalCommitBeforeQuit(model: catalogModel, ask: CatalogQuitRecovery.askWithAlert)"))
-        #expect(shouldTerminate.contains("return proceed ? .terminateNow : .terminateCancel"), "Keep Open must be able to cancel the quit")
+        #expect(shouldTerminate.contains("CatalogQuitRecovery.finalCommitBeforeQuit(model: catalogModel, stopped: stoppedForQuit,"))
+        #expect(shouldTerminate.contains("ask: CatalogQuitRecovery.askWithAlert, tell: CatalogQuitRecovery.tellWithAlert)"))
+        #expect(shouldTerminate.contains("guard decision.proceeds else {"), "Keep Open must be able to cancel the quit")
+        #expect(shouldTerminate.contains("if case .quitWithRescue(let copy) = decision { quitRescue = copy }"))
+        let app2 = try SourceTree.strippingComments(SourceTree.appSource(named: "VideoScanApp.swift"))
+        #expect(app2.contains("CatalogQuitRecovery.saveAtTermination(model: model, rescued: quitRescue)"),
+                "willTerminate must know the copy already written, or it writes a second one")
         let recovery = try SourceTree.strippingComments(SourceTree.appSource(named: "CatalogQuitRecovery.swift"))
         #expect(recovery.contains("return model.saveCatalogNow()"), "the fast path is the committer's synchronous commit")
         #expect(recovery.contains("alert.addButton(withTitle: \"Keep Open\")\n        alert.addButton(withTitle: \"Quit and Keep a Rescue Copy\")"),
@@ -102,7 +107,7 @@ struct CatalogQuitCornerTests {
         scene.model.setUserNotes("typed 0.1 s before Quit", for: try scene.record(.healthy))
         #expect(committer.isBusy, "the edit is inside the debounce window")
         let asked = AskLog()
-        let proceed = await CatalogQuitRecovery.finalCommitBeforeQuit(model: scene.model, holdWait: 1, ask: asked.answer(.keepOpen))
+        let proceed = await CatalogQuitRecovery.finalCommitBeforeQuit(model: scene.model, holdWait: 1, ask: asked.answer(.keepOpen), tell: asked.tell).proceeds
         #expect(proceed && asked.questions.isEmpty, "\(asked.questions)")
         #expect(try await scene.reloaded(.healthy).userNotes == "typed 0.1 s before Quit")
     }
@@ -120,7 +125,7 @@ struct CatalogQuitCornerTests {
             _ = store.releaseWriteHold()
         }
         let asked = AskLog()
-        let proceed = await CatalogQuitRecovery.finalCommitBeforeQuit(model: scene.model, holdWait: 5, ask: asked.answer(.keepOpen))
+        let proceed = await CatalogQuitRecovery.finalCommitBeforeQuit(model: scene.model, holdWait: 5, ask: asked.answer(.keepOpen), tell: asked.tell).proceeds
         #expect(proceed && asked.questions.isEmpty, "\(asked.questions)")
         #expect(scene.sandbox.catalogLogText().contains("a job holds catalog writes; waiting up to 5 s"))
         #expect(try await scene.reloaded(.healthy).userNotes == "typed while a job held writes")
@@ -137,7 +142,7 @@ struct CatalogQuitCornerTests {
         #expect(await store.holdWrites(reason: "a test job", owner: CatalogWriteHoldOwner()) == .taken)
         scene.model.setUserNotes("typed while the hold stayed", for: try scene.record(.healthy))
         let asked = AskLog()
-        let proceed = await CatalogQuitRecovery.finalCommitBeforeQuit(model: scene.model, holdWait: 0.3, ask: asked.answer(.keepOpen))
+        let proceed = await CatalogQuitRecovery.finalCommitBeforeQuit(model: scene.model, holdWait: 0.3, ask: asked.answer(.keepOpen), tell: asked.tell).proceeds
         #expect(!proceed, "Keep Open must cancel the quit")
         let question = try #require(asked.questions.first)
         #expect(question.changes == 1 && question.message == "VideoScan couldn't save 1 change", "\(question)")
@@ -160,13 +165,13 @@ struct CatalogQuitCornerTests {
         try Data("99\n".utf8).write(to: CatalogHighWater.url(besideDatabaseAt: scene.databaseURL))
         scene.model.setUserNotes("typed before a refused quit", for: try scene.record(.healthy))
         let asked = AskLog()
-        let proceed = await CatalogQuitRecovery.finalCommitBeforeQuit(model: scene.model, holdWait: 1, ask: asked.answer(.keepOpen))
+        let proceed = await CatalogQuitRecovery.finalCommitBeforeQuit(model: scene.model, holdWait: 1, ask: asked.answer(.keepOpen), tell: asked.tell).proceeds
         #expect(!proceed)
         let question = try #require(asked.questions.first)
         #expect(question.words.contains("another writer published generation 99"), Comment(rawValue: question.words))
         #expect(question.changes == 1, "\(question)")
         let attempts = committer.commitCount
-        #expect(await CatalogQuitRecovery.finalCommitBeforeQuit(model: scene.model, holdWait: 1, ask: asked.answer(.quitKeepingRescueCopy)))
+        #expect(await CatalogQuitRecovery.finalCommitBeforeQuit(model: scene.model, holdWait: 1, ask: asked.answer(.quitKeepingRescueCopy), tell: asked.tell).proceeds)
         #expect(committer.commitCount == attempts, "fail-fast: a second quit asks again but writes nothing")
         #expect(try await scene.reloaded(.healthy).userNotes == before)
     }
@@ -182,13 +187,102 @@ struct CatalogQuitCornerTests {
         scene.model.applyReadOnlyMode(true)                        // the commit before the flip is refused
         try #require(scene.model.unsavedFromWritableSession != nil)
         let asked = AskLog()
-        let proceed = await CatalogQuitRecovery.finalCommitBeforeQuit(model: scene.model, holdWait: 1, ask: asked.answer(.quitKeepingRescueCopy))
-        #expect(proceed && asked.questions.count == 1, "\(asked.questions)")
-        let outcome = CatalogQuitRecovery.saveAtTermination(model: scene.model, writerDeadline: 5)
+        let decided = await CatalogQuitRecovery.finalCommitBeforeQuit(model: scene.model, holdWait: 1, ask: asked.answer(.quitKeepingRescueCopy), tell: asked.tell)
+        #expect(decided.proceeds && asked.questions.count == 1, "\(asked.questions)")
+        guard case .quitWithRescue(let rescue) = decided else { Issue.record("\(decided)"); return }
+        let outcome = CatalogQuitRecovery.saveAtTermination(model: scene.model, writerDeadline: 5, rescued: rescue)
         guard case .recoveryCopy(let copy) = outcome else { Issue.record("\(outcome)"); return }
+        #expect(copy == rescue.url, "willTerminate wrote a second copy")
         #expect(try Self.recordCount(copy) == 1)
         #expect(try String(contentsOf: copy, encoding: .utf8).contains("typed just before the role flip"))
         #expect(try await scene.reloaded(.healthy).userNotes == before)
+    }
+
+    // MARK: - Codex #381 (round 2)
+
+    @Test("P1 (Codex #381): the commit fails AND the rescue copy cannot be written (read-only folder) — Quit and Keep a Rescue Copy does NOT terminate; nothing written; the edit stays in memory")
+    func rescueThatCannotBeWrittenKeepsVideoScanOpen() async throws {
+        let scene = try CutoverScene.make("corner_quit_rescue_fails")
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scene.folder.path)
+            scene.cleanup()
+        }
+        try await scene.launchOnSQLite()
+        #expect(scene.model.saveCatalogNow())
+        try Data("99\n".utf8).write(to: CatalogHighWater.url(besideDatabaseAt: scene.databaseURL))
+        scene.model.setUserNotes("nowhere to go", for: try scene.record(.healthy))
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: scene.folder.path)
+        let asked = AskLog()
+        let refused = await CatalogQuitRecovery.finalCommitBeforeQuit(model: scene.model, holdWait: 1, ask: asked.answer(.quitKeepingRescueCopy), tell: asked.tell)
+        #expect(refused == .stayOpen, "the rescue copy was never written, yet the quit went on: \(refused)")
+        #expect(CornerFiles.names(in: scene.folder, prefix: CatalogQuitRecovery.filePrefix).isEmpty)
+        #expect(try scene.record(.healthy).userNotes == "nowhere to go", "the edit must stay in memory")
+        let told = try #require(asked.told.first, "the person must be told VideoScan stays open")
+        #expect(told.message == "VideoScan couldn't save the changes or a rescue copy — VideoScan stays open")
+        #expect(told.information.contains("The change is kept in memory"), Comment(rawValue: told.information))
+        #expect(told.words.contains("the recovery copy also failed"), Comment(rawValue: told.words))
+        let log = scene.sandbox.catalogLogText()
+        #expect(log.contains("OUTCOME recovery copy FAILED"), Comment(rawValue: log))
+        #expect(log.contains("quit cancelled — VideoScan couldn't save the changes or a rescue copy"), Comment(rawValue: log))
+
+        // The cause is fixed (the folder writable again): the rescue is written NOW, before the quit goes on,
+        // read back, and willTerminate writes no second copy.
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scene.folder.path)
+        let decided = await CatalogQuitRecovery.finalCommitBeforeQuit(model: scene.model, holdWait: 1, ask: asked.answer(.quitKeepingRescueCopy), tell: asked.tell)
+        guard case .quitWithRescue(let copy) = decided else { Issue.record("expected a written rescue, got \(decided)"); return }
+        #expect(FileManager.default.fileExists(atPath: copy.url.path), "approved before the copy existed")
+        #expect(try Self.recordCount(copy.url) == 1)
+        #expect(try String(contentsOf: copy.url, encoding: .utf8).contains("nowhere to go"))
+        let outcome = CatalogQuitRecovery.saveAtTermination(model: scene.model, writerDeadline: 5, rescued: copy)
+        #expect(outcome == .recoveryCopy(copy.url), "\(outcome)")
+        #expect(CornerFiles.names(in: scene.folder, prefix: CatalogQuitRecovery.filePrefix).count == 1, "a second copy at exit")
+        #expect(asked.told.count == 1)
+    }
+
+    @Test("P1 (Codex #381): an edit made after the rescue copy was written is not lost — willTerminate writes a fresh copy holding it")
+    func editAfterTheRescueGetsItsOwnCopy() async throws {
+        let scene = try CutoverScene.make("corner_quit_rescue_then_edit"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        #expect(scene.model.saveCatalogNow())
+        try Data("99\n".utf8).write(to: CatalogHighWater.url(besideDatabaseAt: scene.databaseURL))
+        scene.model.setUserNotes("before the rescue", for: try scene.record(.healthy))
+        let asked = AskLog()
+        let decided = await CatalogQuitRecovery.finalCommitBeforeQuit(model: scene.model, holdWait: 1, ask: asked.answer(.quitKeepingRescueCopy), tell: asked.tell)
+        guard case .quitWithRescue(let copy) = decided else { Issue.record("\(decided)"); return }
+        scene.model.setUserNotes("after the rescue", for: try scene.record(.healthy))
+        let outcome = CatalogQuitRecovery.saveAtTermination(model: scene.model, writerDeadline: 5, rescued: copy)
+        guard case .recoveryCopy(let fresh) = outcome else { Issue.record("\(outcome)"); return }
+        #expect(try String(contentsOf: fresh, encoding: .utf8).contains("after the rescue"), "the late edit is in no copy")
+        #expect(fresh != copy.url, "the fresh copy overwrote the first")
+        #expect(try String(contentsOf: copy.url, encoding: .utf8).contains("before the rescue"))
+    }
+
+    @Test("P2 (Codex #381): a new row already durable in pending_rows is not 'unsaved' — after one failed edit the rescue holds that edit only")
+    func heldRowsAlreadyDurableAreNotRescued() async throws {
+        let scene = try CutoverScene.make("corner_quit_held_durable"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        let committer = try #require(scene.model.catalogCutover.committer)
+        let fresh = try scene.freshCopy(of: .healthy, path: "/Volumes/Fixture/New/held-by-pending-rows.mov")
+        scene.model.records.append(fresh)
+        #expect(scene.model.saveCatalogNow(), "a held row is durable")
+        #expect(committer.heldIDs == [fresh.id])
+        #expect(committer.changedRecordCount() == 0, "the held row is durable at its payload: nothing is unsaved")
+        try Data("99\n".utf8).write(to: CatalogHighWater.url(besideDatabaseAt: scene.databaseURL))
+        let healthy = try scene.record(.healthy)
+        scene.model.setUserNotes("the one failed edit", for: healthy)
+        #expect(scene.model.saveCatalogNow() == false)
+        #expect(committer.unsavedRecords().map(\.id) == [healthy.id], "rescue = the failed edit only, not the pending set")
+        fresh.userNotes = "edited after it was held"
+        #expect(Set(committer.unsavedRecords().map(\.id)) == [healthy.id, fresh.id], "a held row edited since is not durable")
+    }
+
+    @Test("P2 (Codex #381) SENSOR: Keep Open reopens the dossier/VLM shutdown latch — finishQuit's cancel path calls endShutdown()")
+    func keepOpenReopensTheShutdownLatch() throws {
+        let app = try SourceTree.strippingComments(SourceTree.appSource(named: "VideoScanApp.swift"))
+        let start = try #require(app.range(of: "private func finishQuit("))
+        let end = try #require(app.range(of: "private func drainVLMForShutdownIfActive(", range: start.upperBound..<app.endIndex))
+        let finish = String(app[start.upperBound..<end.lowerBound])
+        #expect(finish.contains("captionOrchestrator?.endShutdown()"), "Keep Open leaves isShuttingDown latched")
     }
 
     @Test("Keep Open: a viewer (read-only, nothing accepted) and a session with nothing changed quit with no question")
@@ -197,10 +291,10 @@ struct CatalogQuitCornerTests {
         try await scene.launchOnSQLite()
         #expect(scene.model.saveCatalogNow())
         let asked = AskLog()
-        #expect(await CatalogQuitRecovery.finalCommitBeforeQuit(model: scene.model, holdWait: 1, ask: asked.answer(.keepOpen)))
+        #expect(await CatalogQuitRecovery.finalCommitBeforeQuit(model: scene.model, holdWait: 1, ask: asked.answer(.keepOpen), tell: asked.tell).proceeds)
         scene.model.applyReadOnlyMode(true)
-        #expect(await CatalogQuitRecovery.finalCommitBeforeQuit(model: scene.model, holdWait: 1, ask: asked.answer(.keepOpen)))
-        #expect(await CatalogQuitRecovery.finalCommitBeforeQuit(model: nil, holdWait: 1, ask: asked.answer(.keepOpen)))
+        #expect(await CatalogQuitRecovery.finalCommitBeforeQuit(model: scene.model, holdWait: 1, ask: asked.answer(.keepOpen), tell: asked.tell).proceeds)
+        #expect(await CatalogQuitRecovery.finalCommitBeforeQuit(model: nil, holdWait: 1, ask: asked.answer(.keepOpen), tell: asked.tell).proceeds)
         #expect(asked.questions.isEmpty, "\(asked.questions)")
     }
 
@@ -243,6 +337,8 @@ struct CatalogQuitCornerTests {
     /// The questions the quit asked, and a fixed answer (the alert's stand-in).
     @MainActor final class AskLog {
         private(set) var questions: [CatalogQuitRecovery.QuitQuestion] = []
+        private(set) var told: [CatalogQuitRecovery.RescueFailure] = []
+        var tell: (CatalogQuitRecovery.RescueFailure) -> Void { { [self] failure in told.append(failure) } }
         func answer(_ choice: CatalogQuitRecovery.QuitChoice) -> (CatalogQuitRecovery.QuitQuestion) -> CatalogQuitRecovery.QuitChoice {
             { [self] question in questions.append(question); return choice }
         }

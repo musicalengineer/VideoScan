@@ -135,6 +135,66 @@ struct CatalogSpaceFloorTests {
         #expect(fixture.highWaterText() == "3")
     }
 
+    @Test("SENSOR (Codex #381 P2): Adopt is a write too — below the floor it refuses before any witness or row moves; generation and witnesses unchanged")
+    func adoptRefusedBelowTheFloor() async throws {
+        let fixture = try await StoreFixture.make(.grdb, generation: 5)
+        defer { fixture.remove() }
+        try fixture.writeHighWater("6")                       // restored beneath this Mac's witness
+        var unreachable = PreflightThresholds()
+        unreachable.editHoldFloorBytes = .max
+        let repository = GRDBCatalogRepository(host: "test-host", durability: .volatileForTests, spaceFloor: .preflight(unreachable))
+        guard case .readOnly = await repository.open(at: fixture.url) else {
+            Issue.record("generation 5 beneath witness 6 must open read-only"); await repository.close(); return
+        }
+        let ledgerBefore = fixture.highWaterLogText()
+        let adopted = await repository.adopt(toHighWater: 6)
+        let generation = await repository.generation
+        await repository.close()
+        guard case .refused(let words) = adopted else { Issue.record("below the floor Adopt wrote: \(adopted)"); return }
+        #expect(words.contains("not enough free space"), Comment(rawValue: words))
+        #expect(generation == 5, "the database moved")
+        #expect(fixture.highWaterText() == "6", "the sidecar moved")
+        #expect(fixture.highWaterLogText() == ledgerBefore, "the ledger moved")
+    }
+
+    @Test("SENSOR (Codex #381 P2): a sealed copy (VACUUM INTO) onto the catalog's own disk is refused below the floor, with no file made; a copy is allowed when the floor is met")
+    func sealedCopyOnTheCatalogDiskRespectsTheFloor() async throws {
+        let fixture = try await StoreFixture.make(.grdb, generation: 2)
+        defer { fixture.remove() }
+        var unreachable = PreflightThresholds()
+        unreachable.editHoldFloorBytes = .max
+        let starved = GRDBCatalogRepository(host: "test-host", durability: .volatileForTests, spaceFloor: .preflight(unreachable))
+        try #require(await starved.open(at: fixture.url) == .readWrite)
+        let target = fixture.url.deletingLastPathComponent().appendingPathComponent("safety.sqlite")
+        let refused = starved.sealedCopyBlocking(to: target)
+        await starved.close()
+        #expect(refused?.contains("not enough free space") == true, Comment(rawValue: refused ?? "nil"))
+        #expect(!FileManager.default.fileExists(atPath: target.path), "a copy was made below the floor")
+
+        let normal = GRDBCatalogRepository(host: "test-host", durability: .volatileForTests, spaceFloor: .offForTests)
+        try #require(await normal.open(at: fixture.url) == .readWrite)
+        let allowed = target.deletingLastPathComponent().appendingPathComponent("safety-allowed.sqlite")
+        #expect(normal.sealedCopyBlocking(to: allowed) == nil)
+        await normal.close()
+        #expect(FileManager.default.fileExists(atPath: allowed.path))
+    }
+
+    @Test("LOGIC: the copy floor applies on the catalog's own disk (same device, or a device that can't be read) and not on another disk")
+    func copyFloorAppliesOnlyOnTheCatalogDisk() throws {
+        let folder = try StoreFixture.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let database = folder.appendingPathComponent("catalog.sqlite")
+        var unreachable = PreflightThresholds()
+        unreachable.editHoldFloorBytes = .max
+        let floor = CatalogSpaceFloor.preflight(unreachable)
+        #expect(floor.refusal(forCopyAt: folder.appendingPathComponent("copy.sqlite"), ofDatabaseAt: database)?
+            .hasPrefix("no copy was made — not enough free space.") == true)
+        #expect(floor.refusal(forCopyAt: URL(fileURLWithPath: "/no/such/folder/copy.sqlite"), ofDatabaseAt: database) != nil)
+        #expect(CatalogSpaceFloor.offForTests.refusal(forCopyAt: folder.appendingPathComponent("copy.sqlite"), ofDatabaseAt: database) == nil)
+        // A different device: /dev is devfs on every Mac, never the temp folder's volume.
+        #expect(floor.refusal(forCopyAt: URL(fileURLWithPath: "/dev/copy.sqlite"), ofDatabaseAt: database) == nil)
+    }
+
     /// Records whether a write's body ran (it runs on GRDB's writer queue).
     final class BodyRan: @unchecked Sendable {
         private let lock = NSLock()

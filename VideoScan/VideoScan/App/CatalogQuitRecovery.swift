@@ -11,6 +11,15 @@
 //     writes, wait up to `holdWait` (~10 s) for it to let go; if it still
 //     fails, "VideoScan couldn't save N changes: <the committer's words>"
 //     with [Keep Open] (default) and [Quit and Keep a Rescue Copy].
+//   * Quit and Keep a Rescue Copy writes the copy THEN, while the quit can
+//     still be cancelled, and approves the quit only once it is durable
+//     (published with a full fsync, read back byte-equal). If the copy
+//     fails too, the quit is CANCELLED: "couldn't save the changes or a
+//     rescue copy — VideoScan stays open", the edits in memory (Codex #381
+//     P1). willTerminate writes no second copy when nothing changed since.
+//   * A cancelled quit (either way) reopens the caption / dossier shutdown
+//     latch; work the quit already stopped is named in the alerts as not
+//     restarted (Codex #381 P2).
 //   * Under catalog.sqlite the copy holds ONLY the unsaved records (the
 //     committer's delta) and the generation they were based on — never the
 //     whole catalog (5 of 5 records when 1 changed, GH #356). Under the JSON
@@ -107,12 +116,22 @@ enum CatalogQuitRecovery {
 
     nonisolated static let filePrefix = "catalog.recovery-"
 
-    /// `catalog.recovery-<stamp>.json` beside `catalogURL`.
+    /// `catalog.recovery-<stamp>.json` beside `catalogURL` — `-2`, `-3` … when
+    /// a copy of that second is already there (a copy before the quit and a
+    /// fresher one at exit never overwrite each other).
     static func url(besideCatalog catalogURL: URL, now: Date = Date()) -> URL {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyyMMdd-HHmmss"
-        return catalogURL.deletingLastPathComponent().appendingPathComponent(filePrefix + formatter.string(from: now) + ".json")
+        let folder = catalogURL.deletingLastPathComponent()
+        let stem = filePrefix + formatter.string(from: now)
+        var candidate = folder.appendingPathComponent(stem + ".json")
+        var n = 2
+        while FileManager.default.fileExists(atPath: candidate.path), n < 1_000 {
+            candidate = folder.appendingPathComponent("\(stem)-\(n).json")
+            n += 1
+        }
+        return candidate
     }
 
     /// The quit path's last resort, for `applicationWillTerminate`
@@ -123,11 +142,19 @@ enum CatalogQuitRecovery {
     /// it 2026-10-20.)
     /// Private: `saveAtTermination` is the one caller, after its read-only gate.
     private static func writeCopyBlocking(model: VideoScanModel, because: String, changes: Int,
-                                          within seconds: TimeInterval) -> SaveOutcome {
+                                          within seconds: TimeInterval, rescued earlier: RescueCopy?) -> SaveOutcome {
         let catalogURL = URL(fileURLWithPath: model.catalogStore.fileLocation)
         let target = url(besideCatalog: catalogURL)
         let sqlite = latchNamesSQLite(besideCatalog: catalogURL)
         let rescued = rescueRecords(model)
+        // Codex #381 P1: the copy was written (and read back) while the quit
+        // could still be cancelled; when nothing changed since, it IS the
+        // rescue — no second file.
+        if let earlier, earlier.holds(rescued) {
+            model.catalogQuitNote("OUTCOME recovery copy already written before the quit — \(earlier.url.path); "
+                + "nothing changed since, so no second copy. " + useWords(sqlite: sqlite))
+            return .recoveryCopy(earlier.url)
+        }
         model.catalogQuitNote(startLine(model, rescued: rescued.count, because: because, target: target, sqlite: sqlite))
         let write = model.catalogStore.recoveryCopyWriter(records: rescued, generation: model.catalogGenerationForStamp)
         let box = ResultBox()
@@ -192,8 +219,10 @@ enum CatalogQuitRecovery {
     /// within the bound (else the synchronous save is skipped — it would
     /// block the main thread behind the stalled writer); a save that fails
     /// is followed by the recovery copy. Every branch is logged.
+    /// `rescued`: the copy `finalCommitBeforeQuit` already wrote, if any.
     static func saveAtTermination(model: VideoScanModel,
-                                  writerDeadline: TimeInterval = CatalogQuitRecovery.writerDeadline) -> SaveOutcome {
+                                  writerDeadline: TimeInterval = CatalogQuitRecovery.writerDeadline,
+                                  rescued: RescueCopy? = nil) -> SaveOutcome {
         // A read-only session saves nothing by design — no copy (a viewer
         // never writes one). Its refused commit is not data at risk.
         let store = model.catalogStore
@@ -204,7 +233,7 @@ enum CatalogQuitRecovery {
             if let why = model.unsavedFromWritableSession, (model.catalogCutover.committer?.changedRecordCount() ?? 1) > 0 {
                 let words = "changes accepted while this session was writable did not reach catalog.sqlite (\(why)); now \(readOnly)"
                 model.catalogQuitNote("app exit — \(words) — writing a recovery copy")
-                return writeCopyBlocking(model: model, because: words, changes: max(pending, 1), within: writerDeadline)
+                return writeCopyBlocking(model: model, because: words, changes: max(pending, 1), within: writerDeadline, rescued: rescued)
             }
             model.catalogQuitNote("app exit — \(readOnly); nothing is saved this session, so no recovery copy is written")
             return .readOnlySession(words: readOnly)
@@ -212,12 +241,12 @@ enum CatalogQuitRecovery {
         guard store.writeQueueDrainsBlocking(within: writerDeadline) else {
             let words = "a catalog save has not finished within \(writerDeadline.quitWords) s (the writer is stalled)"
             model.catalogQuitNote("app exit — \(words); the synchronous save is SKIPPED — writing a recovery copy instead")
-            return writeCopyBlocking(model: model, because: words, changes: max(pending, 1), within: writerDeadline)
+            return writeCopyBlocking(model: model, because: words, changes: max(pending, 1), within: writerDeadline, rescued: rescued)
         }
         if model.saveCatalogNow() { return .saved }
         let words = "the catalog could not be saved: \(failureWords(model))"
         model.catalogQuitNote("app exit — \(words) — writing a recovery copy")
-        return writeCopyBlocking(model: model, because: words, changes: max(pending, 1), within: writerDeadline)
+        return writeCopyBlocking(model: model, because: words, changes: max(pending, 1), within: writerDeadline, rescued: rescued)
     }
 
     // MARK: - applicationShouldTerminate (GH #356)
@@ -228,10 +257,13 @@ enum CatalogQuitRecovery {
 
     /// What the person is asked when the quit's final commit fails.
     struct QuitQuestion: Equatable {
-        /// Records whose current state is not in catalog.sqlite.
+        /// Records whose current state is durable nowhere in catalog.sqlite.
         let changes: Int
         /// The committer's words for why (never "unknown").
         let words: String
+        /// Work the quit already stopped (file operations, a caption /
+        /// dossier batch) — Keep Open does not restart it (Codex #381 P2).
+        var stopped: [String] = []
 
         var message: String {
             changes == 0 ? "VideoScan couldn't save your last changes"
@@ -243,7 +275,30 @@ enum CatalogQuitRecovery {
                 + "Keep Open leaves VideoScan running with the changes in memory, so you can fix the cause and save them. "
                 + "Quit and Keep a Rescue Copy writes them to a file beside the catalog (catalog.recovery-….json); "
                 + "they are not in the catalog, and the next launch says where the copy is."
+                + CatalogQuitRecovery.stoppedWords(stopped)
         }
+    }
+
+    /// Codex #381 P1: the rescue copy could not be written, so the quit is
+    /// cancelled — what the person is told.
+    struct RescueFailure: Equatable {
+        let changes: Int
+        /// The commit's words and the copy's.
+        let words: String
+        var stopped: [String] = []
+
+        var message: String { "VideoScan couldn't save the changes or a rescue copy — VideoScan stays open" }
+
+        var information: String {
+            "\(words.prefix(1).uppercased())\(words.dropFirst()).\n\n"
+                + (changes == 1 ? "The change is" : changes == 0 ? "Your last changes are" : "The \(changes) changes are")
+                + " kept in memory. Free space on the catalog's disk, or fix the cause above, then save or quit again."
+                + CatalogQuitRecovery.stoppedWords(stopped)
+        }
+    }
+
+    nonisolated static func stoppedWords(_ stopped: [String]) -> String {
+        stopped.isEmpty ? "" : "\n\nStopped for the quit, and not restarted by staying open: \(stopped.joined(separator: "; "))."
     }
 
     enum QuitChoice: Equatable {
@@ -251,15 +306,55 @@ enum CatalogQuitRecovery {
         case quitKeepingRescueCopy
     }
 
+    /// A rescue copy written — fsync'd and read back — while the quit could
+    /// still be cancelled, and exactly what it holds (id → fingerprint), so
+    /// willTerminate writes no second copy when nothing changed since.
+    struct RescueCopy: Equatable {
+        let url: URL
+        let prints: [UUID: CatalogChangeDetector.Fingerprint]
+
+        init(url: URL, records: [VideoRecord]) {
+            self.url = url
+            prints = Self.prints(of: records)
+        }
+
+        func holds(_ records: [VideoRecord]) -> Bool { Self.prints(of: records) == prints }
+
+        private static func prints(of records: [VideoRecord]) -> [UUID: CatalogChangeDetector.Fingerprint] {
+            let fingerprints = CatalogChangeDetector.fingerprints(of: records.map(VideoRecordDTO.init))
+            return Dictionary(zip(records.map(\.id), fingerprints), uniquingKeysWith: { first, _ in first })
+        }
+    }
+
+    /// What the quit comes to, decided while it can still be cancelled.
+    enum QuitDecision: Equatable {
+        /// Saved, nothing at risk, or no committer: the quit goes on.
+        case quit
+        /// The person chose the rescue copy and it is durable: the quit goes on.
+        case quitWithRescue(RescueCopy)
+        /// Keep Open, or the rescue copy failed: VideoScan stays open.
+        case stayOpen
+
+        var proceeds: Bool { self != .stayOpen }
+    }
+
     /// The quit's final commit, tried while the quit can still be cancelled.
-    /// True = the quit may go on (saved, nothing to save, no committer, or the
-    /// person chose Quit and Keep a Rescue Copy — willTerminate then writes
-    /// it); false = Keep Open. `ask` is the alert (`askWithAlert`); tests
-    /// pass their own. Every branch is one line through the quit's sink.
+    /// `.quit` = saved, nothing to save, or no committer; `.quitWithRescue` =
+    /// the person chose Quit and Keep a Rescue Copy and the copy is written
+    /// NOW — published with a full fsync and read back — before the quit is
+    /// approved (Codex #381 P1); `.stayOpen` = Keep Open, or the copy could
+    /// not be written (then `tell` says so: "couldn't save the changes or a
+    /// rescue copy — VideoScan stays open"; the edits stay in memory).
+    /// `ask` / `tell` are the alerts (`askWithAlert` / `tellWithAlert`);
+    /// tests pass their own. `stopped`: work the quit already stopped, named
+    /// in both alerts. Every branch is one line through the quit's sink.
     static func finalCommitBeforeQuit(model: VideoScanModel?, holdWait: TimeInterval = CatalogQuitRecovery.holdWait,
-                                      ask: (QuitQuestion) -> QuitChoice) async -> Bool {
-        guard let model, let committer = model.catalogCutover.committer else { return true }
-        if quitNeedsNoQuestion(model: model) { return true }
+                                      rescueWithin: TimeInterval = CatalogQuitRecovery.writerDeadline,
+                                      stopped: [String] = [],
+                                      ask: (QuitQuestion) -> QuitChoice,
+                                      tell: (RescueFailure) -> Void) async -> QuitDecision {
+        guard let model, let committer = model.catalogCutover.committer else { return .quit }
+        if quitNeedsNoQuestion(model: model) { return .quit }
         if committer.isHeldByJob {
             model.catalogQuitNote("quit — a job holds catalog writes; waiting up to \(holdWait.quitWords) s for it to let go")
             let deadline = Date().addingTimeInterval(holdWait)
@@ -268,16 +363,54 @@ enum CatalogQuitRecovery {
             }
             if model.saveCatalogNow() {
                 model.catalogQuitNote("quit — the hold cleared and the final commit landed")
-                return true
+                return .quit
             }
         }
-        let question = QuitQuestion(changes: committer.changedRecordCount(), words: failureWords(model))
+        let question = QuitQuestion(changes: committer.changedRecordCount(), words: failureWords(model), stopped: stopped)
         model.catalogQuitNote("quit — \(question.message): \(question.words) — asking Keep Open / Quit and Keep a Rescue Copy")
-        let choice = ask(question)
-        model.catalogQuitNote(choice == .keepOpen
-            ? "quit cancelled — Keep Open: the changes stay in memory"
-            : "quit — Quit and Keep a Rescue Copy: the unsaved changes go to a recovery copy at exit")
-        return choice == .quitKeepingRescueCopy
+        guard ask(question) == .quitKeepingRescueCopy else {
+            model.catalogQuitNote("quit cancelled — Keep Open: the changes stay in memory")
+            return .stayOpen
+        }
+        model.catalogQuitNote("quit — Quit and Keep a Rescue Copy: writing the unsaved changes to a recovery copy before the quit goes on")
+        let because = "the catalog could not be saved: \(question.words)"
+        let (written, copy) = await writeRescueBeforeQuit(model: model, because: because, changes: question.changes, within: rescueWithin)
+        if case .recoveryCopy = written { return .quitWithRescue(copy) }
+        // Anything but a durable copy cancels the quit (`outcome` gives only
+        // .recoveryCopy or .unsaved; the default words are a backstop).
+        var words = "\(because); the recovery copy was not written"
+        if case .unsaved(let said, _) = written { words = said }
+        let failure = RescueFailure(changes: question.changes, words: words, stopped: stopped)
+        model.catalogQuitNote("quit cancelled — \(failure.message): \(words). The changes stay in memory.")
+        tell(failure)
+        return .stayOpen
+    }
+
+    /// The rescue copy, awaited (the main actor stays free: the encode and
+    /// publish run on a global queue) and BOUNDED by `seconds` — a stalled
+    /// volume counts as a failed copy and the quit is cancelled. A write
+    /// that finishes after the bound leaves a file the words called failed:
+    /// the conservative side (VideoScan stays open with the edits).
+    /// The `RescueCopy` fingerprints are taken in the same main-actor turn
+    /// as the payload, before the await — what the file holds, even if a
+    /// record changes while the copy is written.
+    /// Memory: the payload of the unsaved records only (GH #356) plus, for
+    /// the read-back, one copy of its bytes — two × (unsaved records × ~2 KB).
+    private static func writeRescueBeforeQuit(model: VideoScanModel, because: String, changes: Int,
+                                              within seconds: TimeInterval) async -> (SaveOutcome, RescueCopy) {
+        let catalogURL = URL(fileURLWithPath: model.catalogStore.fileLocation)
+        let target = url(besideCatalog: catalogURL)
+        let sqlite = latchNamesSQLite(besideCatalog: catalogURL)
+        let rescued = rescueRecords(model)
+        model.catalogQuitNote(startLine(model, rescued: rescued.count, because: because, target: target, sqlite: sqlite))
+        let write = model.catalogStore.recoveryCopyWriter(records: rescued, generation: model.catalogGenerationForStamp)
+        let copy = RescueCopy(url: target, records: rescued)
+        // (For Rick: a future fulfilled by a worker thread or by a timer,
+        // whichever is first — `OnceResume.race`.)
+        let failure: String? = await OnceResume<String?>.race(within: seconds, timeout: "it did not finish within \(seconds.quitWords) s") { once in
+            DispatchQueue.global(qos: .userInitiated).async { once.resume(write(target)) }
+        }
+        return (outcome(model, failure: failure, target: target, because: because, changes: changes, sqlite: sqlite), copy)
     }
 
     /// Synchronous fast path: true when the quit needs no question — the
@@ -302,6 +435,16 @@ enum CatalogQuitRecovery {
         alert.addButton(withTitle: "Keep Open")
         alert.addButton(withTitle: "Quit and Keep a Rescue Copy")
         return alert.runModal() == .alertFirstButtonReturn ? .keepOpen : .quitKeepingRescueCopy
+    }
+
+    /// The production notice when the rescue copy failed: VideoScan stays open.
+    static func tellWithAlert(_ failure: RescueFailure) {
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = failure.message
+        alert.informativeText = failure.information
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 
     /// GH #359 (QA r2-2), at quit and ONLY after a file-stop: close the store

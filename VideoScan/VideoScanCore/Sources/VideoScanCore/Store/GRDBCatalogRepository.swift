@@ -681,12 +681,21 @@ public actor GRDBCatalogRepository: CatalogRepository {
     /// file, labelled as the catalog — refused in the stop's words, checked
     /// first and again on the writer queue just before VACUUM INTO.
     public nonisolated func sealedCopyBlocking(to target: URL) -> String? {
-        guard let pool = gate.state.pool else { return "catalog.sqlite is not open" }
+        let open = gate.state
+        guard let pool = open.pool else { return "catalog.sqlite is not open" }
         if let words = fileStopWords { return words }
         guard !FileManager.default.fileExists(atPath: target.path) else { return "\(target.lastPathComponent) already exists" }
+        let floor = spaceFloor
+        let databaseURL = open.databaseURL
         do {
             return try pool.writeWithoutTransaction { db -> String? in
                 if let words = fileStopWords { return words }
+                // Codex #381 P2: a copy onto the catalog's own disk meets the
+                // free-space floor (on the writer queue, just before it writes).
+                if let databaseURL, let words = floor.refusal(forCopyAt: target, ofDatabaseAt: databaseURL) {
+                    storeLog.error("catalog store REFUSED a sealed copy below the free-space floor: \(words, privacy: .public)")
+                    return words
+                }
                 try db.execute(sql: "VACUUM INTO ?", arguments: [target.path])
                 return nil
             }
@@ -960,6 +969,13 @@ public actor GRDBCatalogRepository: CatalogRepository {
         // GH #359: an adopt writes the witnesses and the database — never
         // beside, or into, a file that is not the one this session opened.
         if let words = session.fileStop(fileGuard) { return .refused(reason: words) }
+        // Codex #381 P2 (GH #357): an adopt is a write — it raises both
+        // witnesses and commits a generation jump — so it meets the same
+        // free-space floor, BEFORE any witness moves.
+        if let words = spaceFloor.refusal(forDatabaseAt: databaseURL) {
+            storeLog.error("catalog store REFUSED Adopt below the free-space floor: \(words, privacy: .public)")
+            return .refused(reason: words)
+        }
         let from = session.generation
         guard highWater > from else {
             return .refused(reason: "nothing to adopt: generation \(from) is not below \(highWater)")
