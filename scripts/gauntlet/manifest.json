@@ -18253,7 +18253,10 @@
       ],
       "tests": [
         "aByteCopyOfADerivativeInheritsTheDerivativesPlace",
+        "aFullHashFillKeepsAnUnhashedLooseFileInItsConfirmedFolder",
+        "aRowInTwoFoldersByIdAndByDigestShowsUnderBoth",
         "addingKeepsHitsFirstAndNeverResurrectsAFilteredRow",
+        "anIdMemberWithNoContentKeyStaysInItsFolderAndMatchesOnlyItsOwnRow",
         "anUnassignedCopyFollowsItsOwnCopyGroupsEvent",
         "computeFilteredAddsTitledFolderMembers",
         "confirmedEventBecomesAFolderAndTheRestStaysLoose",

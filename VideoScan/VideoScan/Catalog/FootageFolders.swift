@@ -369,12 +369,41 @@ enum FootageFolders {
     /// Record → every confirmed event its content was accepted into, in
     /// the events' order (one content may be in several folders,
     /// 2026-10-19).
+    ///
+    /// GH #351 (Rick 10/20, option 1 — "allow, don't refuse"): Confirm keeps
+    /// an unhashed file under its `id:<record>` key, and Fill In Full Hashes
+    /// later moves the row's contentKey to its digest. So a member key is
+    /// matched two ways: by the row's current contentKey, and an `id:` key
+    /// by the row's OWN id (any UUID spelling). The id never changes, so the
+    /// file stays in its folder across the hash fill — and Validate's
+    /// `CatalogConstraints.memberResolves` (an `id:` key resolves iff that
+    /// row exists) says exactly what this join shows.
     static func ownEvents(rows: [Row], events: [Event]) -> [UUID: [UUID]] {
         var byKey: [String: [UUID]] = [:]
-        for e in events { for k in Set(e.contentKeys) { byKey[k, default: []].append(e.id) } }
+        var byRecordID: [UUID: [UUID]] = [:]
+        var order: [UUID: Int] = [:]
+        for (i, e) in events.enumerated() {
+            if order[e.id] == nil { order[e.id] = i }
+            for k in Set(e.contentKeys) {
+                byKey[k, default: []].append(e.id)
+                if k.hasPrefix("id:"), let rid = UUID(uuidString: String(k.dropFirst(3))) {
+                    byRecordID[rid, default: []].append(e.id)
+                }
+            }
+        }
         guard !byKey.isEmpty else { return [:] }
         var out: [UUID: [UUID]] = [:]
-        for r in rows { if let es = byKey[r.contentKey] { out[r.id] = es } }
+        for r in rows {
+            let byContent = byKey[r.contentKey] ?? []
+            guard let byID = byRecordID[r.id] else {
+                if !byContent.isEmpty { out[r.id] = byContent }
+                continue
+            }
+            // Both ways, each event once, still in the events' order.
+            var seen = Set<UUID>()
+            out[r.id] = (byContent + byID).filter { seen.insert($0).inserted }
+                .sorted { (order[$0] ?? 0) < (order[$1] ?? 0) }
+        }
         return out
     }
 
