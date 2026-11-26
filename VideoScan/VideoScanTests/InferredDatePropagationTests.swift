@@ -1157,6 +1157,11 @@ struct InferredDatePropagationTests {
         let spokenTwin = makeRecord(path: "/W/a.mov", md5: "m", size: 1)
         let captioned = makeRecord(path: "/V/b.mov", md5: "n", size: 1)
         let captionedTwin = makeRecord(path: "/W/b.mov", md5: "n", size: 1)
+        // GH #413: the transcript / captions reach a twin only through a
+        // shared WHOLE-FILE digest (never partialMD5) — these twins are copies.
+        for (r, key) in [(spoken, "m"), (spokenTwin, "m"), (captioned, "n"), (captionedTwin, "n")] {
+            r.contentFixity = DossierBackfillVerdictBudgetTests.wholeFileFixity(group: key, size: r.sizeBytes)
+        }
         model.records = [spoken, spokenTwin, captioned, captionedTwin]
 
         model.applyAudioTranscript("Merry Christmas 1997 everybody!", modelID: "whisper-medium", to: spoken)

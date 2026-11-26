@@ -39216,6 +39216,35 @@
         "cancelledNetworkWalkSavesNoCheckpoint",
         "completedNetworkWalkStillSavesCheckpoint"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/DossierPropagationDigestIdentityTests.swift",
+      "stage": "regression",
+      "suites": [
+        "DossierPropagationDigestIdentityTests"
+      ],
+      "tests": [
+        "archiveFixityIsAWholeFileDigestToo",
+        "disagreeingFixities_propagateNothing",
+        "sameDigestDifferentSample_propagates",
+        "sameDigest_propagatesAsBefore",
+        "sameSampleDifferentDigest_backfillCopiesNoOCRDates",
+        "sameSampleDifferentDigest_writebackCopiesNoTranscript",
+        "sameSampleNoDigest_propagatesNothing"
+      ]
+    },
+    {
+      "blocked_reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ProductionShapeDossierDigestTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ProductionShapeDossierDigestTests"
+      ],
+      "tests": [
+        "everyWrittenValueHasASameDigestDonor"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -43261,9 +43290,13 @@
         {
           "name": "VideoScan/VideoScanTests/VerifyAudioPacketShapeTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ProductionShapeDossierDigestTests.swift",
+          "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 1057,
+      "expected_floor": 1064,
       "name": "regression",
       "package_expected_floor": 351,
       "package_selectors": [
@@ -43527,7 +43560,8 @@
         "VideoScanTests/CleanupUnverifiedRenderMatrixTests",
         "VideoScanTests/EncodeSourceWithoutDurationMatrixTests",
         "VideoScanTests/VolumeRescueNeverReplacesTests",
-        "VideoScanTests/NetworkWalkCancelCheckpointTests"
+        "VideoScanTests/NetworkWalkCancelCheckpointTests",
+        "VideoScanTests/DossierPropagationDigestIdentityTests"
       ]
     },
     {
