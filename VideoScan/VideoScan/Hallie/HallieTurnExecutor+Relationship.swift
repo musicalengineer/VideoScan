@@ -73,7 +73,7 @@ extension HallieTurnExecutor {
         // ladder below still requires a real tree (see the guard after it).
         let graphIsInstalled = context.graph != nil
         let graph = context.graph ?? GedcomFamilyGraph(gedcomText: "0 HEAD\n0 TRLR")
-        let inputs = relationshipGraphInputs(graph: graph, context: context)
+        let inputs = graphInputs(graph: graph, context: context)
         var voices: [Int: ArchivistGraphQuery.Voice] = [:]
         for binding in request.intent.speakerBindings {
             voices[binding.index] = binding.role == .owner ? .owner : .archivist
@@ -155,24 +155,6 @@ extension HallieTurnExecutor {
     private enum RelationshipSlotOutcome {
         case subject(id: String, note: String?)
         case final(Result)
-    }
-
-    private static func relationshipGraphInputs(graph: GedcomFamilyGraph, context: Context) -> ArchivistGraphInputs {
-        ArchivistGraphInputs(
-            graph: graph,
-            profiles: (context.profiles ?? []).map {
-                ArchivistGraphProfileSnapshot(
-                    stableID: $0.stableID,
-                    canonicalName: $0.canonicalName,
-                    aliases: $0.aliases,
-                    kinships: $0.kinships,
-                    sex: $0.sex,
-                    birthdate: $0.birthdate,
-                    deathdate: $0.deathdate,
-                    uuid: $0.uuid,
-                    treeIdentity: $0.treeIdentity)
-            },
-            ownerName: context.speakers.ownerName)
     }
 
     /// The People-tab overlay's answer when it links the two, else nil.

@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 352,
+ "entry_count": 351,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 17,
@@ -701,10 +701,6 @@
   "VideoScan/VideoScan/Hallie/HallieTurnExecutor.swift::HallieTurnExecutor.executeCyberBrainBridgedGraph": {
    "ccn": 14,
    "nloc": 103
-  },
-  "VideoScan/VideoScan/Hallie/HallieTurnExecutor.swift::HallieTurnExecutor.executeGraphCase": {
-   "ccn": 43,
-   "nloc": 287
   },
   "VideoScan/VideoScan/Hallie/HallieTurnExecutor.swift::HallieTurnExecutor.executeTemporalCase": {
    "ccn": 15,
