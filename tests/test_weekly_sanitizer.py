@@ -922,3 +922,28 @@ def test_xcodebuilds_list_ends_at_its_blank_line_and_is_bounded():
     assert ws.parse_log(grouped)["failed_tests"] == ["S.a()", "S.b(row:)"]
     # An empty list falls back to the ✘ lines rather than naming nothing.
     assert ws.parse_log("✘ Test fooBar() failed after 0.1 seconds.\nFailing tests:\n\n")["failed_tests"] == ["fooBar"]
+
+
+# ── #425: the row's test count is every host launch's, not the last one's ────
+
+def test_tests_are_summed_across_host_launches():
+    """The 11/01 TSan run: 8 restarts, one `Test run with` line (the LAST launch's),
+    and the row said 10,333 against 12,261 the week before. A launch that died
+    prints no summary; its tests are its own terminal lines (passed, failed,
+    skipped, passed with a known issue — never an issue line or the started
+    test the host died in)."""
+    first = (HOST_START + _passed("a()") + _passed('"b, by display name"')
+             + "◇ Test c() started.\n✘ Test c() recorded an issue at C.swift:1:1: Expectation failed\n"
+             + "✘ Test c() failed after 0.1 seconds with 1 issue.\n"
+             + "​​➜ Test d() skipped: \"stress only\"\n"
+             + "━ Test e() passed after 0.2 seconds with 1 known issue.\n"
+             + "Test Case '-[VideoScanTests.OldTests testOne]' passed (0.1 seconds).\n"
+             + _started("dies()") + TSAN_GRDB)
+    last = (_relaunch() + _passed("f()") + _passed("g()")
+            + "\t Executed 4 tests, with 0 failures (0 unexpected) in 1.0 (1.0) seconds\n"
+            + "✔ Test run with 2 tests in 1 suite passed after 1.0 seconds.\n")
+    p = ws.parse_log(first + last)
+    assert p["host_restarts"] == 1
+    assert p["tests"] == (5 + 1) + (2 + 4)          # launch 1: 5 Swift Testing + 1 XCTest; launch 2: its summaries
+    # One launch: the summaries alone, as before.
+    assert ws.parse_log(GREEN_LOG)["tests"] == 990
