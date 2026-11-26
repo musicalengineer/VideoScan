@@ -295,8 +295,8 @@
    "nloc": 85
   },
   "VideoScan/VideoScan/Catalog/VideoScanModel+Rename.swift::VideoScanModel.renameRecord": {
-   "ccn": 25,
-   "nloc": 94
+   "ccn": 20,
+   "nloc": 87
   },
   "VideoScan/VideoScan/FamilyTree/FamilyAssetStore.swift::FamilyAssetImageValidator.isStructurallyComplete": {
    "ccn": 17,
@@ -871,8 +871,8 @@
    "nloc": 89
   },
   "VideoScan/VideoScan/Media/VideoScanModel+ProbeEngine.swift::VideoScanModel.runTargetProbeGroup": {
-   "ccn": 15,
-   "nloc": 129
+   "ccn": 14,
+   "nloc": 122
   },
   "VideoScan/VideoScan/Media/VideoScanModel+Thumbnail.swift::VideoScanModel.generateThumbnail": {
    "ccn": 15,
