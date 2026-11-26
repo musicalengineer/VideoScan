@@ -315,6 +315,230 @@ struct CatalogDatabaseRestoreTests {
     }
 }
 
+// MARK: - Codex #384 round 1: committed means committed; a foreign encoding refused first
+
+@Suite("CatalogDatabaseRestoreCommitted", .serialized)
+struct CatalogDatabaseRestoreCommittedTests {
+
+    @Test("P1: a UTF-16 backup is refused BEFORE the copy (SQLite would commit it, then fail the read-back) — live byte-identical, still writable")
+    func utf16BackupRefusedUpFront() async throws {
+        let scene = try await RestoreScene.make(); defer { scene.remove() }
+        let repository = try await scene.open()
+        let backedUp = try await RestoreScene.setNotes("as backed up", on: repository)
+        let backup = try scene.seal(repository, "backup.sqlite")
+        _ = try await RestoreScene.setNotes("typed after the backup", on: repository)
+        let utf16 = scene.importer.directory.appendingPathComponent("backup-utf16.sqlite")
+        try RestoreScene.utf16Clone(of: backup, to: utf16)
+        // The clone is a valid sealed catalog at the same generation: only the encoding differs.
+        let facts = try await CatalogDatabaseRestore.inspectSealedCopy(utf16)
+        #expect(facts.generation == backedUp)
+        let before = try scene.fingerprint()
+        let outcome = await repository.restore(fromSealedCopy: utf16, expectedGeneration: backedUp)
+        guard case .refused(let reason) = outcome else { Issue.record("expected refused, got \(outcome)"); return }
+        #expect(reason.contains("text encoding"), Comment(rawValue: reason))
+        #expect(try scene.fingerprint() == before, "the refusal came after pages were written")
+        await expectStillWritable(repository, "after the encoding refusal")
+        await repository.close()
+        #expect(try await RestoreScene.notes(at: scene.databaseURL) == ["typed after the backup"])
+    }
+
+    @Test("P1: an error after SQLITE_DONE is restoredUnverified (never refused) and the store is closed")
+    func errorAfterCommitIsRestoredUnverified() async throws {
+        let scene = try await RestoreScene.make(); defer { scene.remove() }
+        let repository = try await scene.open()
+        let backedUp = try await RestoreScene.setNotes("as backed up", on: repository)
+        let backup = try scene.seal(repository, "backup.sqlite")
+        _ = try await RestoreScene.setNotes("typed after the backup", on: repository)
+        struct ReadBackFailed: Error {}
+        await repository.injectRestoreAfterCommitHook { throw ReadBackFailed() }
+        let outcome = await repository.restore(fromSealedCopy: backup, expectedGeneration: backedUp)
+        guard case .restoredUnverified(let reason) = outcome else { Issue.record("expected restoredUnverified, got \(outcome)"); return }
+        #expect(reason.contains("ReadBackFailed"), Comment(rawValue: reason))
+        await #expect(throws: CatalogRepositoryError.self) { _ = try await repository.read { $0.generation } }
+        // It did commit: the file holds the backup.
+        #expect(try await RestoreScene.notes(at: scene.databaseURL) == ["as backed up"])
+        #expect(try CatalogHardKillTests.integrityCheck(scene.databaseURL) == ["ok"])
+    }
+}
+
+@Suite("CatalogDatabaseRestorePinned", .serialized)
+struct CatalogDatabaseRestorePinnedTests {
+
+    private func expectChangedRefused(_ change: (URL, RestoreScene) throws -> Void) async throws {
+        let scene = try await RestoreScene.make(); defer { scene.remove() }
+        let repository = try await scene.open()
+        let backedUp = try await RestoreScene.setNotes("as backed up", on: repository)
+        let backup = try scene.seal(repository, "backup.sqlite")
+        _ = try await RestoreScene.setNotes("typed after the backup", on: repository)
+        let pinned = try CatalogPinnedSource.pin(backup)
+        try change(backup, scene)
+        // Still a valid sealed catalog at the same generation: only the pin can tell.
+        #expect(try await CatalogDatabaseRestore.inspectSealedCopy(backup).generation == backedUp)
+        let before = try scene.fingerprint()
+        let outcome = await repository.restore(fromSealedCopy: pinned, expectedGeneration: backedUp)
+        guard case .refused(let reason) = outcome else { Issue.record("expected refused, got \(outcome)"); return }
+        #expect(reason.contains("changed after it was checked"), Comment(rawValue: reason))
+        #expect(try scene.fingerprint() == before)
+        await expectStillWritable(repository, "after the pinned refusal")
+        await repository.close()
+        #expect(try await RestoreScene.notes(at: scene.databaseURL) == ["typed after the backup"])
+    }
+
+    private static func tamper(_ url: URL, _ sql: String) throws {
+        let queue = try DatabaseQueue(path: url.path)
+        try queue.write { try $0.execute(sql: sql) }
+        try queue.close()
+    }
+
+    @Test("P1: a valid same-generation change after the pin (UPDATE notes) is refused — live untouched, still writable")
+    func modifiedAfterPinRefused() async throws {
+        try await expectChangedRefused { url, _ in
+            try Self.tamper(url, "UPDATE user_notes SET text = 'tampered'; UPDATE generations SET saved_from_host = 'tampered' WHERE id = 1")
+        }
+    }
+
+    @Test("P1: the pinned file replaced by another valid catalog at the same generation is refused — live untouched")
+    func replacedAfterPinRefused() async throws {
+        try await expectChangedRefused { url, scene in
+            let other = scene.importer.directory.appendingPathComponent("other.sqlite")
+            try FileManager.default.copyItem(at: url, to: other)
+            try Self.tamper(other, "UPDATE generations SET saved_from_host = 'another catalog' WHERE id = 1")
+            _ = try FileManager.default.replaceItemAt(url, withItemAt: other)
+        }
+    }
+
+    @Test("P1: a same-size in-place change with the mtime put back is still refused (ctime and the re-read SHA-256)")
+    func sameSizeMtimeRestoredChangeRefused() async throws {
+        try await expectChangedRefused { url, _ in
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            let size = (attributes[.size] as? NSNumber)?.int64Value
+            try Self.tamper(url, "UPDATE generations SET saved_from_host = 'x' || substr(saved_from_host, 2) WHERE id = 1")
+            #expect((try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value == size)
+            if let modified = attributes[.modificationDate] as? Date {
+                try FileManager.default.setAttributes([.modificationDate: modified], ofItemAtPath: url.path)
+            }
+        }
+    }
+
+    @Test("P1: inside the restore, under the source's SHARED lock — an SQLite writer is locked out, and a raw same-size write is caught by the re-read SHA-256")
+    func changeUnderTheLockRefused() async throws {
+        let scene = try await RestoreScene.make(); defer { scene.remove() }
+        let repository = try await scene.open()
+        let backedUp = try await RestoreScene.setNotes("as backed up", on: repository)
+        let backup = try scene.seal(repository, "backup.sqlite")
+        _ = try await RestoreScene.setNotes("typed after the backup", on: repository)
+        let pinned = try CatalogPinnedSource.pin(backup)
+        let sqliteWriteRefused = StepCounter()
+        await repository.injectRestoreSourceLockedHook {
+            // 1. SQLite's lock: a writer cannot commit to the source now.
+            var configuration = Configuration()
+            configuration.busyMode = .immediateError
+            let writer = try DatabaseQueue(path: backup.path, configuration: configuration)
+            do {
+                try writer.write { try $0.execute(sql: "UPDATE generations SET saved_from_host = 'tampered' WHERE id = 1") }
+            } catch {
+                _ = sqliteWriteRefused.next()
+            }
+            try writer.close()
+            // 2. A raw write, no lock asked: one byte of the header's reserved area.
+            let handle = try FileHandle(forUpdating: backup)
+            try handle.seek(toOffset: 72)
+            try handle.write(contentsOf: Data([0x01]))
+            try handle.close()
+        }
+        let before = try scene.fingerprint()
+        let outcome = await repository.restore(fromSealedCopy: pinned, expectedGeneration: backedUp)
+        await repository.injectRestoreSourceLockedHook(nil)
+        #expect(sqliteWriteRefused.count == 1, "the source's SHARED lock keeps SQLite writers out for the whole restore")
+        guard case .refused(let reason) = outcome else { Issue.record("expected refused, got \(outcome)"); return }
+        #expect(reason.contains("changed after it was checked"), Comment(rawValue: reason))
+        #expect(try scene.fingerprint() == before)
+        await expectStillWritable(repository, "after the under-lock refusal")
+        await repository.close()
+    }
+
+    @Test("provenMoved: a rename keeps the proof; the same length with one byte changed does not")
+    func provenMovedNeedsTheSameBytes() throws {
+        let folder = try StoreFixture.temporaryDirectory(); defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("a.bin")
+        try Data(repeating: 7, count: 300_000).write(to: file)
+        let pinned = try CatalogPinnedSource.pin(file)
+        #expect(pinned.changeSincePinned() == nil)
+        let moved = folder.appendingPathComponent("b.bin")
+        try FileManager.default.moveItem(at: file, to: moved)
+        #expect(pinned.provenMoved(to: moved) == nil)
+        let handle = try FileHandle(forUpdating: moved)
+        try handle.seek(toOffset: 150_000)
+        try handle.write(contentsOf: Data([8]))
+        try handle.close()
+        let words = pinned.provenMoved(to: moved)
+        #expect(words != nil, "a same-length change must not pass")
+        let copied = folder.appendingPathComponent("c.bin")
+        try Data(repeating: 7, count: 300_000).write(to: copied)
+        #expect(pinned.provenMoved(to: copied) == "another file is at its path", "identity, not only the bytes")
+    }
+}
+
+extension GRDBCatalogRepository {
+    /// Test convenience: pin `url` now, then restore it.
+    func restore(fromSealedCopy url: URL, expectedGeneration: Int,
+                 pagesPerStep: Int32 = CatalogDatabaseRestore.defaultPagesPerStep) async -> CatalogRestoreOutcome {
+        let source: CatalogPinnedSource
+        do { source = try .pin(url) } catch { return .refused(reason: "\(error)") }
+        return await restore(fromSealedCopy: source, expectedGeneration: expectedGeneration, pagesPerStep: pagesPerStep)
+    }
+}
+
+extension RestoreScene {
+    /// A UTF-16le copy of the sealed catalog at `source`: the same schema,
+    /// rows and user_version, built table by table (SQLite fixes a file's
+    /// encoding at creation; VACUUM INTO and the backup API both keep it).
+    static func utf16Clone(of source: URL, to target: URL) throws {
+        var readOnly = Configuration()
+        readOnly.readonly = true
+        let src = try DatabaseQueue(path: source.path, configuration: readOnly)
+        defer { try? src.close() }
+        var plain = Configuration()
+        plain.foreignKeysEnabled = false
+        let dst = try DatabaseQueue(path: target.path, configuration: plain)
+        defer { try? dst.close() }
+        try dst.writeWithoutTransaction { try $0.execute(sql: "PRAGMA encoding = 'UTF-16le'") }
+        let schema = try src.read { db in
+            try Row.fetchAll(db, sql: "SELECT type, name, sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' ORDER BY rowid")
+        }
+        let userVersion = try src.read { try Int.fetchOne($0, sql: "PRAGMA user_version") ?? 0 }
+        // FTS5: create the virtual table (it makes its own shadow tables);
+        // copy its rows through itself, never through the shadows.
+        let virtual: [String] = schema.filter { ($0["sql"] as String).hasPrefix("CREATE VIRTUAL TABLE") }.map { $0["name"] }
+        func isShadow(_ name: String) -> Bool { virtual.contains { name.hasPrefix($0 + "_") } }
+        let created = schema.filter { ($0["type"] as String) == "table" && !isShadow($0["name"]) }
+        let tables: [String] = created.map { $0["name"] }
+        try dst.write { db in
+            for row in created { try db.execute(sql: row["sql"]) }
+            for table in tables {
+                // Generated columns (table_xinfo hidden 2/3) are computed, never inserted.
+                let stored: [String] = try src.read { db in
+                    try Row.fetchAll(db, sql: "PRAGMA table_xinfo(\"\(table)\")").filter { ($0["hidden"] as Int) == 0 }.map { $0["name"] }
+                }
+                let list = (virtual.contains(table) ? ["rowid"] : []) + stored
+                let select = "SELECT " + list.map { "\"\($0)\"" }.joined(separator: ", ") + " FROM \"\(table)\""
+                let rows = try src.read { try Row.fetchAll($0, sql: select) }
+                for row in rows {
+                    let columns = Array(row.columnNames)
+                    let names = columns.map { "\"\($0)\"" }.joined(separator: ", ")
+                    let marks = Array(repeating: "?", count: columns.count).joined(separator: ", ")
+                    try db.execute(sql: "INSERT INTO \"\(table)\" (\(names)) VALUES (\(marks))",
+                                   arguments: StatementArguments(columns.map { row[$0] as DatabaseValue }))
+                }
+            }
+            for row in schema where (row["type"] as String) != "table" { try db.execute(sql: row["sql"]) }
+            try db.execute(sql: "PRAGMA user_version = \(userVersion)")
+        }
+        let encoding = try dst.read { try String.fetchOne($0, sql: "PRAGMA encoding") }
+        guard encoding == "UTF-16le" else { throw FixtureFailure(words: "the clone is \(encoding ?? "?")") }
+    }
+}
+
 /// A thread-safe step count for the seam (it runs on GRDB's writer queue).
 final class StepCounter: @unchecked Sendable {
     private let lock = NSLock()

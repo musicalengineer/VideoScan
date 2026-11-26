@@ -33,9 +33,10 @@
 // Suites (filter by SUITE): CatalogRestoreFromBackupTests · CatalogRestoreFromBackupSensorTests
 
 import Foundation
+import SQLite3
 import Testing
 @testable import VideoScan
-import VideoScanCore
+@testable import VideoScanCore
 
 // MARK: - Helpers
 
@@ -299,23 +300,204 @@ struct CatalogRestoreFromBackupTests {
         // it trashes for real, then damages the verified staged copy.
         let context = try scene.restoreContext(trash: { url in
             let landed = try MediaTrash.move(url)
-            let work = try FileManager.default.contentsOfDirectory(atPath: folder.path).filter { $0.hasPrefix(".restore-") }
-            for name in work {
-                let staged = folder.appendingPathComponent(name).appendingPathComponent("backup-catalog.sqlite")
-                try Data(repeating: 0, count: 100).write(to: staged)
+            let staged = try stagedCopies(in: folder)
+            #expect(staged.count == 1)
+            for url in staged {
+                try unlock(url)
+                try Data(repeating: 0, count: 100).write(to: url)
             }
             return landed
         })
         let fingerprint = try scene.databaseFingerprint()
         let outcome = await CatalogBackupRestore.run(bundle: scene.backupURL, context: context)
         guard case .refused(let reason) = outcome else { Issue.record("expected refused, got \(outcome)"); return }
-        #expect(reason.contains("not an SQLite database"), Comment(rawValue: reason))
+        #expect(reason.contains("changed after it was checked"), Comment(rawValue: reason))
+        #expect(scene.model.isReadOnly == false, "editing given back")
         #expect(try scene.databaseFingerprint() == fingerprint)
         #expect(try scene.workFolders().isEmpty)
         try scene.expectWritable("after the refusal", "the hold was given back")
         let fresh = try await scene.relaunched()
         #expect(fresh.isReadOnly == false)
         if let committer = fresh.catalogCutover.committer { await committer.repository.close() }
+    }
+}
+
+// MARK: - Codex #384 round 1 (P1/P2): bound to the verified bytes; editing paused; committed means stopped
+
+/// The staged (verified) copies under every `.restore-*` work folder in `folder`.
+private func stagedCopies(in folder: URL) throws -> [URL] {
+    let fm = FileManager.default
+    var found: [URL] = []
+    for name in try fm.contentsOfDirectory(atPath: folder.path) where name.hasPrefix(CatalogBackupRestore.workFolderPrefix) {
+        guard let walk = fm.enumerator(at: folder.appendingPathComponent(name), includingPropertiesForKeys: nil) else { continue }
+        for case let url as URL in walk where url.lastPathComponent == "backup-catalog.sqlite" { found.append(url) }
+    }
+    return found
+}
+
+/// A determined change: give the owner write permission back on the file
+/// and its folder (the door takes it away), the way a person could.
+private func unlock(_ url: URL) throws {
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.deletingLastPathComponent().path)
+    try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path)
+}
+
+/// Run `sql` on the plain SQLite file at `url` (rollback journal: nothing left beside it).
+private func execute(_ sql: String, on url: URL) throws {
+    var db: OpaquePointer?
+    guard sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
+        sqlite3_close(db); throw CutoverFailure(words: "open \(url.path)")
+    }
+    defer { sqlite3_close(db) }
+    var error: UnsafeMutablePointer<CChar>?
+    guard sqlite3_exec(db, sql, nil, nil, &error) == SQLITE_OK else {
+        let words = error.map { String(cString: $0) } ?? "?"
+        sqlite3_free(error)
+        throw CutoverFailure(words: "\(sql): \(words)")
+    }
+}
+
+/// The trash seam parks here until the test lets it go (it runs off the main actor).
+final class RestorePark: @unchecked Sendable {
+    let arrived = DispatchSemaphore(value: 0)
+    let proceed = DispatchSemaphore(value: 0)
+    /// Wait for the seam without blocking the main actor.
+    func waitArrived() async {
+        await withCheckedContinuation { (done: CheckedContinuation<Void, Never>) in
+            DispatchQueue.global().async { self.arrived.wait(); done.resume() }
+        }
+    }
+}
+
+@Suite("Restore from Backup — codex #384: verified bytes, editing paused, committed means stopped", .serialized)
+@MainActor
+struct CatalogRestoreCodex384Tests {
+
+    /// Restore with a trash seam that trashes for real and then runs `after`
+    /// on the staged copy (off the main actor, after verify, before the store's restore).
+    private func runWithStagedChange(_ scene: CutoverScene,
+                                     _ change: @escaping @Sendable (URL) throws -> Void) async throws -> CatalogBackupRestore.Outcome {
+        let folder = scene.folder
+        let context = try scene.restoreContext(trash: { url in
+            let landed = try MediaTrash.move(url)
+            for staged in try stagedCopies(in: folder) { try change(staged) }
+            return landed
+        })
+        return await CatalogBackupRestore.run(bundle: scene.backupURL, context: context)
+    }
+
+    private func expectRefusedLiveUntouched(_ scene: CutoverScene, _ fingerprint: String, _ outcome: CatalogBackupRestore.Outcome,
+                                            saying words: String) throws {
+        guard case .refused(let reason) = outcome else { Issue.record("expected refused, got \(outcome)"); return }
+        #expect(reason.contains(words), Comment(rawValue: reason))
+        #expect(try scene.databaseFingerprint() == fingerprint, "the live catalog changed")
+        #expect(try scene.workFolders().isEmpty)
+        #expect(scene.model.catalogCutover.committer?.restoreStop == nil)
+        #expect(scene.model.isReadOnly == false, "editing is given back on a refusal")
+        try scene.expectWritable("after the refusal", "the hold and editing were given back")
+    }
+
+    @Test("P1: a valid same-generation change to the verified copy after verification (UPDATE notes) is refused — the live catalog untouched")
+    func modifiedAfterVerificationRefused() async throws {
+        let scene = try CutoverScene.make("restore_tamper"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        try scene.record(.healthy).userNotes = "as backed up"
+        _ = try await scene.backUp()
+        try scene.expectWritable("typed after the backup", "after the backup")
+        let fingerprint = try scene.databaseFingerprint()
+        let outcome = try await runWithStagedChange(scene) { staged in
+            try unlock(staged)
+            try execute("UPDATE user_notes SET text = 'tampered'; UPDATE generations SET saved_from_host = 'tampered' WHERE id = 1",
+                        on: staged)
+        }
+        try expectRefusedLiveUntouched(scene, fingerprint, outcome, saying: "changed after it was checked")
+    }
+
+    @Test("P1: the verified copy replaced by another valid catalog at the same generation is refused — the live catalog untouched")
+    func replacedAfterVerificationRefused() async throws {
+        let scene = try CutoverScene.make("restore_replace"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        try scene.record(.healthy).userNotes = "as backed up"
+        _ = try await scene.backUp()
+        try scene.expectWritable("typed after the backup", "after the backup")
+        let fingerprint = try scene.databaseFingerprint()
+        let outcome = try await runWithStagedChange(scene) { staged in
+            try unlock(staged)
+            let other = staged.deletingLastPathComponent().appendingPathComponent("other.sqlite")
+            try FileManager.default.copyItem(at: staged, to: other)
+            try execute("UPDATE generations SET saved_from_host = 'another catalog' WHERE id = 1", on: other)
+            _ = try FileManager.default.replaceItemAt(staged, withItemAt: other)
+        }
+        try expectRefusedLiveUntouched(scene, fingerprint, outcome, saying: "changed after it was checked")
+    }
+
+    @Test("P2: a safety copy damaged in the Trash (same length) is refused before the first write — proven by identity and full SHA-256")
+    func safetyCopyDamagedInTrashRefused() async throws {
+        let scene = try CutoverScene.make("restore_safety_sha"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        _ = try await scene.backUp()
+        try scene.expectWritable("typed after the backup", "after the backup")
+        let fingerprint = try scene.databaseFingerprint()
+        let context = try scene.restoreContext(trash: { url in
+            let landed = try MediaTrash.move(url)
+            var bytes = try Data(contentsOf: landed)
+            bytes[bytes.count / 2] ^= 0xFF
+            let handle = try FileHandle(forWritingTo: landed)
+            try handle.write(contentsOf: bytes)
+            try handle.close()
+            return landed
+        })
+        let outcome = await CatalogBackupRestore.run(bundle: scene.backupURL, context: context)
+        try expectRefusedLiveUntouched(scene, fingerprint, outcome, saying: "does not match the copy that was checked")
+    }
+
+    @Test("P1: editing is paused from the confirmation to the end — mid-restore the session is read-only in words, a save is refused, the quit says why; the restore then completes")
+    func editingPausedMidRestore() async throws {
+        let scene = try CutoverScene.make("restore_paused"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        _ = try await scene.backUp()
+        try scene.expectWritable("typed after the backup", "after the backup")
+        let park = RestorePark()
+        let context = try scene.restoreContext(trash: { url in
+            let landed = try MediaTrash.move(url)
+            park.arrived.signal()
+            park.proceed.wait()
+            return landed
+        })
+        let bundle = scene.backupURL
+        let running = Task { await CatalogBackupRestore.run(bundle: bundle, context: context) }
+        await park.waitArrived()
+        // Mid-restore: the safety copy exists, the store has not been written.
+        #expect(scene.model.isReadOnly, "the model must not accept edits while the restore runs")
+        let words = scene.model.readOnlyFacts.readOnlyWords ?? ""
+        #expect(words.contains("restoring the catalog — editing is paused"), Comment(rawValue: words))
+        try scene.record(.healthy).userNotes = "typed mid-restore"
+        #expect(scene.model.saveCatalogNow() == false, "a mid-restore save is refused, not taken")
+        #expect(CatalogQuitRecovery.saveAtTermination(model: scene.model) == .readOnlySession(words: CatalogReadOnlyFacts.restoringWords))
+        park.proceed.signal()
+        let outcome = await running.value
+        guard case .restored = outcome else { Issue.record("expected restored, got \(outcome)"); return }
+        #expect(scene.model.isReadOnly && scene.model.readOnlyFacts.restoredFromBackup)
+    }
+
+    @Test("P1: a failure AFTER the copy committed is restoredUnverified — the store closed, the committer stopped, the session read-only")
+    func failureAfterCommitStopsTheSession() async throws {
+        let scene = try CutoverScene.make("restore_after_commit"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        _ = try await scene.backUp()
+        try scene.expectWritable("typed after the backup", "after the backup")
+        let committer = try #require(scene.model.catalogCutover.committer)
+        let store = try #require(committer.repository as? GRDBCatalogRepository)
+        struct ReadBackFailed: Error {}
+        await store.injectRestoreAfterCommitHook { throw ReadBackFailed() }
+        let outcome = await CatalogBackupRestore.run(bundle: scene.backupURL, context: try scene.restoreContext())
+        guard case .restoredUnverified(let why, _) = outcome else { Issue.record("expected restoredUnverified, got \(outcome)"); return }
+        #expect(why.contains("ReadBackFailed"), Comment(rawValue: why))
+        #expect(committer.restoreStop != nil, "the committer stopped for good")
+        #expect(scene.model.isReadOnly && scene.model.readOnlyFacts.restoredFromBackup)
+        await #expect(throws: CatalogRepositoryError.self) { _ = try await committer.repository.read { $0.generation } }
+        try scene.record(.healthy).userNotes = "typed after"
+        #expect(scene.model.saveCatalogNow() == false)
     }
 }
 

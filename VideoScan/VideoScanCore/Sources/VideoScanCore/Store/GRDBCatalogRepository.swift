@@ -153,6 +153,12 @@ public actor GRDBCatalogRepository: CatalogRepository {
     /// Test seam (GH #343): runs after each backup step that is not the
     /// last; a throw aborts the restore (SQLite rolls the destination back).
     private var restoreStepHook: Seam?
+    /// Test seam (codex #384 F1): runs on the writer queue after the backup
+    /// reached SQLITE_DONE (the copy is COMMITTED), before the read-back.
+    private var restoreAfterCommitHook: Seam?
+    /// Test seam (codex #384 F2): runs once the restore source's SHARED lock
+    /// is held, before the pinned bytes are re-checked under it.
+    private var restoreSourceLockedHook: Seam?
     /// Test seam (codex #142 F6-1, #387): runs at open after the writer's
     /// checks passed and the pool exists, before the open's first write —
     /// the window in which another connection can change the checked file.
@@ -954,7 +960,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
 
     // MARK: - Restore (GH #343; CatalogDatabaseRestore.swift has the design)
 
-    public func restore(fromSealedCopy source: URL, expectedGeneration: Int,
+    public func restore(fromSealedCopy source: CatalogPinnedSource, expectedGeneration: Int,
                         pagesPerStep: Int32 = CatalogDatabaseRestore.defaultPagesPerStep,
                         progress: @escaping @Sendable (_ copied: Int, _ total: Int) -> Void = { _, _ in }) async -> CatalogRestoreOutcome {
         guard let pool, let databaseURL, let fileGuard else { return .refused(reason: "catalog.sqlite is not open") }
@@ -963,19 +969,35 @@ public actor GRDBCatalogRepository: CatalogRepository {
             return .refused(reason: "catalog.sqlite is read-only in this session (\(reason)) — adopt or reopen it first")
         }
         guard !closing else { return .refused(reason: "catalog.sqlite is closing") }
-        if let why = Self.sealedSnapshotRefusal(source) { return .refused(reason: why) }
+        // The pinned file first: a changed copy is refused as changed, not by
+        // whatever its new bytes happen to fail (re-checked in full under the lock).
+        if let words = source.identityChange() { return .refused(reason: CatalogDatabaseRestore.changedWords(words)) }
+        if let why = Self.sealedSnapshotRefusal(source.url) { return .refused(reason: why) }
         let session = session
         let step = restoreStepHook
+        let afterCommit = restoreAfterCommitHook
+        let sourceLocked = restoreSourceLockedHook
+        let committed = CatalogDatabaseRestore.CommitMark()
         let copied: CatalogDatabaseRestore.Copied
         do {
             copied = try await pool.writeWithoutTransaction { db in
                 try CatalogDatabaseRestore.copy(from: source, into: db, expectedGeneration: expectedGeneration,
                                                 witnessesBeside: databaseURL, pagesPerStep: pagesPerStep,
-                                                stop: { session.fileStop(fileGuard) }, step: step, progress: progress)
+                                                stop: { session.fileStop(fileGuard) }, step: step, afterCommit: afterCommit,
+                                                sourceLocked: sourceLocked, committed: committed, progress: progress)
             }
-        } catch let refusal as CatalogDatabaseRestore.Refusal {
-            return .refused(reason: refusal.words)
         } catch {
+            // codex #384 F1: SQLITE_DONE committed the copy — SQLite has no
+            // rollback after it. Whatever failed next, the file holds the
+            // backup now: close (this session describes the file as it was)
+            // and say it is unverified; never "refused".
+            if committed.isSet {
+                let words = (error as? CatalogDatabaseRestore.Refusal)?.words ?? Self.words(error)
+                storeLog.error("catalog store RESTORE committed from \(source.url.lastPathComponent, privacy: .public), then failed: \(words, privacy: .public) — closing")
+                await close()
+                return .restoredUnverified(reason: "the backup's pages were committed into catalog.sqlite, then reading it back failed (\(words))")
+            }
+            if let refusal = error as? CatalogDatabaseRestore.Refusal { return .refused(reason: refusal.words) }
             return .refused(reason: session.fileStop(fileGuard)
                             ?? "the restore was rolled back (\(Self.words(error))) — catalog.sqlite is as it was")
         }
@@ -983,7 +1005,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
         // it WAS: close now (the close checkpoints the restored pages into
         // catalog.sqlite); the next open runs every open check and the
         // high-water reconciliation, which finds it below and opens read-only.
-        storeLog.notice("catalog store RESTORE generation \(copied.replaced, privacy: .public) → \(copied.readBack, privacy: .public) (\(copied.pages, privacy: .public) pages from \(source.lastPathComponent, privacy: .public)) — closing")
+        storeLog.notice("catalog store RESTORE generation \(copied.replaced, privacy: .public) → \(copied.readBack, privacy: .public) (\(copied.pages, privacy: .public) pages from \(source.url.lastPathComponent, privacy: .public)) — closing")
         await close()
         guard copied.readBack == expectedGeneration else {
             return .restoredUnverified(reason: "catalog.sqlite reads generation \(copied.readBack) after the restore, "
@@ -995,6 +1017,16 @@ public actor GRDBCatalogRepository: CatalogRepository {
     /// Internal test seam. See `restoreStepHook`.
     func injectRestoreStepHook(_ seam: Seam?) {
         restoreStepHook = seam
+    }
+
+    /// Internal test seam. See `restoreAfterCommitHook`.
+    func injectRestoreAfterCommitHook(_ seam: Seam?) {
+        restoreAfterCommitHook = seam
+    }
+
+    /// Internal test seam. See `restoreSourceLockedHook`.
+    func injectRestoreSourceLockedHook(_ seam: Seam?) {
+        restoreSourceLockedHook = seam
     }
 
 

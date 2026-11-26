@@ -10,26 +10,39 @@
 //   1. VERIFY the bundle, off the main actor: a catalog.sqlite bundle with a
 //      v2 manifest naming it and the latch beside it; the bundle's
 //      catalog.sqlite COPIED into a hidden work folder beside the live
-//      catalog (so nothing can change it between the check and the restore),
-//      its SHA-256 and size equal to the manifest's; the copy opened sealed
-//      and read-only (integrity_check, foreign_key_check, schema version) and
-//      its generation and table counts equal to the manifest's; the
+//      catalog, then made read-only with its folder (codex #384 F2) and
+//      PINNED — device + inode, size, mtime, ctime and a SHA-256 read
+//      through one fd (`CatalogPinnedSource`); that SHA-256 and size equal
+//      to the manifest's; the copy opened sealed and read-only
+//      (integrity_check, foreign_key_check, schema version) and its
+//      generation and table counts equal to the manifest's; the pin
+//      re-checked after those reads (they read the pinned bytes); the
 //      manifest's high-water not below its generation; the copy BELOW this
 //      Mac's high-water (else it would open writable, unasked).
 //   2. CONFIRM: one plain alert naming the backup's date, host, generation
 //      and file-row count — read from the verified copy itself — beside the
 //      live catalog's (Cancel is the default).
 //   3. HOLD: the committer commits what is in memory, then admits nothing
-//      (`commitBeforeSafetyCopy` + `beginRestore`, one synchronous turn).
+//      (`commitBeforeSafetyCopy` + `beginRestore`), and the session turns
+//      read-only "restoring the catalog — editing is paused" (codex #384
+//      F3) — one synchronous main-actor turn, before the first await, so no
+//      edit can land between the commit and the pause. Every refusal from
+//      here gives both back.
 //   4. SAFETY COPY: a sealed copy of the live catalog (VACUUM INTO, every
 //      committed generation), checked sealed (its generation = the live
-//      one), moved to the Trash through THE one Trash call (MediaTrash.move)
-//      — proven there before the first write. Rule 2's spirit for data: the
-//      catalog as it was is never deleted; Rick empties the Trash.
-//   5. RESTORE: `repository.restore(fromSealedCopy:…)` — SQLite's backup API
-//      INTO the open catalog.sqlite, one transaction, the file never
-//      replaced, this Mac's catalog.highwater (+ .log) untouched
-//      (CatalogDatabaseRestore.swift has the design and why).
+//      one), pinned, moved to the Trash through THE one Trash call
+//      (MediaTrash.move) — and proven there before the first write: the
+//      same file (device + inode), size, mtime and full SHA-256 (codex #384
+//      P2). Rule 2's spirit for data: the catalog as it was is never
+//      deleted; Rick empties the Trash.
+//   5. RESTORE: `repository.restore(fromSealedCopy:…)` with the PINNED
+//      staged copy — the store re-checks the pin under the source's SHARED
+//      lock right before the first page — SQLite's backup API INTO the open
+//      catalog.sqlite, one transaction, the file never replaced, this Mac's
+//      catalog.highwater (+ .log) untouched (CatalogDatabaseRestore.swift
+//      has the design and why). Once SQLite reports the copy done it is
+//      committed: any later failure is "restored, not verified", never a
+//      refusal (codex #384 F1).
 //   6. STOP: the store closed itself; the committer stops for good
 //      (`stopAfterRestore`), the session turns read-only, and Rick is asked
 //      to quit. The RELAUNCH is the reload: the one tested launch path opens
@@ -49,10 +62,12 @@
 // SQLite transaction.
 //
 // Memory: the copy and the hash stream (FileManager's copy; 1 MB hash
-// chunks); SQLite's page cache for the checks and the backup. Disk: two
-// copies the size of catalog.sqlite in the work folder (the staged backup,
-// the safety copy until it moves to the Trash) — the folder is deleted at
-// the end (it holds only copies); the safety copy stays in the Trash.
+// chunks — each copy is hashed twice in verify, once more by the store);
+// SQLite's page cache for the checks and the backup. Disk: two copies the
+// size of catalog.sqlite in the work folder (the staged backup in its
+// read-only `source/` folder, the safety copy until it moves to the Trash)
+// — the folder is deleted at the end (it holds only copies); the safety
+// copy stays in the Trash.
 //
 // (For Rick: a caseless `enum` ≈ a C++ namespace of static functions;
 // `@concurrent` ≈ "always on a worker thread, never the caller's actor".)
@@ -69,8 +84,10 @@ enum CatalogBackupRestore {
         let bundleURL: URL
         /// Hidden scratch beside catalog.sqlite (deleted at the end).
         let workFolder: URL
-        /// The bundle's catalog.sqlite, copied and verified.
-        let stagedCopy: URL
+        /// The bundle's catalog.sqlite, copied, made read-only, pinned and
+        /// verified; the store restores these bytes or refuses.
+        let staged: CatalogPinnedSource
+        var stagedCopy: URL { staged.url }
         /// Read from `stagedCopy` itself (sealed open), not from the manifest.
         let backup: CatalogSealedCopyFacts
         /// The manifest's words (shown as such): when and where it was made.
@@ -111,6 +128,8 @@ enum CatalogBackupRestore {
         let note: (String) -> Void
         /// The session turns read-only (the model's read-only fact).
         let markRestored: () -> Void
+        /// Editing paused (true) or given back (false) while the restore runs.
+        let pauseEditing: (Bool) -> Void
         /// THE one Trash call; tests pass a failing one.
         var trash: @Sendable (URL) throws -> URL = { try MediaTrash.move($0) }
         /// Step 2. Production: the alert.
@@ -122,7 +141,8 @@ enum CatalogBackupRestore {
             guard let committer = model.catalogCutover.committer, let databaseURL = model.catalogCutover.databaseURL else { return nil }
             return Context(committer: committer, databaseURL: databaseURL,
                            note: { [weak model] in model?.catalogAuthorityNote($0) },
-                           markRestored: { [weak model] in model?.updateReadOnlyFacts { $0.restoredFromBackup = true } })
+                           markRestored: { [weak model] in model?.updateReadOnlyFacts { $0.restoredFromBackup = true } },
+                           pauseEditing: { [weak model] on in model?.updateReadOnlyFacts { $0.restoringFromBackup = on } })
         }
     }
 
@@ -159,18 +179,26 @@ enum CatalogBackupRestore {
             return .cancelled
         }
 
-        // 3. Hold (commit first, then admit nothing).
+        // 3. Hold (commit first, then admit nothing) and pause editing —
+        // one synchronous turn, no await before the pause.
         if let why = committer.commitBeforeSafetyCopy() {
             return refuse(context, plan, "what is in memory could not be saved first (\(why))")
         }
         committer.beginRestore()
+        context.pauseEditing(true)
+        /// Every refusal from here: editing back, then the hold (its
+        /// endRestore schedules a commit, which the pause would refuse).
+        func giveBack() {
+            context.pauseEditing(false)
+            committer.endRestore()
+        }
         let liveGeneration = await committer.generationNow()
 
         // 4. Safety copy → the Trash.
         let safetyCopy: URL
         switch await makeSafetyCopy(of: committer.repository, generation: liveGeneration, in: plan.workFolder, trash: context.trash) {
         case .failure(let refusal):
-            committer.endRestore()
+            giveBack()
             return refuse(context, plan, refusal.words)
         case .success(let trashed):
             safetyCopy = trashed
@@ -178,17 +206,18 @@ enum CatalogBackupRestore {
         context.note("Restore from Backup: the catalog as it is (generation \(liveGeneration)) is in the Trash at \(safetyCopy.path)")
 
         // 5. Restore.
-        let outcome = await committer.repository.restore(fromSealedCopy: plan.stagedCopy, expectedGeneration: plan.backup.generation,
+        let outcome = await committer.repository.restore(fromSealedCopy: plan.staged, expectedGeneration: plan.backup.generation,
                                                          pagesPerStep: context.pagesPerStep) { _, _ in }
         removeWorkFolder(plan)
         switch outcome {
         case .refused(let why):
-            committer.endRestore()
+            giveBack()
             return refuse(context, nil, "\(why) — the copy of the catalog in the Trash (\(safetyCopy.lastPathComponent)) is not needed")
         case .restored(let generation, let replaced, let pages):
             // 6. Stop.
             committer.stopAfterRestore(stopWords(plan))
             context.markRestored()
+            context.pauseEditing(false)
             context.note("OUTCOME restored catalog.sqlite from \(plan.bundleURL.lastPathComponent): generation \(replaced) → \(generation) "
                          + "(\(pages) pages, one transaction, the file not replaced) · file rows before \(live.files.map(String.init) ?? "unknown") · "
                          + "after \(plan.backup.counts.files) · the catalog as it was is in the Trash at \(safetyCopy.path) · "
@@ -197,6 +226,7 @@ enum CatalogBackupRestore {
         case .restoredUnverified(let why):
             committer.stopAfterRestore(stopWords(plan))
             context.markRestored()
+            context.pauseEditing(false)
             context.note("OUTCOME restored catalog.sqlite from \(plan.bundleURL.lastPathComponent) but NOT VERIFIED — \(why). "
                          + "The catalog as it was is in the Trash at \(safetyCopy.path). Quit and reopen VideoScan; it will open "
                          + "read-only — do not adopt it until Catalog Status shows it whole")
@@ -221,6 +251,9 @@ enum CatalogBackupRestore {
     }
 
     nonisolated static let workFolderPrefix = ".restore-"
+    /// The staged copy's folder inside the work folder: made non-writable
+    /// once the copy is in (no rename, replace or new file inside it).
+    nonisolated static let stagedFolderName = "source"
 
     /// What the bundle CLAIMS about its catalog.sqlite (manifest + latch),
     /// before any byte of the database is trusted. Reads only small files.
@@ -264,29 +297,43 @@ enum CatalogBackupRestore {
             return .failure(Refusal(words: "this Mac's high-water (\(CatalogHighWater.fileName)) cannot be read"))
         }
         let work = databaseURL.deletingLastPathComponent().appendingPathComponent("\(workFolderPrefix)\(UUID().uuidString)", isDirectory: true)
-        let staged = work.appendingPathComponent("backup-\(CatalogBackupSeal.databaseFileName)")
+        let stagedFolder = work.appendingPathComponent(stagedFolderName, isDirectory: true)
+        let stagedURL = stagedFolder.appendingPathComponent("backup-\(CatalogBackupSeal.databaseFileName)")
         func fail(_ words: String) -> Result<Plan, Refusal> {
             removeScratch(work)
             return .failure(Refusal(words: words))
         }
         do {
-            try fm.createDirectory(at: work, withIntermediateDirectories: false)
-            try fm.copyItem(at: bundle.appendingPathComponent(CatalogBackupSeal.databaseFileName), to: staged)
+            try fm.createDirectory(at: stagedFolder, withIntermediateDirectories: true)
+            try fm.copyItem(at: bundle.appendingPathComponent(CatalogBackupSeal.databaseFileName), to: stagedURL)
+            // Read-only from here: the file, and its folder (no rename or
+            // replace inside it). Before the pin, so the pin's ctime is final.
+            try fm.setAttributes([.posixPermissions: 0o444], ofItemAtPath: stagedURL.path)
+            try fm.setAttributes([.posixPermissions: 0o555], ofItemAtPath: stagedFolder.path)
         } catch {
             return fail("the backup's catalog.sqlite could not be copied for checking: \(error.localizedDescription)")
         }
-        let bytes = (try? fm.attributesOfItem(atPath: staged.path)[.size] as? NSNumber)?.int64Value ?? -1
-        guard bytes == sealed.bytes else {
-            return fail("the backup's catalog.sqlite is \(bytes) bytes, but its manifest says \(sealed.bytes)")
+        let staged: CatalogPinnedSource
+        do {
+            staged = try CatalogPinnedSource.pin(stagedURL)
+        } catch {
+            return fail("the backup's catalog.sqlite could not be read for checking: \(error)")
         }
-        guard let sha = try? CatalogStore.sha256HexStreaming(fileURL: staged), sha == sealed.sha256.lowercased() else {
+        guard staged.identity.bytes == sealed.bytes else {
+            return fail("the backup's catalog.sqlite is \(staged.identity.bytes) bytes, but its manifest says \(sealed.bytes)")
+        }
+        guard staged.sha256 == sealed.sha256.lowercased() else {
             return fail("the backup's catalog.sqlite does not match the SHA-256 its manifest recorded — it changed after the backup was made")
         }
         let facts: CatalogSealedCopyFacts
         do {
-            facts = try await CatalogDatabaseRestore.inspectSealedCopy(staged)
+            facts = try await CatalogDatabaseRestore.inspectSealedCopy(stagedURL)
         } catch {
             return fail("the backup's catalog.sqlite did not pass its checks: \(error)")
+        }
+        // The checks read the pinned bytes, not something swapped in under them.
+        if let changed = staged.changeSincePinned() {
+            return fail(CatalogDatabaseRestore.changedWords(changed))
         }
         guard facts.generation == sealed.generation, facts.counts.files == sealed.files,
               facts.counts.quarantine == sealed.quarantine, facts.counts.content == sealed.content else {
@@ -294,10 +341,9 @@ enum CatalogBackupRestore {
                         + "is not what its manifest recorded (generation \(sealed.generation), \(sealed.files) file rows)")
         }
         guard facts.generation < thisMac else {
-            return fail("the backup is at generation \(facts.generation), not below this Mac's high-water \(thisMac); "
-                        + "restored, it would open writable with no Adopt — it is from another catalog, or the same as the live one")
+            return fail(CatalogDatabaseRestore.atOrAboveHighWaterWords(generation: facts.generation, highWater: thisMac))
         }
-        return .success(Plan(bundleURL: bundle, workFolder: work, stagedCopy: staged, backup: facts,
+        return .success(Plan(bundleURL: bundle, workFolder: work, staged: staged, backup: facts,
                              exportedAt: manifest.exportedAt, exportedFromHost: manifest.exportedFromHost, highWater: thisMac))
     }
 
@@ -308,9 +354,13 @@ enum CatalogBackupRestore {
     }
 
     /// The one removal in this file: a `.restore-<uuid>` work folder beside
-    /// catalog.sqlite, and nothing else (refused otherwise).
+    /// catalog.sqlite, and nothing else (refused otherwise). Its read-only
+    /// `source/` folder is made writable again first, or nothing in it
+    /// could be removed.
     private nonisolated static func removeScratch(_ folder: URL) {
         guard folder.lastPathComponent.hasPrefix(workFolderPrefix) else { return }
+        let stagedFolder = folder.appendingPathComponent(stagedFolderName, isDirectory: true)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stagedFolder.path)
         try? FileManager.default.removeItem(at: folder)
     }
 
@@ -332,16 +382,24 @@ enum CatalogBackupRestore {
         } catch {
             return .failure(Refusal(words: "the copy of the catalog as it is did not pass its checks: \(error)"))
         }
-        let size = (try? FileManager.default.attributesOfItem(atPath: copy.path)[.size] as? NSNumber)?.int64Value
+        // Pinned after the checks (the same bytes they read: re-checked), so
+        // what is proven in the Trash is the copy that passed them.
+        let pinned: CatalogPinnedSource
+        do {
+            pinned = try CatalogPinnedSource.pin(copy)
+        } catch {
+            return .failure(Refusal(words: "the copy of the catalog as it is could not be read: \(error)"))
+        }
         let trashed: URL
         do {
             trashed = try trash(copy)
         } catch {
             return .failure(Refusal(words: "the copy of the catalog as it is could not be moved to the Trash: \(error.localizedDescription)"))
         }
-        let landed = (try? FileManager.default.attributesOfItem(atPath: trashed.path)[.size] as? NSNumber)?.int64Value
-        guard let size, landed == size else {
-            return .failure(Refusal(words: "the copy of the catalog is not in the Trash at \(trashed.path) as expected"))
+        // codex #384 P2: proven by identity (device + inode, size, mtime) AND
+        // the full SHA-256 before the first write to catalog.sqlite.
+        if let why = pinned.provenMoved(to: trashed) {
+            return .failure(Refusal(words: "the copy of the catalog in the Trash at \(trashed.path) does not match the copy that was checked (\(why))"))
         }
         return .success(trashed)
     }

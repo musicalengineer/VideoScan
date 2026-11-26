@@ -49,7 +49,14 @@ if arguments.count == 6, arguments[1] == "restore-once", let expected = Int(argu
         exit(3)
     }
     print("READY generation \(await repository.generation)")
-    let outcome = await repository.restore(fromSealedCopy: URL(fileURLWithPath: arguments[3]), expectedGeneration: expected,
+    let source: CatalogPinnedSource
+    do {
+        source = try CatalogPinnedSource.pin(URL(fileURLWithPath: arguments[3]))
+    } catch {
+        print("PIN \(error)")
+        exit(4)
+    }
+    let outcome = await repository.restore(fromSealedCopy: source, expectedGeneration: expected,
                                            pagesPerStep: 1) { copied, total in
         print("STEP \(copied) \(total)")
         usleep(delay)

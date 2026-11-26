@@ -571,6 +571,11 @@ struct FixityStampVolumeIdentityTests {
             // instant just before the publish — "was the folder moved away",
             // never a stored stamp.
             "VideoScan/Volumes/VolumeCompare.swift": 1,
+            // Restore from Backup… (codex #384 F2): CatalogPinnedSource — the
+            // pin of a scratch copy taken in THIS restore vs a live stat of
+            // it before the first page (and of the safety copy after its move
+            // to the Trash). Never a stored stamp; any difference refuses.
+            "VideoScanCore/Store/CatalogDatabaseRestore.swift": 2,
             // (CatalogKnownCopies — STORED stamps — compares volume UUID +
             // inode, never st_dev: nightly 2026-10-12.)
         ]
