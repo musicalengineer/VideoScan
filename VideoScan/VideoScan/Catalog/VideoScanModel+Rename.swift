@@ -17,25 +17,26 @@ extension VideoScanModel {
     // launch (issue: silent fail on filesystem error + missing persistence
     // + no cross-reference backfill).
     //
-    // Renaming is also THE way to fix a typo in a name for files in the
-    // Master Archive (Rick 2026-09-25). When the file is inside the archive
-    // — or is a promoted SOURCE, whose old path the archive's index quotes
-    // — the rename carries through to the index files in `00_Index/`
+    // Archive files are NOT renamed here (rule 3, Codex #383 — superseding
+    // Rick 2026-09-25's "rename is the way to fix a typo in the archive"
+    // since Update… landed, 2026-09-27): a promoted copy or anything under
+    // the archive root is refused, locked or not, and Update… changes its
+    // name with the folder and the manifest row. A promoted SOURCE, whose
+    // old path the archive's index quotes, still renames, and the rename
+    // carries through to the index files in `00_Index/`
     // (ArchiveIndexRename.swift: exact values only, untouched lines
-    // byte-identical, backups first, rollback on a failed publish). A typo
-    // is not history, so the old strings are fixed in place; no new record
-    // kinds.
+    // byte-identical, backups first, rollback on a failed publish).
     //
     // Which renames touch the index (QA m4 — an ordinary rename must never
     // spin up the archive RAID):
-    //  - inside the archive root                     → yes
+    //  - inside the archive root / a promoted copy   → refused (Update…)
     //  - a source with a promoted archive copy
     //    (ArchivePromotionIndex, O(1))                → yes
     //  - anything else                               → no index I/O at all
-    // Guards, in order: archive volume identity (house rule, codex R3
-    // blocker 1: inside-archive refuses, a source skips the index with a
-    // log line), then prepare, then "a Promote is appending" (refuses when
-    // the plan would rewrite anything).
+    // Guards, in order: archive membership (refused), archive volume
+    // identity (a source skips the index with a log line), then prepare,
+    // then "a Promote is appending" (refuses when the plan would rewrite
+    // anything).
     //
     // Cost (main thread, by design for now): an index-touching rename reads
     // the manifest + journals once — measured 0.73 s Debug on the M5 for
@@ -82,14 +83,13 @@ extension VideoScanModel {
         /// The archive's index could not be carried through (refused before
         /// anything changed, or rolled back — see the wrapped failure).
         case archiveIndex(ArchiveIndexRename.Failure)
-        /// The mounted volume is not the Master Archive volume
-        /// (`masterArchiveIdentityRefusal`) — an archive file is not renamed.
-        case archiveIdentity(String)
         /// A Promote job is appending to the archive's index right now.
         case archiveBusy
-        /// The file is a LOCKED archive file (Rick 2026-09-27): only
-        /// Update… changes an archived file's name.
-        case lockedArchiveFile
+        /// The file is a Master Archive file — a promoted copy or anything
+        /// under the archive root, locked or NOT (Codex #383: Promote can
+        /// leave a copy unlocked when the lock fails). Rule 3: only Update…
+        /// changes an archived file's name (Rick 2026-09-27).
+        case archivedFile
 
         var errorDescription: String? {
             switch self {
@@ -107,21 +107,20 @@ extension VideoScanModel {
                 return "Couldn't rename file: \(e.localizedDescription)"
             case .archiveIndex(let f):
                 return f.errorDescription
-            case .archiveIdentity(let reason):
-                return reason
             case .archiveBusy:
                 return "The archive is busy adding files right now. Rename this file after that finishes — nothing was renamed."
-            case .lockedArchiveFile:
-                return "This file is in the Master Archive and is locked. Use Update… (right-click) to change its name — nothing was renamed."
+            case .archivedFile:
+                return "This file is in the Master Archive. Only Update… (right-click) changes an archived file's name — nothing was renamed."
             }
         }
     }
 
-    /// True when renaming `record` also updates the Master Archive's index
-    /// — the rename sheet's one friendly line. (Only the "file is in the
-    /// archive" case; a promoted source's pointers are updated quietly.)
-    func renameUpdatesArchiveIndex(_ record: VideoRecord) -> Bool {
-        isInsideMasterArchive(path: record.fullPath)
+    /// True when `record` is a Master Archive file, so Rename… refuses it
+    /// (`RenameError.archivedFile`, Codex #383) — the rename sheet's one
+    /// line says so before Rick types. A promoted source is not one; its
+    /// index pointers are updated quietly.
+    func renameRefusedAsArchiveFile(_ record: VideoRecord) -> Bool {
+        isArchiveElement(record)
     }
 
     /// The exact old → new values a rename replaces in the archive index.
@@ -161,9 +160,10 @@ extension VideoScanModel {
     ///  - If `newBaseName` contains a path separator → throws `.invalidName`.
     ///  - If `record.fullPath` doesn't exist → throws `.sourceMissing`.
     ///  - If the destination path already exists → throws `.destinationExists`.
-    ///  - Archive file on a volume that is not the Master Archive volume →
-    ///    `.archiveIdentity`; a promoted source there renames without
-    ///    touching the index (logged).
+    ///  - A Master Archive file (promoted copy or under the root, locked or
+    ///    not) → `.archivedFile`: only Update… renames it (Codex #383).
+    ///  - A promoted source while the mounted volume is not the Master
+    ///    Archive volume renames without touching the index (logged).
     ///  - The archive index is prepared in memory FIRST; an unreadable /
     ///    unparseable index file throws `.archiveIndex` and nothing changes.
     ///    A Promote in progress throws `.archiveBusy` when the index would
@@ -202,6 +202,18 @@ extension VideoScanModel {
 
         let oldPath = record.fullPath
         let oldName = (oldPath as NSString).lastPathComponent
+
+        // Rule 3 (Codex #383): an archived file's name changes only through
+        // Update…, which moves the folder, filename and manifest row together.
+        // Judged by archive MEMBERSHIP (a promoted copy, or anything under the
+        // archive root — `isArchiveElement`), never by the immutable flag: a
+        // copy whose lock failed at Promote is just as archived. Refused
+        // before anything is read or written. A promoted SOURCE is not an
+        // archive file; it still renames (its index pointers follow below).
+        if isArchiveElement(record) {
+            appLog.write("Catalog: rename of \(oldName) refused — it is a Master Archive file; use Update…")
+            throw RenameError.archivedFile
+        }
         let dir = (oldPath as NSString).deletingLastPathComponent
         let newPath = (dir as NSString).appendingPathComponent(newFilename)
 
@@ -218,30 +230,20 @@ extension VideoScanModel {
         }
 
         // Archive index: decide cheaply whether it is involved at all, then
-        // prepare everything in memory before touching anything.
-        let inArchive = isInsideMasterArchive(path: oldPath)
-        // A locked archive file changes only through Update… (the kernel
-        // would refuse the rename anyway; say so before anything is written).
-        if inArchive, Self.isUserImmutable(path: oldPath) {
-            appLog.write("Catalog: rename of \(oldName) refused — it is a locked Master Archive file; use Update…")
-            throw RenameError.lockedArchiveFile
-        }
-        let promotedSource = !inArchive && masterArchiveCopy(of: record) != nil
+        // prepare everything in memory before touching anything. Only a
+        // promoted SOURCE reaches here with index lines to follow (an archive
+        // file was refused above): its absolute path is the manifest's and
+        // the journals' source pointer.
+        let promotedSource = masterArchiveCopy(of: record) != nil
         var root: String?
-        if inArchive || promotedSource,
-           let designated = masterArchiveRootPath, fm.fileExists(atPath: designated) {
+        if promotedSource, let designated = masterArchiveRootPath, fm.fileExists(atPath: designated) {
             if let refusal = masterArchiveIdentityRefusal() {
-                if inArchive {
-                    appLog.write("Catalog: rename of \(oldName) refused — \(refusal)")
-                    throw RenameError.archiveIdentity(refusal)
-                }
                 appLog.write("Catalog: rename of \(oldName) — archive index NOT updated: \(refusal)")
             } else {
                 root = designated
             }
         }
-        let replacements = Self.archiveIndexReplacements(oldPath: oldPath, newPath: newPath,
-                                                         archiveRoot: inArchive ? root : nil)
+        let replacements = Self.archiveIndexReplacements(oldPath: oldPath, newPath: newPath, archiveRoot: nil)
         var plan: ArchiveIndexRename.Plan?
         if let root {
             do {
@@ -285,7 +287,7 @@ extension VideoScanModel {
 
         let indexChanged = !(plan?.isEmpty ?? true)
         applyRename(record, oldPath: oldPath, newPath: newPath, newFilename: newFilename,
-                    durable: inArchive || indexChanged)
+                    durable: indexChanged)
 
         // The App Support ledger is the source the archive's mirror is
         // copied from; carry the rename there (chained, off-main), then
@@ -352,11 +354,3 @@ extension VideoScanModel.RenameError: ArchiveIndexRename.BackupDisposition {
     }
 }
 
-extension VideoScanModel {
-    /// lstat UF_IMMUTABLE on a path (no follow). One stat — for one gesture.
-    nonisolated static func isUserImmutable(path: String) -> Bool {
-        var sb = stat()
-        guard lstat(path, &sb) == 0 else { return false }
-        return (sb.st_flags & UInt32(UF_IMMUTABLE)) != 0
-    }
-}

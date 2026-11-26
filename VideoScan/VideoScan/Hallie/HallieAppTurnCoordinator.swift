@@ -353,12 +353,14 @@ enum HallieAppTurnCoordinator {
                         localModel: modelName,
                         onResponder: { responder.set($0) })
                 }
+                let shared = HallieBrainHistoryPolicy.history(history, for: brain)
+                let dataClass = HallieBrainHistoryPolicy.dataClass(.familyText, carrying: shared)
                 let reply = await HallieSocialConversation.reply(
                     kind: kind, question: question,
-                    history: HallieBrainHistoryPolicy.history(history, for: brain),
+                    history: shared,
                     modelCall: { system, user in
                         try await brain.get().composePlainText(
-                            system: system, user: user, dataClass: .familyText)
+                            system: system, user: user, dataClass: dataClass)
                     })
                 return SocialReply(
                     value: reply,
@@ -480,15 +482,15 @@ enum HallieAppTurnCoordinator {
                         localModel: modelName,
                         onResponder: { responder.set($0) })
                 }
+                let shared = HallieBrainHistoryPolicy.history(history, for: brain)
+                let dataClass = HallieBrainHistoryPolicy.dataClass(plan.dataClass, carrying: shared)
                 let composer = HallieGroundedComposer(
                     personaName: HallieCompositionSettings.personaName(),
                     modelCall: { system, user in
                         try await brain.get().composePlainText(
-                            system: system, user: user, dataClass: plan.dataClass)
+                            system: system, user: user, dataClass: dataClass)
                     })
-                var outcome = await composer.compose(
-                    plan: plan,
-                    history: HallieBrainHistoryPolicy.history(history, for: brain))
+                var outcome = await composer.compose(plan: plan, history: shared)
                 // Name the brain that was asked, answered or not (2026-11-15).
                 outcome.brain = HallieBrainLog.selectedLabel(localModel: modelName)
                 outcome.responder = outcome.composedBy == .model ? responder.value : nil

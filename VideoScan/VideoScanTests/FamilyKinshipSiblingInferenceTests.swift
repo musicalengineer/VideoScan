@@ -1019,19 +1019,16 @@ struct FamilyKinshipSiblingInferenceIsolationTests {
     /// children, and the store's conflict never shows up as a warning.
     @MainActor
     @Test func poisonedDefaultsAndAContradictingProfileStoreDoNotLeak() throws {
-        let defaults = UserDefaults.standard
         let keys = [HallieTurnExecutor.Speakers.ownerDefaultsKey,
                     HallieTurnExecutor.Speakers.ownerFamilySearchIDDefaultsKey,
                     OllamaEndpoints.hostsKey]
-        let priors = keys.map { defaults.object(forKey: $0) }
-        defer {
-            for (key, prior) in zip(keys, priors) {
-                if let prior { defaults.set(prior, forKey: key) } else { defaults.removeObject(forKey: key) }
-            }
-        }
-        defaults.set("Tim", forKey: keys[0])                 // the owner is a SIBLING, not Rick
-        defaults.set("G2CR-R4H", forKey: keys[1])            // the owner pin is Ma's
-        defaults.set("poison.invalid", forKey: keys[2])
+        // In memory only (TestPreferences): every read sees the poison; no plist is written.
+        let poisoned = TestPreferences.begin([
+            keys[0]: "Tim",              // the owner is a SIBLING, not Rick
+            keys[1]: "G2CR-R4H",         // the owner pin is Ma's
+            keys[2]: "poison.invalid",
+        ])
+        defer { poisoned.end() }
 
         // A real store on disk (temp dir only): Rick's rows plus a Tim who
         // says "child of Other" — the three-parent conflict.
@@ -1089,7 +1086,7 @@ struct FamilyKinshipSiblingInferenceIsolationTests {
         let timInEngine = profileVertex("Tim", in: profiles, of: engine.overlay)
         #expect(engine.parents(of: timInEngine).map { engine.name(of: $0.node) }.sorted() == ["Dad", "Ma"])
         #expect(engine.derivationProblems.isEmpty)
-        #expect(defaults.string(forKey: keys[2]) == "poison.invalid")
+        #expect(UserDefaults.standard.string(forKey: keys[2]) == "poison.invalid")
     }
 
     /// SENSOR (2026-09-13). The isolation test above asserted over an EMPTY

@@ -4144,8 +4144,15 @@
         "QARedSilenceFloorTests"
       ],
       "tests": [
+        "absoluteLevelOutranksLandmarks",
+        "antiPhaseStereoIsSound",
         "ditherIsSilence",
-        "lowHissIsSilence"
+        "loudToneIsSound",
+        "lowHissIsSilence",
+        "silenceNeedsQuietSourceChannels",
+        "sourceLevelParse",
+        "tonalFloorIsSilence",
+        "tonalFloorThroughTheDecoder"
       ]
     },
     {
@@ -4600,7 +4607,8 @@
       ],
       "tests": [
         "ballastIsNotInheritedByChildren",
-        "diskFullCommitRefusesAndRetries"
+        "diskFullCommitRefusesAndRetries",
+        "relaunchAfterDiskFullRefusalOpensReadWrite"
       ]
     },
     {
@@ -4987,6 +4995,7 @@
         "noReplaceOrIgnoreConflictResolutionInTheStore",
         "normalisationKeepsWhitespaceInsideStringLiterals",
         "onlyStoreFoldersImportGRDB",
+        "spaceFloorOffNeverLeavesTheTests",
         "theDDLMatchesTheDesignDocumentsTriggers",
         "theMigrationCreatesNoTableOutsideTheDDL",
         "volatileDurabilityNeverLeavesTheTests"
@@ -10355,6 +10364,7 @@
         "drainCancelsCooperativeBatch",
         "drainDeadlineExpiresOnStubbornEngine",
         "drainOnIdleIsImmediate",
+        "endShutdownReopensTheLatch",
         "mlxUsageFlagRoundTrip",
         "shutdownLatchRefusesNewBatches"
       ]
@@ -11569,8 +11579,18 @@
         "CatalogQuitCornerTests"
       ],
       "tests": [
+        "editAfterTheRescueGetsItsOwnCopy",
+        "editInsideTheDebounceWindowLandsAtQuit",
+        "heldRowsAlreadyDurableAreNotRescued",
+        "holdThatClearsIsWaitedOut",
+        "holdThatStaysAsksAndKeepOpenKeepsTheEdit",
         "keepOpenChoiceNeedsTheCommitBeforeTerminate",
+        "keepOpenReopensTheShutdownLatch",
         "masterQuitWithFailedFinalCommit",
+        "nothingAtRiskQuitsWithoutAQuestion",
+        "refusedCommitAsksWithTheCommittersWords",
+        "rescueThatCannotBeWrittenKeepsVideoScanOpen",
+        "roleFlipWithAcceptedEditAsksThenRescuesTheDelta",
         "viewerQuitSavesNothingAndSaysNothing"
       ]
     },
@@ -11632,13 +11652,12 @@
         "CatalogRenameArchiveIndexTests"
       ],
       "tests": [
-        "archiveRenameHappyPath",
+        "archiveFileIsRefused",
         "archiveRootFileBareNameNotAKey",
         "backupRetentionKeepsTwenty",
         "busyArchiveRefusesInModel",
         "concurrentAppendDuringPublishIsNotLost",
         "csvCellWithQuoteIsRewritten",
-        "decisionsSourceFilenameUntouched",
         "destinationExistsRefuses",
         "engineTokenRules",
         "identityMismatchRefusesOrSkips",
@@ -11754,6 +11773,8 @@
         "CuratedEditGuardSensorTests"
       ],
       "tests": [
+        "dateEditKeepsBothRefusals",
+        "inspectorDateRoutesThroughBothRules",
         "modelMutatorsAskTheGuard",
         "refusalLoggedOncePerEpisode",
         "viewerSessionRefusesTheEdit",
@@ -13154,7 +13175,10 @@
         "CheckMediaLayoutRealFileTests"
       ],
       "tests": [
+        "aCommentTagIsNotAReconfiguration",
         "aDecodeThatEndsEarlyIsNotEverySample",
+        "aReconfigurationLineMarksTheReport",
+        "aReconfiguredSoundIsNotEverySample",
         "allSoundAtTheEndIsAProblem",
         "argumentsAreReadOnlyAndNamed",
         "cleanToneHasNothing",
@@ -18338,7 +18362,10 @@
       ],
       "tests": [
         "aByteCopyOfADerivativeInheritsTheDerivativesPlace",
+        "aFullHashFillKeepsAnUnhashedLooseFileInItsConfirmedFolder",
+        "aRowInTwoFoldersByIdAndByDigestShowsUnderBoth",
         "addingKeepsHitsFirstAndNeverResurrectsAFilteredRow",
+        "anIdMemberWithNoContentKeyStaysInItsFolderAndMatchesOnlyItsOwnRow",
         "anUnassignedCopyFollowsItsOwnCopyGroupsEvent",
         "computeFilteredAddsTitledFolderMembers",
         "confirmedEventBecomesAFolderAndTheRestStaysLoose",
@@ -18631,6 +18658,25 @@
         "anOlderIndexReadFinishingLateNeverReplacesANewerOne",
         "aDiskReadFinishingAfterASaveNeverReplacesTheSavedIndex",
         "closingTheWindowDuringAnIndexReadPublishesNothing"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieLocalBrainGateTests.swift",
+      "stage": "unit",
+      "suites": [
+        "HallieLocalBrainGateTests"
+      ],
+      "tests": [
+        "anotherMacOnTheLANIsNotLocal",
+        "emptyHostListUsesTheGatedTemplateHost",
+        "familyMediaGoesOnlyToThisMac",
+        "familyMediaNeverDialsAnHTTPSHost",
+        "familyMediaRedirectOffThisMacIsRefused",
+        "familyTextAndPublicFollowTheListedOrder",
+        "historyCarriesTheMediaClass",
+        "localityTruthTable",
+        "loopbackAddressSpellings"
       ]
     },
     {
@@ -19171,6 +19217,7 @@
         "poisonedSettings",
         "reasonIsBounded",
         "recordedResponder",
+        "refusalDialsNoAfterFailureProbe",
         "residentLines",
         "scale",
         "selectedFollowsSettings"
@@ -28463,6 +28510,7 @@
         "hundredThousand",
         "inferredFloor",
         "makeWithoutModelIsASoftwareStamp",
+        "monthMatchersHonourTheYearGuard",
         "noFilesystemDates",
         "patterns",
         "readinessDateState",
@@ -33822,17 +33870,21 @@
         "test_complexity_swift_regex.py"
       ],
       "tests": [
+        "test_a_raw_string_holding_nested_literals_yields_one_span",
         "test_a_slash_followed_by_space_is_an_operator_not_a_regex",
+        "test_a_string_with_a_nested_literal_is_one_neutral_span",
         "test_bare_regex_in_expression_position_becomes_an_empty_string",
         "test_comments_are_untouched",
         "test_division_is_untouched",
         "test_extended_regex_single_and_multi_line_keep_the_line_count",
-        "test_fixture_reproduces_the_bug_without_neutralising",
+        "test_fixture_regex_get_needs_no_accessor_and_is_neutralised",
         "test_get_inside_a_regex_does_not_create_a_function",
         "test_member_init_reference_does_not_open_an_initializer",
+        "test_nested_interpolation_with_an_apostrophe_keeps_every_function",
         "test_raw_string_and_availability_keep_braces_balanced",
         "test_raw_strings_become_empty_strings_and_other_hashes_spaces",
         "test_regex_spans_report_only_regex_literals",
+        "test_set_and_get_bindings_are_not_accessors",
         "test_strings_and_interpolations_are_untouched"
       ]
     },
@@ -37894,6 +37946,39 @@
       ]
     },
     {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitFailsAfterPhaseOneTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitFailsAfterPhaseOneTests"
+      ],
+      "tests": [
+        "bodyFailureKeepsItsWords",
+        "commitFailureIsNamed"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogSpaceFloorTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogSpaceFloorTests"
+      ],
+      "tests": [
+        "adoptRefusedBelowTheFloor",
+        "copyFloorAppliesOnlyOnTheCatalogDisk",
+        "costPerWrite",
+        "minimumFloor",
+        "multipleOfCatalogAndWAL",
+        "poisonedFolder",
+        "realReading",
+        "refusalWords",
+        "refusedThroughTheDoor",
+        "sealedCopyOnTheCatalogDiskRespectsTheFloor",
+        "unreadableAndOff"
+      ]
+    },
+    {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ProvenanceEstimateTests.swift",
       "stage": "unit",
@@ -39288,6 +39373,199 @@
         "theLivingVerdictIsLifeStatusesConservativeRule",
         "treeNicknameWinsForTheLiving",
         "undatedTreePersonIsTreatedAsLiving"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/TestDefaultsWriteSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "TestDefaultsWriteSensorTests"
+      ],
+      "tests": [
+        "rulesCatchTheForbiddenShapes",
+        "scriptsNeverWriteTheRealDomain",
+        "swiftTestSourcesNeverWriteTheRealDomain"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchivedInspectorDateTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ArchivedInspectorDateTests"
+      ],
+      "tests": [
+        "archiveElementsRefusedControlWritten",
+        "archivedWords",
+        "clearOnArchivedIsRefused",
+        "saveOnArchivedIsRefused",
+        "unreadableEntry",
+        "writerCasesThenRelaunch"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/NetworkWalkCancelCheckpointTests.swift",
+      "stage": "regression",
+      "suites": [
+        "NetworkWalkCancelCheckpointTests"
+      ],
+      "tests": [
+        "cancelledNetworkWalkSavesNoCheckpoint",
+        "completedNetworkWalkStillSavesCheckpoint"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/TestPreferencesTests.swift",
+      "stage": "unit",
+      "suites": [
+        "TestPreferencesTests"
+      ],
+      "tests": [
+        "aHostsOverrideIsReadEverywhereAndPersistedNowhere",
+        "anUnderlyingArgumentValueIsRestored",
+        "concurrentOverlappingScopesUnwindToNothing",
+        "crossedScopesOnOneKeyLeaveNothingBehind",
+        "crossedScopesWithDifferentValuesKeepTheLiveOne",
+        "nestedScopesUnwindInnermostFirstAcrossAwait",
+        "scratchSuitesAreUniqueAndRemovable"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchivedTwinDateAndRenameTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ArchivedRenameRefusalTests",
+        "ArchivedTwinDateTests"
+      ],
+      "tests": [
+        "propagationDeclines",
+        "scale",
+        "twinIsRefused",
+        "twinWords",
+        "underRootRefusedSourceRenames",
+        "unlockedArchiveCopyRefused",
+        "whoFixesWhat",
+        "writerThroughSQLite"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/DossierPropagationDigestIdentityTests.swift",
+      "stage": "regression",
+      "suites": [
+        "DossierPropagationDigestIdentityTests"
+      ],
+      "tests": [
+        "archiveFixityIsAWholeFileDigestToo",
+        "disagreeingFixities_propagateNothing",
+        "sameDigestDifferentSample_propagates",
+        "sameDigest_propagatesAsBefore",
+        "sameSampleDifferentDigest_backfillCopiesNoOCRDates",
+        "sameSampleDifferentDigest_writebackCopiesNoTranscript",
+        "sameSampleNoDigest_propagatesNothing"
+      ]
+    },
+    {
+      "blocked_reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ProductionShapeDossierDigestTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ProductionShapeDossierDigestTests"
+      ],
+      "tests": [
+        "everyWrittenValueHasASameDigestDonor"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveDateProvenanceTruthTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchiveDateProvenanceTruthTests"
+      ],
+      "tests": [
+        "backfillScale",
+        "fixityDateIsNotTheArchiveDay",
+        "machineDateIsNotAUserDate",
+        "noDayNoYearNoUserDate",
+        "usersDateRebuilds"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ContentHashBackfillVolumeIdentityTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ContentHashBackfillVolumeIdentityTests"
+      ],
+      "tests": [
+        "aRefusalIsCountedAndNamedInTheLog",
+        "hasherRefusesOnTheOpenedDescriptor",
+        "recordOnAnotherVolumeIsNotSigned",
+        "recordOnThisVolumeIsSigned",
+        "recordWithNoVolumeEvidenceIsNotSigned"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/WitnessWholeDiskIndependenceTests.swift",
+      "stage": "regression",
+      "suites": [
+        "WitnessWholeDiskIndependenceTests"
+      ],
+      "tests": [
+        "aLocalDriveWitnessIsIndependentOfANetworkSource",
+        "anUnmountedSourceDriveNeverProvesIndependence",
+        "differentPhysicalDrivesAreIndependent",
+        "networkShareWitnessIsIndependentOfALocalDisk",
+        "retireNamesWhyAWitnessOnAnotherVolumeDoesNotCount",
+        "retireRefusesAWitnessOnAnotherVolumeOfTheSameDisk",
+        "retireRefusesWhileTheSourceDriveIsNotConnected",
+        "sameDeviceDifferentVolumesIsNotIndependent",
+        "theWitnessThatIsTheSourceFileIsNeverIndependent",
+        "twoNetworkSharesAreNotIndependent",
+        "twoVolumesOfTheInternalSSDAreNotIndependent",
+        "witnessOnADiskImageIsNotIndependent",
+        "witnessOnAnUnknownVolumeIsNotIndependent"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/RescanKeepsKnownHashTests.swift",
+      "stage": "regression",
+      "suites": [
+        "RescanKeepsKnownHashTests"
+      ],
+      "tests": [
+        "aFileReplacedAtThePathIsHashedAgain",
+        "aFileRewrittenBeforeAPartialMergeIsHashedAgain",
+        "aFileRewrittenBetweenProbeAndApplyIsHashedAgain",
+        "aFileRewrittenInPlaceIsHashedAgain",
+        "aRacilyCleanStampIsNeverTrusted",
+        "aStampWithNoVolumeIsNeverTrusted",
+        "acrossAViewerFlipTheHashLandsWhenMasterAgain",
+        "anEditInsideTheDebounceWindowAndTheHashBothLand",
+        "anUnchangedFileKeepsItsHashThroughAPartialMerge",
+        "duringAWriteHoldNothingIsLostAndTheHashLandsAfter",
+        "theCarryRuleAt100kRowsFitsTheBudget",
+        "unchangedFileKeepsItsHash"
+      ]
+    },
+    {
+      "blocked_reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ProductionShapeRescanHashKeepTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ProductionShapeRescanHashKeepTests"
+      ],
+      "tests": [
+        "theRuleKeepsExactlyTheUnchangedFiles"
       ]
     }
   ],
@@ -42085,7 +42363,7 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 4109,
+      "expected_floor": 4135,
       "name": "unit",
       "package_expected_floor": 1027,
       "package_selectors": [
@@ -42543,6 +42821,7 @@
         "VideoScanTests/HallieBrainChoiceLogicTests",
         "VideoScanTests/HallieCloudBrainCanarySensor",
         "VideoScanTests/HallieCloudRequestShapeTests",
+        "VideoScanTests/HallieLocalBrainGateTests",
         "VideoScanTests/HalliePresenceLikeCharacterizationTests",
         "VideoScanTests/HalliePronunciationRespellingCharacterizationTests",
         "VideoScanTests/HallieTurnExecutorDispatchCharacterizationTests",
@@ -42882,7 +43161,10 @@
         "VideoScanTests/CatalogTagDuplicateSortLogicTests",
         "VideoScanTests/CatalogTagDuplicateSortScaleTests",
         "VideoScanTests/CatalogTagDuplicateSortSensorTests",
-        "VideoScanTests/CatalogTagSortRealisticShapeTests"
+        "VideoScanTests/CatalogTagSortRealisticShapeTests",
+        "VideoScanTests/TestDefaultsWriteSensorTests",
+        "VideoScanTests/TestPreferencesTests",
+        "VideoScanTests/ArchiveDateProvenanceTruthTests"
       ]
     },
     {
@@ -43334,11 +43616,19 @@
         {
           "name": "VideoScan/VideoScanTests/VerifyAudioPacketShapeTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ProductionShapeDossierDigestTests.swift",
+          "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ProductionShapeRescanHashKeepTests.swift",
+          "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 1076,
+      "expected_floor": 1141,
       "name": "regression",
-      "package_expected_floor": 369,
+      "package_expected_floor": 384,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -43401,7 +43691,9 @@
         "VideoScanCoreTests.CatalogRealityFutureEvidenceTests",
         "VideoScanCoreTests.LateMeasurementAfterFinishTests",
         "VideoScanCoreTests.CatalogCloseDrainTests",
-        "VideoScanCoreTests.EraCanaryCommandTests"
+        "VideoScanCoreTests.EraCanaryCommandTests",
+        "VideoScanCoreTests.CatalogCommitFailsAfterPhaseOneTests",
+        "VideoScanCoreTests.CatalogSpaceFloorTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
@@ -43609,7 +43901,15 @@
         "VideoScanTests/ReformatUnverifiedOutputMatrixTests",
         "VideoScanTests/CleanupUnverifiedRenderMatrixTests",
         "VideoScanTests/EncodeSourceWithoutDurationMatrixTests",
-        "VideoScanTests/VolumeRescueNeverReplacesTests"
+        "VideoScanTests/VolumeRescueNeverReplacesTests",
+        "VideoScanTests/ArchivedInspectorDateTests",
+        "VideoScanTests/ArchivedTwinDateTests",
+        "VideoScanTests/ArchivedRenameRefusalTests",
+        "VideoScanTests/NetworkWalkCancelCheckpointTests",
+        "VideoScanTests/DossierPropagationDigestIdentityTests",
+        "VideoScanTests/ContentHashBackfillVolumeIdentityTests",
+        "VideoScanTests/WitnessWholeDiskIndependenceTests",
+        "VideoScanTests/RescanKeepsKnownHashTests"
       ]
     },
     {

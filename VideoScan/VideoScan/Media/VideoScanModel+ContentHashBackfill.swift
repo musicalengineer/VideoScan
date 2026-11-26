@@ -27,6 +27,14 @@
 // (see [[project_approachable_concurrency_trap]]), so the boundary here
 // is explicit and carries only Sendable values.
 //
+// IDENTITY (GH #412, 2026-11-25). Picking rows by path prefix is a scope,
+// not an identity: a same-named file can sit at a record's path on ANOTHER
+// disk (two Macs' `/Users/rickb/Movies`, a remote mount of a known volume).
+// Each read therefore checks the OPENED file's volume UUID against the
+// record's evidenced volume (`VolumeIdentity.agree`, the #401 rule) and
+// refuses to sign on disagreement — counted, named in the log, never
+// written. The plan (a dry run) does not open files, so it cannot see this.
+//
 // SAFETY. This pass only ever WRITES a hash onto a record that had none.
 // It never deletes, never moves a file, never touches an existing hash,
 // and skips unreachable volumes rather than recording a failure. Re-
@@ -71,6 +79,52 @@ extension VideoScanModel {
         var failed: Int = 0
         var cancelled: Bool = false
         var elapsed: TimeInterval = 0
+        /// Files at the record's path that are on ANOTHER volume than the
+        /// record's (GH #412): never signed.
+        var refusedOtherVolume: Int = 0
+    }
+
+    /// One lane read handed back to the main actor: a signature for the
+    /// record, or the refusal of a file on another volume (GH #412).
+    enum SignatureLaneResult: Sendable {
+        case signed(UUID, String)
+        case otherVolume(UUID, found: String?)
+
+        /// The lane's answer for one read; nil = unreadable (not handed back,
+        /// counted as failed, retried by a later run).
+        static func of(_ id: UUID, _ read: FileHasher.VolumeCheckedSignature) -> SignatureLaneResult? {
+            switch read {
+            case .signed(let signature): return .signed(id, signature)
+            case .otherVolume(let found): return .otherVolume(id, found: found)
+            case .unreadable: return nil
+            }
+        }
+    }
+
+    /// The files one run refused to sign because the file at the record's
+    /// path is on another volume (GH #412): how many, and the first few
+    /// named with both volumes for the one log line.
+    @MainActor
+    struct SignatureRefusals {
+        static let named = 5
+        private(set) var refused = 0
+        private(set) var sample: [String] = []
+
+        mutating func note(_ rec: VideoRecord?, found: String?) {
+            refused += 1
+            guard sample.count < Self.named, let rec else { return }
+            sample.append("\(rec.fullPath) (record's volume \(rec.evidencedVolumeUUID ?? "unknown"), file's \(found ?? "unknown"))")
+        }
+
+        /// The console line, nil when nothing was refused.
+        var logLine: String? {
+            guard refused > 0 else { return nil }
+            let more = refused > sample.count ? " … and \(refused - sample.count) more" : ""
+            return "  ⚠ File signatures: \(refused) file(s) NOT signed — the file at the record's path is on another volume than the record's: \(sample.joined(separator: "; "))\(more)"
+        }
+
+        /// The summary line's clause.
+        var summary: String { refused > 0 ? ", refused \(refused) (other volume)" : "" }
     }
 
     // MARK: - Candidate selection
@@ -172,14 +226,19 @@ extension VideoScanModel {
         // Snapshot the work as Sendable pairs. VideoRecord itself never
         // crosses the boundary. Same scope predicate the PLAN uses, so a
         // dry run can never promise different work than the pass does.
-        let work: [(id: UUID, path: String)] = records
+        let work: [(id: UUID, path: String, volume: String?)] = records
             .filter { Self.needsContentHash($0) }
             .filter { rec in
                 guard let prefix = pathPrefix else { return true }
                 return Self.isUnder(rec, prefix: prefix)
             }
             .filter { VolumeReachability.isReachable(path: $0.fullPath) }
-            .map { ($0.id, $0.fullPath) }
+            .map { ($0.id, $0.fullPath, $0.evidencedVolumeUUID) }
+        // GH #412: the volume each record's file is evidenced on, checked by
+        // the lane against the file it opens. Worst-case memory: one UUID
+        // key + one 36-byte string per candidate (~10 MB at 100k).
+        let recordVolumes: [UUID: String] = Dictionary(
+            work.compactMap { w in w.volume.map { (w.id, $0) } }, uniquingKeysWith: { a, _ in a })
 
         guard !work.isEmpty else {
             return ContentHashBackfillResult(elapsed: Date().timeIntervalSince(started))
@@ -231,7 +290,7 @@ extension VideoScanModel {
         // bounds the worst case rather than changing the normal one.
         let permits = AsyncSemaphore(limit: max(batchSize * 4, 64))
 
-        let stream = AsyncStream<(UUID, String)> { continuation in
+        let stream = AsyncStream<SignatureLaneResult> { continuation in
             let task = Task.detached(priority: .utility) {
                 await withTaskGroup(of: Void.self) { group in
                     for lane in lanes {
@@ -240,13 +299,13 @@ extension VideoScanModel {
                             // loop needs no lock, no cursor, and no actor.
                             for item in lane {
                                 if Task.isCancelled { return }
-                                let signature = autoreleasepool {
-                                    FileHasher.segmentedHash(path: item.path)
+                                let read = autoreleasepool {
+                                    FileHasher.segmentedHash(path: item.path, recordVolume: recordVolumes[item.id])
                                 }
-                                guard !signature.isEmpty else { continue }
+                                guard let result = SignatureLaneResult.of(item.id, read) else { continue }
                                 // Blocks only when the consumer is behind.
                                 do { try await permits.wait() } catch { return }
-                                continuation.yield((item.id, signature))
+                                continuation.yield(result)
                             }
                         }
                     }
@@ -267,15 +326,25 @@ extension VideoScanModel {
         index.reserveCapacity(records.count)
         for rec in records { index[rec.id] = rec }
 
-        var pending: [(UUID, String)] = []
+        var pending: [SignatureLaneResult] = []
         pending.reserveCapacity(batchSize)
         var processed = 0   // signatures computed and handed back
         var applied = 0     // records this pass actually changed
+        var refusals = SignatureRefusals()   // GH #412
 
         func flush() async {
             guard !pending.isEmpty else { return }
             let now = Date()
-            for (id, signature) in pending {
+            for item in pending {
+                let id: UUID, signature: String
+                switch item {
+                case .otherVolume(let refusedID, let found):
+                    refusals.note(index[refusedID], found: found)
+                    continue
+                case .signed(let signedID, let signed):
+                    id = signedID
+                    signature = signed
+                }
                 guard let rec = index[id] else { continue }
                 // Never overwrite: a signature may have arrived from a
                 // scan while this pass was running.
@@ -325,7 +394,10 @@ extension VideoScanModel {
         // without changing `records.count`, so tell them (codex #1368).
         if applied > 0 { notifyVolumeAggregatesStale() }
 
+        result.refusedOtherVolume = refusals.refused
+        refusals.logLine.map { log($0) }
         log("File signatures: computed \(result.hashed), failed \(result.failed)"
+            + refusals.summary
             + (result.cancelled ? ", CANCELLED" : "")
             + String(format: ", %.1fs", result.elapsed))
         return result

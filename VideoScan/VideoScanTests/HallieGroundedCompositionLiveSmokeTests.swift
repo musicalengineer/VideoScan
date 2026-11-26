@@ -22,7 +22,7 @@ struct HallieGroundedCompositionLiveSmokeTests {
         }
         let fleet = OllamaFailoverTranslator(hosts: [brain.host], template: brain)
         return HallieGroundedComposer(personaName: "Hallie Mae", timeoutSeconds: 60) { system, user in
-            try await fleet.composePlainText(system: system, user: user)
+            try await fleet.composePlainText(system: system, user: user, dataClass: .familyText)
         }
     }
 

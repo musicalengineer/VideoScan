@@ -140,7 +140,7 @@ struct SoundPrintSilenceVerdictTests {
 
     // MARK: Sensor — "silent" only for decoded, measured silence
 
-    @Test("SENSOR: across every stamp shape, measuredSilence ⇔ (fingerprinted, rule ≥ 4, 0 landmarks, analysed > 0); across every print shape, .silence ⇔ (0 landmarks, analysed > 0, measured, 0 loud seconds) — whatever the bitmap")
+    @Test("SENSOR: across every stamp shape, measuredSilence ⇔ (fingerprinted, rule ≥ 4, 0 landmarks, analysed > 0); across every print shape, .silence ⇔ (analysed > 0, measured, 0 loud seconds) — whatever the bitmap or the landmark count (#345)")
     func silentOnlyForMeasuredSilence() {
         var silentStamps = 0
         for version in 1...5 {
@@ -166,7 +166,10 @@ struct SoundPrintSilenceVerdictTests {
                 for loud in [nil, 0, 1, 2] as [Int?] {
                     for seconds in [0.0, 2.0] {
                         let r = AudioFingerprintStamp.reading(of: Self.print(landmarks: landmarks, active: active, seconds: seconds, loud: loud))
-                        #expect((r == .silence) == (landmarks == 0 && seconds > 0 && loud == 0),
+                        // GH #345: the absolute level decides before the landmark
+                        // count — landmarks over a floor that never clears −60 dBFS
+                        // are the normalising gain's, not programme.
+                        #expect((r == .silence) == (seconds > 0 && loud == 0),
                                 "lm=\(landmarks) active=\(active) loud=\(String(describing: loud)) s=\(seconds) → \(r)")
                     }
                 }

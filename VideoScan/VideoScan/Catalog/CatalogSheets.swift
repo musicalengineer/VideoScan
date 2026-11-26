@@ -12,8 +12,9 @@ struct RenameSheet: View {
     let originalExt: String
     let onConfirm: () -> Void
     let onCancel: () -> Void
-    /// The file lives in the Master Archive: say, in plain words, that the
-    /// archive's index follows the rename (Rick 2026-09-25).
+    /// The file lives in the Master Archive: say, in plain words, that only
+    /// Update… changes its name (rule 3; Codex #383 — the Catalog rename
+    /// refuses an archive file, locked or not).
     var inArchive: Bool = false
 
     var body: some View {
@@ -29,7 +30,7 @@ struct RenameSheet: View {
                     .foregroundColor(.secondary)
             }
             if inArchive {
-                Text("This file is in the archive — the archive's index is updated too.")
+                Text("This file is in the archive. Only Update… (right-click) changes its name.")
                     .font(.callout)
                     .foregroundColor(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading)

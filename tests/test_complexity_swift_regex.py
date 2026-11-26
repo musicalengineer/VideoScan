@@ -50,9 +50,12 @@ def test_comments_are_untouched():
 
 def test_strings_and_interpolations_are_untouched():
     src = ('let p = "/usr/bin/get/"\n'
-           'let q = "\\(a / b) and /get/ \\("in" + "/x/")"\n'
+           'let q = "\\(a / b) and /get/ \\(a + b)"\n'
            'let m = """\n  /get/ "quoted" \\(a / b)\n  """\n')
     assert neutral(src) == src
+    # a literal inside the interpolation makes the whole outer one `""` (#398)
+    nested = 'let q = "\\(a / b) and /get/ \\("in" + "/x/")"\n'
+    assert neutral(nested) == 'let q = ""\n'
 
 
 def test_a_slash_followed_by_space_is_an_operator_not_a_regex():
@@ -133,9 +136,12 @@ def lizard_names(src: str):
     return [f.name for f in lizard.analyze_file.analyze_source_code(PATH, src).function_list]
 
 
-def test_fixture_reproduces_the_bug_without_neutralising():
-    """Red proof: raw lizard opens a `get` inside the regex."""
-    assert "get" in lizard_names(FETCH_FIXTURE)
+def test_fixture_regex_get_needs_no_accessor_and_is_neutralised():
+    """The `get` inside `/\\b(?:get|fetch)\\b/` once opened an accessor (the
+    original red proof). Two defences now: an accessor word opens a function
+    only before its body (#458), and the regex never reaches lizard."""
+    assert "get" not in lizard_names(FETCH_FIXTURE)
+    assert "get|fetch" in FETCH_FIXTURE and "get|fetch" not in neutral(FETCH_FIXTURE)
 
 
 def test_get_inside_a_regex_does_not_create_a_function():
@@ -189,4 +195,102 @@ def test_raw_string_and_availability_keep_braces_balanced():
         ("Years.supplies", 1, 2, 5),
         ("Years.modern", 2, 7, 12),
         ("Years.after", 2, 14, 17),
+    ]
+
+
+# ------------------------------------------------- nested interpolation (#398)
+
+# HallieRelationshipsOverview.answer (2026-10-29): a nested interpolation whose
+# inner literal holds an apostrophe threw lizard's string/char state off, and
+# the functions after it were swallowed or vanished.
+NESTED_FIXTURE = """struct Overview {
+    static func answer(_ isOwner: Bool, _ subjectName: String) -> String {
+        if isOwner { return plain("\\(isOwner ? "You're" : "\\(subjectName) is") the only person", 1) }
+        return "none"
+    }
+
+    static func plain(_ s: String, _ n: Int) -> String {
+        if n > 1 { return "couldn't" }
+        return s
+    }
+
+    static func after(_ x: Int) -> Int {
+        if x > 1 { return 1 }
+        return 0
+    }
+}
+"""
+
+
+def test_a_string_with_a_nested_literal_is_one_neutral_span():
+    src = 'let s = "\\(ok ? "You\'re" : "\\(n) is") alone"\nlet t = "plain \\(x)"\n'
+    assert neutral(src) == 'let s = ""\nlet t = "plain \\(x)"\n'
+
+
+def test_a_raw_string_holding_nested_literals_yields_one_span():
+    src = 'let r = #"a \\#(f("x", #selector(g))) b"#\nlet z = 1\n'
+    assert cm.swift_lizard_spans(src) == [(8, src.index("\n"), "raw")]
+    assert neutral(src) == 'let r = ""\nlet z = 1\n'
+
+
+def test_nested_interpolation_with_an_apostrophe_keeps_every_function():
+    raw = [(f.name, f.start_line, f.end_line)
+           for f in lizard.analyze_file.analyze_source_code(PATH, NESTED_FIXTURE).function_list]
+    assert ("plain", 7, 10) not in raw                                    # red proof
+    funcs, _ = cm.analyze_sources({PATH: NESTED_FIXTURE})
+    assert [(f.display, f.ccn, f.start_line, f.end_line) for f in funcs] == [
+        ("Overview.answer", 2, 2, 5),
+        ("Overview.plain", 2, 7, 10),
+        ("Overview.after", 2, 12, 15),
+    ]
+
+
+# ---------------------------------------- `let set` / `let get` bindings (#458)
+
+# BirthplaceUnitResolver Scan.apply (2026-11-07): `case .country(let c, let set)`
+# opened a `set` accessor that never closed (reported 32/238, really 16/36).
+BINDING_FIXTURE = """struct Scan {
+    private(set) var count = 0
+    var value: Int {
+        get async throws { count }
+    }
+    var other: Int {
+        get { count }
+        set(newValue) { count = newValue }
+    }
+
+    func apply(_ u: Unit) -> Int {
+        switch u {
+        case .country(let c, let set):
+            if set.isEmpty { return 0 }
+            return c.count
+        case .city(let get):
+            return get.count
+        case let .region(r, set):
+            set.insert(r)
+            return 2
+        default:
+            return 1
+        }
+    }
+
+    func after(_ x: Int) -> Int {
+        if x > 1 { return 1 }
+        return 0
+    }
+}
+"""
+
+
+def test_set_and_get_bindings_are_not_accessors():
+    assert "set" in lizard_names(BINDING_FIXTURE)                        # red proof
+    funcs, _ = cm.analyze_sources({PATH: BINDING_FIXTURE})
+    assert sorted((f.display, f.ccn, f.start_line, f.end_line) for f in funcs) == [
+        ("Scan.after", 2, 26, 29),
+        ("Scan.apply", 5, 11, 24),
+        ("Scan.other", 1, 6, 9),
+        ("Scan.other.get", 1, 7, 7),
+        ("Scan.other.set", 1, 8, 8),
+        ("Scan.value", 1, 3, 5),
+        ("Scan.value.get", 1, 4, 4),
     ]

@@ -8,6 +8,9 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
 /// filesystem, purchaseYear, capacityTB, notes, lastScannedDate, plus the
 /// §1B retire fields: retiredAt, retiredReason, retiredWitnesses).
 /// All data stored in UserDefaults using the provided key prefix.
+/// Every function takes its `defaults` (production: `.standard`) so a test
+/// passes a throwaway suite: a test host's `.standard` IS Rick's real
+/// preferences plist — the sealed home does not redirect cfprefsd (2026-11-25).
 @MainActor enum ScanTargetPersistence {
 
     // MARK: - Role decoding (legacy-aware, ONE place)
@@ -84,7 +87,8 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
         savedRetiredReasonKey: String,
         savedRetiredWitnessesKey: String,
         savedReadOnlyKey: String? = nil,
-        savedVolumeUUIDKey: String? = nil
+        savedVolumeUUIDKey: String? = nil,
+        defaults: UserDefaults = .standard
     ) -> [CatalogScanTarget] {
         restoreReporting(
             existing: existing, savedTargetsKey: savedTargetsKey, savedDatesKey: savedDatesKey,
@@ -94,7 +98,8 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
             savedNotesKey: savedNotesKey, savedRetiredAtKey: savedRetiredAtKey,
             savedRetiredReasonKey: savedRetiredReasonKey,
             savedRetiredWitnessesKey: savedRetiredWitnessesKey,
-            savedReadOnlyKey: savedReadOnlyKey, savedVolumeUUIDKey: savedVolumeUUIDKey).targets
+            savedReadOnlyKey: savedReadOnlyKey, savedVolumeUUIDKey: savedVolumeUUIDKey,
+            defaults: defaults).targets
     }
 
     // MARK: - "Read only" marks (2026-10-03)
@@ -109,8 +114,9 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
     /// The saved marks, keyed by searchPath. An entry without a date is
     /// still a mark (refuse over guess: a damaged entry must not un-protect
     /// a drive) — it is given the distant past.
-    static func readOnlyMarks(forKey key: String?) -> [String: VolumeReadOnlyMark] {
-        guard let key, let saved = UserDefaults.standard.dictionary(forKey: key) else { return [:] }
+    static func readOnlyMarks(forKey key: String?,
+                              defaults: UserDefaults = .standard) -> [String: VolumeReadOnlyMark] {
+        guard let key, let saved = defaults.dictionary(forKey: key) else { return [:] }
         var out: [String: VolumeReadOnlyMark] = [:]
         for (path, value) in saved {
             let fields = value as? [String: Any] ?? [:]
@@ -123,7 +129,8 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
         return out
     }
 
-    static func persistReadOnlyMarks(_ targets: [CatalogScanTarget], key: String?) {
+    static func persistReadOnlyMarks(_ targets: [CatalogScanTarget], key: String?,
+                                     defaults: UserDefaults = .standard) {
         guard let key else { return }
         var map: [String: [String: Any]] = [:]
         for t in targets {
@@ -135,18 +142,19 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
             if mark.isArchiveBackup { fields[readOnlyArchiveBackupField] = true }
             map[t.searchPath] = fields
         }
-        UserDefaults.standard.set(map, forKey: key)
+        defaults.set(map, forKey: key)
     }
 
     /// #401 — one dictionary keyed by searchPath: the volume UUID last
     /// seen mounted there. Only locations that have one get an entry.
-    static func persistVolumeUUIDs(_ targets: [CatalogScanTarget], key: String?) {
+    static func persistVolumeUUIDs(_ targets: [CatalogScanTarget], key: String?,
+                                   defaults: UserDefaults = .standard) {
         guard let key else { return }
         var map: [String: String] = [:]
         for t in targets {
             if let v = t.volumeUUID { map[t.searchPath] = v }
         }
-        UserDefaults.standard.set(map, forKey: key)
+        defaults.set(map, forKey: key)
     }
 
     /// `restore` plus the legacy-role count (see `RestoreReport`).
@@ -166,32 +174,33 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
         savedRetiredReasonKey: String,
         savedRetiredWitnessesKey: String,
         savedReadOnlyKey: String? = nil,
-        savedVolumeUUIDKey: String? = nil
+        savedVolumeUUIDKey: String? = nil,
+        defaults: UserDefaults = .standard
     ) -> RestoreReport {
         var report = RestoreReport()
-        let paths = UserDefaults.standard.stringArray(forKey: savedTargetsKey) ?? []
-        let dates = UserDefaults.standard.dictionary(forKey: savedDatesKey) as? [String: Date] ?? [:]
-        let phases = UserDefaults.standard.dictionary(forKey: savedPhasesKey) as? [String: String] ?? [:]
-        let roles = UserDefaults.standard.dictionary(forKey: savedRolesKey) as? [String: String] ?? [:]
-        let trusts = UserDefaults.standard.dictionary(forKey: savedTrustKey) as? [String: String] ?? [:]
-        let filesystems = UserDefaults.standard.dictionary(forKey: savedFilesystemKey) as? [String: String] ?? [:]
-        let mediaTechs = UserDefaults.standard.dictionary(forKey: savedMediaTechKey) as? [String: String] ?? [:]
-        let purchaseYears = UserDefaults.standard.dictionary(forKey: savedPurchaseYearKey) as? [String: Int] ?? [:]
-        let capacities = UserDefaults.standard.dictionary(forKey: savedCapacityKey) as? [String: Double] ?? [:]
-        let notes = UserDefaults.standard.dictionary(forKey: savedNotesKey) as? [String: String] ?? [:]
+        let paths = defaults.stringArray(forKey: savedTargetsKey) ?? []
+        let dates = defaults.dictionary(forKey: savedDatesKey) as? [String: Date] ?? [:]
+        let phases = defaults.dictionary(forKey: savedPhasesKey) as? [String: String] ?? [:]
+        let roles = defaults.dictionary(forKey: savedRolesKey) as? [String: String] ?? [:]
+        let trusts = defaults.dictionary(forKey: savedTrustKey) as? [String: String] ?? [:]
+        let filesystems = defaults.dictionary(forKey: savedFilesystemKey) as? [String: String] ?? [:]
+        let mediaTechs = defaults.dictionary(forKey: savedMediaTechKey) as? [String: String] ?? [:]
+        let purchaseYears = defaults.dictionary(forKey: savedPurchaseYearKey) as? [String: Int] ?? [:]
+        let capacities = defaults.dictionary(forKey: savedCapacityKey) as? [String: Double] ?? [:]
+        let notes = defaults.dictionary(forKey: savedNotesKey) as? [String: String] ?? [:]
         // §1B retire dictionaries. Each is keyed by searchPath; presence in
         // retiredAt dict is the retired-or-not signal.
-        let retiredAt = UserDefaults.standard.dictionary(forKey: savedRetiredAtKey) as? [String: Date] ?? [:]
-        let retiredReason = UserDefaults.standard.dictionary(forKey: savedRetiredReasonKey) as? [String: String] ?? [:]
-        let retiredWitnesses = UserDefaults.standard.dictionary(forKey: savedRetiredWitnessesKey) as? [String: [String]] ?? [:]
+        let retiredAt = defaults.dictionary(forKey: savedRetiredAtKey) as? [String: Date] ?? [:]
+        let retiredReason = defaults.dictionary(forKey: savedRetiredReasonKey) as? [String: String] ?? [:]
+        let retiredWitnesses = defaults.dictionary(forKey: savedRetiredWitnessesKey) as? [String: [String]] ?? [:]
         // "Read only" marks — absent key (every install before 2026-10-03)
         // = no volume is marked.
-        let readOnly = readOnlyMarks(forKey: savedReadOnlyKey)
+        let readOnly = readOnlyMarks(forKey: savedReadOnlyKey, defaults: defaults)
         // #401 — the volume last seen mounted at each path; absent key
         // (every install before 2026-11-02) = no location knows its disk
         // yet; the mount or the rows tell it (ScanTargetVolume).
         let volumeUUIDs = savedVolumeUUIDKey.flatMap {
-            UserDefaults.standard.dictionary(forKey: $0) as? [String: String] } ?? [:]
+            defaults.dictionary(forKey: $0) as? [String: String] } ?? [:]
 
         var result: [CatalogScanTarget] = []
         // Restore-time screen + heal: pre-fix builds could persist the
@@ -242,8 +251,9 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
 
     // MARK: - Persist
 
-    static func persistPaths(_ targets: [CatalogScanTarget], key: String) {
-        UserDefaults.standard.set(targets.map { $0.searchPath }, forKey: key)
+    static func persistPaths(_ targets: [CatalogScanTarget], key: String,
+                             defaults: UserDefaults = .standard) {
+        defaults.set(targets.map { $0.searchPath }, forKey: key)
     }
 
     static func persistMetadata(
@@ -261,10 +271,11 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
         savedRetiredReasonKey: String,
         savedRetiredWitnessesKey: String,
         savedReadOnlyKey: String? = nil,
-        savedVolumeUUIDKey: String? = nil
+        savedVolumeUUIDKey: String? = nil,
+        defaults: UserDefaults = .standard
     ) {
-        persistReadOnlyMarks(targets, key: savedReadOnlyKey)
-        persistVolumeUUIDs(targets, key: savedVolumeUUIDKey)
+        persistReadOnlyMarks(targets, key: savedReadOnlyKey, defaults: defaults)
+        persistVolumeUUIDs(targets, key: savedVolumeUUIDKey, defaults: defaults)
         var dates: [String: Date] = [:]
         var phases: [String: String] = [:]
         var roles: [String: String] = [:]
@@ -294,18 +305,18 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
             if let r = t.retiredReason, !r.isEmpty { retiredReasonMap[t.searchPath] = r }
             if let w = t.retiredWitnesses, !w.isEmpty { retiredWitnessesMap[t.searchPath] = w }
         }
-        UserDefaults.standard.set(dates, forKey: savedDatesKey)
-        UserDefaults.standard.set(phases, forKey: savedPhasesKey)
-        UserDefaults.standard.set(roles, forKey: savedRolesKey)
-        UserDefaults.standard.set(trusts, forKey: savedTrustKey)
-        UserDefaults.standard.set(filesystems, forKey: savedFilesystemKey)
-        UserDefaults.standard.set(mediaTechs, forKey: savedMediaTechKey)
-        UserDefaults.standard.set(purchaseYears, forKey: savedPurchaseYearKey)
-        UserDefaults.standard.set(capacities, forKey: savedCapacityKey)
-        UserDefaults.standard.set(notesMap, forKey: savedNotesKey)
-        UserDefaults.standard.set(retiredAtMap, forKey: savedRetiredAtKey)
-        UserDefaults.standard.set(retiredReasonMap, forKey: savedRetiredReasonKey)
-        UserDefaults.standard.set(retiredWitnessesMap, forKey: savedRetiredWitnessesKey)
+        defaults.set(dates, forKey: savedDatesKey)
+        defaults.set(phases, forKey: savedPhasesKey)
+        defaults.set(roles, forKey: savedRolesKey)
+        defaults.set(trusts, forKey: savedTrustKey)
+        defaults.set(filesystems, forKey: savedFilesystemKey)
+        defaults.set(mediaTechs, forKey: savedMediaTechKey)
+        defaults.set(purchaseYears, forKey: savedPurchaseYearKey)
+        defaults.set(capacities, forKey: savedCapacityKey)
+        defaults.set(notesMap, forKey: savedNotesKey)
+        defaults.set(retiredAtMap, forKey: savedRetiredAtKey)
+        defaults.set(retiredReasonMap, forKey: savedRetiredReasonKey)
+        defaults.set(retiredWitnessesMap, forKey: savedRetiredWitnessesKey)
     }
 
     // MARK: - Volume Snapshot

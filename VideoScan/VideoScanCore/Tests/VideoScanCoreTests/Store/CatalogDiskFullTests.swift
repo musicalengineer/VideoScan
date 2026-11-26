@@ -14,9 +14,11 @@
 //              fails decides what the store must do:
 //                - full: the high-water's temp file cannot be created, so
 //                  phase 1 refuses before COMMIT;
-//                - nearly full: phase 1 fits but the WAL frames do not, so
-//                  SQLite says SQLITE_FULL at COMMIT, after the high-water
-//                  was raised.
+//                - nearly full: the high-water files would fit but the WAL
+//                  frames do not. Before GH #338 SQLite said SQLITE_FULL at
+//                  COMMIT, AFTER phase 1 had raised the high-water, and the
+//                  next open was read-only as if restored; now the frames
+//                  are flushed before phase 1, so the refusal comes first.
 //   ISOLATION  the image is created, attached and detached by the test; the
 //              catalog never touches a real volume.
 //   MEDIA      N/A.
@@ -54,7 +56,7 @@ struct CatalogDiskFullTests {
         let database = try volume.copyCatalog(from: scene.databaseFolder)
 
         // 1. A healthy commit on the image: the baseline every check compares with.
-        var session = try await CommitSession.open(database)
+        let session = try await CommitSession.open(database)
         _ = try await session.commitNotes("before-full")
         let before = await session.generation
         let noted = try Self.noteCount(database, "before-full")
@@ -75,29 +77,12 @@ struct CatalogDiskFullTests {
         #expect(try Self.noteCount(database, "during-full") == 0, "\(depth): part of a refused commit is stored")
 
         // 3. Space comes back — the volume REPORTS it (see returnSpace). The
-        //    caller still holds its edited records.
+        //    caller still holds its edited records, and the SAME session takes
+        //    them: a disk-full refusal is not a reason to reopen (GH #338).
         try await volume.returnSpace(ballast)
-        var retried = await session.commitNotesOutcome("during-full", reuseEdits: true)
-        var reopenedAs: CatalogOpenOutcome = .readWrite
-        if case .refused(let reason, _) = retried {
-            // The session refuses after a failure it cannot account for; the
-            // app's answer is to reopen the catalog. Say what that took.
-            print("[disk-full] \(depth): retry in the same session refused — \(reason)")
-            await session.close()
-            session = try await CommitSession.open(database, requireReadWrite: false)
-            reopenedAs = session.opened
-            print("[disk-full] \(depth): reopened → \(reopenedAs)")
-            if case .readOnly = reopenedAs {
-                let witness = CatalogHighWater.read(besideDatabaseAt: database)
-                if case .value(let mark) = witness {
-                    let adopted = await session.repository.adopt(toHighWater: mark)
-                    print("[disk-full] \(depth): adopt → \(adopted)")
-                }
-            }
-            retried = await session.commitNotesOutcome("during-full", reuseEdits: false)
-        }
+        let retried = await session.commitNotesOutcome("during-full", reuseEdits: true)
         guard case .committed = retried else {
-            Issue.record("\(depth): the edits could not be committed once space returned: \(retried)")
+            Issue.record("\(depth): the same session could not commit the kept edits once space returned: \(retried.brief)")
             await session.close()
             return
         }
@@ -106,28 +91,43 @@ struct CatalogDiskFullTests {
         #expect(try Self.noteCount(database, "before-full") == 0, "\(depth): old notes survived the retry")
         #expect(try CatalogHardKillTests.integrityCheck(database) == ["ok"], "\(depth)")
         // The contract this test exists to pin: a disk that filled and was
-        // freed is NOT a restore. A catalog that comes back read-only and
-        // asks a person to adopt "an older copy" over a full disk is wrong
-        // words for what happened, even though nothing was lost.
-        //
-        // KNOWN (found by this test, 2026-10-18): at `.nearlyFull` phase 1
-        // raises catalog.highwater(.log) to g+1, then COMMIT fails with
-        // SQLITE_FULL. The session then refuses its own retry with "another
-        // writer published generation g+1" and the reopen is read-only with
-        // the restoredBelowHighWater "older copy" words until adopted. The
-        // witnesses cannot simply be lowered (F8r3: never lowered), so the
-        // fix is a design decision for the store, not a test change. When it
-        // lands this known issue stops reproducing and the test fails —
-        // remove the wrapper then.
-        if depth == .nearlyFull {
-            withKnownIssue("SQLITE_FULL at COMMIT after phase 1 leaves the catalog read-only as if restored (GRDBCatalogRepository WritePlan)") {
-                #expect(reopenedAs == .readWrite,
-                        "\(depth): after a disk-full refusal the catalog reopened \(reopenedAs) — a person must adopt it")
-            }
-        } else {
-            #expect(reopenedAs == .readWrite,
-                    "\(depth): after a disk-full refusal the catalog reopened \(reopenedAs) — a person must adopt it")
+        // freed is NOT a restore. Relaunch: the catalog opens read-write, with
+        // no "older copy" words (GH #338 — before the fix, `.nearlyFull` raised
+        // catalog.highwater(.log) to g+1 in phase 1, COMMIT then failed with
+        // SQLITE_FULL, and the next open was read-only as if restored).
+        let relaunched = try await CommitSession.open(database, requireReadWrite: false)
+        #expect(relaunched.opened == .readWrite, "\(depth): after a disk-full refusal the catalog reopened \(relaunched.opened)")
+        await relaunched.close()
+    }
+
+    @Test("GH #338: a refused commit on a full disk, then quit, free space and relaunch — the catalog opens read-write, the witnesses equal the database",
+          .timeLimit(.minutes(3)), arguments: Depth.allCases)
+    func relaunchAfterDiskFullRefusalOpensReadWrite(_ depth: Depth) async throws {
+        let scene = try ImporterScene.make(healthyRows: 120)
+        defer { scene.remove() }
+        _ = try #require(await scene.run().outcome.reconciliation)
+        let volume = try DiskImageVolume.attach(megabytes: 32, under: scene.directory)
+        defer { volume.detach() }
+        let database = try volume.copyCatalog(from: scene.databaseFolder)
+        let session = try await CommitSession.open(database)
+        _ = try await session.commitNotes("relaunch-before")
+        let before = await session.generation
+
+        let ballast = try volume.fill(leavingFree: depth.leaveFreeBytes)
+        let refused = await session.commitNotesOutcome("relaunch-during")
+        guard case .refused = refused else {
+            Issue.record("\(depth): a commit on a full disk was not refused: \(refused.brief)"); return
         }
+        await session.close()                                   // the app quits
+        #expect(CatalogHighWater.read(besideDatabaseAt: database) == .value(before), "\(depth)")
+        #expect(CatalogHighWaterLedger.read(besideDatabaseAt: database) == .value(before), "\(depth)")
+        try await volume.returnSpace(ballast)                   // space is freed, then the app relaunches
+        let relaunched = try await CommitSession.open(database, requireReadWrite: false)
+        #expect(relaunched.opened == .readWrite, "\(depth): relaunch after a full-disk refusal opened \(relaunched.opened)")
+        #expect(await relaunched.generation == before, "\(depth)")
+        let landed = await relaunched.commitNotesOutcome("relaunch-after")
+        #expect(landed.isCommitted, "\(depth): \(landed.brief)")
+        await relaunched.close()
     }
 
     // MARK: - Regression: the ballast must not outlive its unlink
@@ -219,8 +219,12 @@ struct CommitSession {
     let opened: CatalogOpenOutcome
     let records: [VideoRecord]
 
-    static func open(_ url: URL, requireReadWrite: Bool = true) async throws -> CommitSession {
-        let repository = GRDBCatalogRepository(host: "disk-full-test", durability: .archival)
+    /// `spaceFloor`: off by default — these suites drive SQLite's OWN
+    /// disk-full paths on a 32 MB image, which the production 1 GB floor
+    /// would refuse before they are reached (GH #357 has its own tests).
+    static func open(_ url: URL, requireReadWrite: Bool = true,
+                     spaceFloor: CatalogSpaceFloor = .offForTests) async throws -> CommitSession {
+        let repository = GRDBCatalogRepository(host: "disk-full-test", durability: .archival, spaceFloor: spaceFloor)
         let opened = await repository.open(at: url)
         if case .refused(let reason) = opened { throw FixtureFailure(words: "open refused: \(reason)") }
         if requireReadWrite && opened != .readWrite {

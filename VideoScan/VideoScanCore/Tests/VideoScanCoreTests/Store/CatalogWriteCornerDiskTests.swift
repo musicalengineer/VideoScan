@@ -9,15 +9,16 @@
 //   Case 1  disk full at COMMIT — refused with the disk's words; integrity ok;
 //           the edits are still pending in memory; the same edits land once
 //           space returns; the high-water witnesses are NOT ahead of the
-//           database after the refusal (GH #338 — known issue at `.nearlyFull`).
+//           database after the refusal (GH #338: the pages are flushed to
+//           the WAL before phase 1, so the disk is found full first).
 //   Case 2  disk full half-way through a multi-commit job — the earlier
 //           commits stay, the failed one rolls back whole, the caller is told.
-//   Floor   fail-fast (Rick's scope note): a commit on a volume with almost
-//           no space left should be refused BEFORE SQLite runs out — there is
-//           no floor in the store today (known issue, pending).
+//   Floor   fail-fast (Rick's ruling 2026-10-21, GH #357): a commit on a
+//           volume below the free-space floor is refused BEFORE its body runs
+//           (CatalogSpaceFloor → PreflightGate's edit floor).
 //   SCALE   100k rows committed under disk pressure: on a full disk the
-//           refusal is fail-fast (pending — today ~2 min, the whole body runs
-//           first); once space returns the edits land within a budget.
+//           floor refuses within 10 s (it took ~2 min before: the whole body
+//           ran first); once space returns the edits land within a budget.
 //   Case 8  WAL growth: N/A (Rick's scope note, 2026-10-21 — don't test
 //           SQLite). Our code reads no WAL size and has no threshold; the one
 //           thing it does about the WAL, close's TRUNCATE checkpoint, is
@@ -27,10 +28,7 @@
 // opened) · ISOLATION (a throwaway hdiutil image under the test's temp folder;
 // nothing touches Application Support) · SENSOR (the 100k budgets).
 //
-// For Rick: `withKnownIssue { … }` ≈ a gtest EXPECT that is allowed to fail and
-// is reported as "known"; when the bug is fixed the block stops failing and
-// the TEST fails ("known issue was not recorded") so the wrapper gets removed.
-// `.serialized` = run the cases one at a time (one disk image at a time).
+// For Rick: `.serialized` = run the cases one at a time (one disk image at a time).
 
 import Foundation
 import GRDB
@@ -54,7 +52,7 @@ struct CatalogWriteCornerDiskTests {
         defer { volume.detach() }
         let database = try volume.copyCatalog(from: scene.databaseFolder)
 
-        var session = try await CommitSession.open(database)
+        let session = try await CommitSession.open(database)
         _ = try await session.commitNotes("c1-before")
         let before = await session.generation
         let stored = try CatalogDiskFullTests.noteCount(database, "c1-before")
@@ -79,28 +77,12 @@ struct CatalogWriteCornerDiskTests {
         let sidecar = CatalogHighWater.read(besideDatabaseAt: database)
         let ledger = CatalogHighWaterLedger.read(besideDatabaseAt: database)
         let witnessesAhead = sidecar != .value(before) || ledger != .value(before)
-        if depth == .nearlyFull {
-            withKnownIssue("GH #338: SQLITE_FULL at COMMIT after phase 1 leaves catalog.highwater(.log) at g+1") {
-                #expect(!witnessesAhead, "\(depth): sidecar \(sidecar), log \(ledger), database \(before)")
-            }
-        } else {
-            #expect(!witnessesAhead, "\(depth): sidecar \(sidecar), log \(ledger), database \(before)")
-        }
+        #expect(!witnessesAhead, "\(depth): sidecar \(sidecar), log \(ledger), database \(before)")
 
-        // Space returns — the volume reports it (returnSpace): the same edits (reuseEdits) land.
+        // Space returns — the volume reports it (returnSpace): the same edits
+        // (reuseEdits) land in the SAME session — no reopen (GH #338).
         try await volume.returnSpace(ballast)
-        var retried = await session.commitNotesOutcome("c1-during", reuseEdits: true)
-        if case .refused = retried {
-            // Today at .nearlyFull the session refuses its own retry (#338);
-            // the app's answer is Reopen. A reopen that comes back read-only
-            // is the #338 symptom the test above already tracks.
-            await session.close()
-            session = try await CommitSession.open(database, requireReadWrite: false)
-            if case .readOnly = session.opened, case .value(let mark) = CatalogHighWater.read(besideDatabaseAt: database) {
-                _ = await session.repository.adopt(toHighWater: mark)
-            }
-            retried = await session.commitNotesOutcome("c1-during", reuseEdits: false)
-        }
+        let retried = await session.commitNotesOutcome("c1-during", reuseEdits: true)
         #expect(retried.isCommitted, "\(depth): the retained edits did not land once space returned: \(retried.brief)")
         await session.close()
         #expect(try CatalogDiskFullTests.noteCount(database, "c1-during") == stored, "\(depth)")
@@ -144,13 +126,19 @@ struct CatalogWriteCornerDiskTests {
         if let ballast { try? FileManager.default.removeItem(at: ballast) }
     }
 
-    // MARK: - Fail fast: below the floor
+    // MARK: - Fail fast: below the floor (GH #357)
 
-    /// The free space under which a catalog write should refuse BEFORE it
-    /// runs out mid-transaction. Pending: the store has no floor at all.
+    /// The free space under which a catalog write refuses BEFORE it runs: the
+    /// production rule (PreflightGate's edit floor, 2 × (catalog + WAL)) with
+    /// its 1 GB minimum lowered to 16 MB so it fits a 32 MB disk image.
     static let intendedFloorBytes = 16 * 1024 * 1024
+    static var testFloor: CatalogSpaceFloor {
+        var thresholds = PreflightThresholds()
+        thresholds.editHoldFloorBytes = Int64(intendedFloorBytes)
+        return .preflight(thresholds)
+    }
 
-    @Test("fail-fast: a commit on a volume below the free-space floor is refused with words before SQLite runs out (pending — no floor today)",
+    @Test("fail-fast (GH #357): a commit on a volume below the free-space floor is refused up front with words — no body ran, nothing written, no witness moved; once space returns the same session saves",
           .timeLimit(.minutes(3)))
     func belowTheFloorRefuses() async throws {
         let scene = try ImporterScene.make(healthyRows: 20)
@@ -159,31 +147,41 @@ struct CatalogWriteCornerDiskTests {
         let volume = try DiskImageVolume.attach(megabytes: 32, under: scene.directory)
         defer { volume.detach() }
         let database = try volume.copyCatalog(from: scene.databaseFolder)
-        let session = try await CommitSession.open(database)
-        _ = try volume.fill(leavingFree: 2 * 1024 * 1024)
+        let session = try await CommitSession.open(database, spaceFloor: Self.testFloor)
+        let before = await session.generation
+        let ballast = try volume.fill(leavingFree: 2 * 1024 * 1024)
         try #require(volume.freeBytes() < Self.intendedFloorBytes)
+        let walBefore = CatalogOpenCornerTests.sha256OrDash(URL(fileURLWithPath: database.path + "-wal"))
         let outcome = await session.commitNotesOutcome("below-floor")
-        await session.close()
         print("[corner-disk] below the floor (\(volume.freeBytes()) B free): \(outcome.brief)")
-        withKnownIssue("pending: the catalog store has no free-space floor — it writes until SQLITE_FULL") {
-            guard case .refused(let words, _) = outcome else {
-                Issue.record("a commit with \(volume.freeBytes()) B free (floor \(Self.intendedFloorBytes) B) was not refused: \(outcome.brief)")
-                return
-            }
-            #expect(words.lowercased().contains("free space"), Comment(rawValue: words))
+        guard case .refused(let words, let rows) = outcome else {
+            Issue.record("a commit with \(volume.freeBytes()) B free (floor \(Self.intendedFloorBytes) B) was not refused: \(outcome.brief)")
+            await session.close(); return
         }
+        #expect(words.lowercased().contains("free space"), Comment(rawValue: words))
+        #expect(words.contains("nothing was saved") && words.contains("kept in memory"), Comment(rawValue: words))
+        #expect(rows.isEmpty, "the body ran (\(rows.count) rows) — the floor must refuse before BEGIN")
+        #expect(CatalogOpenCornerTests.sha256OrDash(URL(fileURLWithPath: database.path + "-wal")) == walBefore, "a frame was written below the floor")
+        #expect(CatalogHighWater.read(besideDatabaseAt: database) == .value(before))
+        #expect(CatalogHighWaterLedger.read(besideDatabaseAt: database) == .value(before))
+        #expect(try CatalogDiskFullTests.storedGeneration(database) == before)
+
+        try await volume.returnSpace(ballast)
+        let landed = await session.commitNotesOutcome("below-floor", reuseEdits: true)
+        #expect(landed.isCommitted, "a floor refusal must not block the session once space returns: \(landed.brief)")
+        await session.close()
+        #expect(try CatalogDiskFullTests.noteCount(database, "below-floor") > 0)
     }
 
     // MARK: - Scale: 100k rows under disk pressure
 
-    /// Fail-fast intent: a full disk is known before 100k rows are written.
+    /// Fail-fast (GH #357): a full disk is known before 100k rows are written —
+    /// the floor refuses before BEGIN. Before the floor (2026-10-21, M4, Debug)
+    /// the whole body ran first and the refusal took 111–117 s.
     static let failFastRefusalBudget: Duration = .seconds(10)
-    /// Today's sensor: the whole body runs, THEN phase 1 finds no space.
-    /// Measured 2026-10-21 (M4, Debug, load 5→67): 117 s. Catches a collapse.
-    static let refusalCeiling: Duration = .seconds(300)
     static let landBudget: Duration = .seconds(120)
 
-    @Test("SCALE: 100k rows — on a full disk the commit is refused (fail-fast within 10 s: pending; today < 300 s), integrity ok; once space returns the same 100k edits land within 120 s",
+    @Test("SCALE: 100k rows — on a full disk the commit is refused by the free-space floor within 10 s (GH #357), nothing written; once space returns the same 100k edits land within 120 s",
           .timeLimit(.minutes(10)), .tags(.quietMachine))
     func hundredThousandUnderPressure() async throws {
         let scene = try ImporterScene.make(healthyRows: 100_000)
@@ -195,7 +193,7 @@ struct CatalogWriteCornerDiskTests {
         let volume = try DiskImageVolume.attach(megabytes: megabytes, under: scene.directory)
         defer { volume.detach() }
         let database = try volume.copyCatalog(from: scene.databaseFolder)
-        var session = try await CommitSession.open(database)
+        let session = try await CommitSession.open(database, spaceFloor: Self.testFloor)
         try #require(session.records.count >= 100_000, "loaded \(session.records.count)")
         let before = await session.generation
 
@@ -206,25 +204,18 @@ struct CatalogWriteCornerDiskTests {
         let refused = await session.commitNotesOutcome("scale-under-pressure")
         let refusal = clock.now - start
         print("[corner-disk] 100k on a full disk: \(refusal) → \(refused.brief) (\(TimingBudget.loadDescription()))")
-        guard case .refused(let words, _) = refused else {
-            Issue.record("100k commit on a full disk was not refused: \(refused.brief)"); return
+        guard case .refused(let words, let rows) = refused else {
+            Issue.record("100k commit on a full disk was not refused: \(refused.brief)"); await session.close(); return
         }
-        #expect(CatalogDiskFullTests.namesTheDisk(words), Comment(rawValue: words))
-        expectBudget(refusal, under: Self.refusalCeiling, "SENSOR: the 100k refusal took \(refusal)")
-        withKnownIssue("pending (draft issue): a full disk is found only at phase 1, after the whole 100k-row body ran — on the main actor in the app (writeBlocking)") {
-            expectBudget(refusal, under: Self.failFastRefusalBudget, "a full-disk refusal of 100k rows took \(refusal)")
-        }
+        #expect(words.lowercased().contains("free space"), Comment(rawValue: words))
+        #expect(rows.isEmpty, "the 100k body ran before the refusal")
+        expectBudget(refusal, under: Self.failFastRefusalBudget, "a full-disk refusal of 100k rows took \(refusal)")
         #expect(try CatalogDiskFullTests.storedGeneration(database) == before)
         #expect(try CatalogHardKillTests.integrityCheck(database) == ["ok"])
 
         try await volume.returnSpace(ballast)   // the volume reports the space back
         start = clock.now
-        var landed = await session.commitNotesOutcome("scale-under-pressure", reuseEdits: true)
-        if case .refused = landed {
-            await session.close()
-            session = try await CommitSession.open(database, requireReadWrite: false)
-            landed = await session.commitNotesOutcome("scale-under-pressure", reuseEdits: false)
-        }
+        let landed = await session.commitNotesOutcome("scale-under-pressure", reuseEdits: true)
         let landing = clock.now - start
         await session.close()
         print("[corner-disk] 100k after space returned: \(landing) → committed=\(landed.isCommitted)")

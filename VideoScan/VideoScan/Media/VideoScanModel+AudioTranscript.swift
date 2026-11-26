@@ -47,7 +47,7 @@ extension VideoScanModel {
         stampDossierProvenance(on: record, modelID: modelID, at: now)
         // Propagate to MD5-identical siblings so search finds this
         // transcript via any copy of the file (Phase 0).
-        propagateDossierToMD5Duplicates(of: record)
+        propagateDossierToContentCopies(of: record)
         // A transcript can name the year (2026-09-12): derive a date from
         // it when the record has none, and share it with the group — the
         // single-channel road must not leave evidence without a conclusion.
@@ -123,7 +123,7 @@ extension VideoScanModel {
             record.audioTranscriptDate = now
             // Smear-signature exclusion — see the section comment above.
             stampDossierProvenance(on: record, modelID: model, at: now)
-            propagateDossierToMD5Duplicates(of: record)
+            propagateDossierToContentCopies(of: record)
             updated += 1
             totalChars += transcript.count
             if transcript.isEmpty { emptyCount += 1 }

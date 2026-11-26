@@ -5,7 +5,7 @@ import os
 @testable import VideoScan
 
 @MainActor
-// serialized: two tests write UserDefaults.standard (the Ollama hosts key) and restore it; one asserts a 100k-record wall-clock budget (red beside its siblings, parallel run 2026-11-21)
+// serialized: two tests poison the Ollama hosts key (in memory, TestPreferences); one asserts a 100k-record wall-clock budget (red beside its siblings, parallel run 2026-11-21)
 @Suite("Hallie standalone shell", .serialized)
 struct HallieShellCLITests {
     final class Harness {
@@ -1946,16 +1946,9 @@ struct HallieShellCLITests {
         let sentinel = Data("READ-ONLY-SENTINEL".utf8)
         try sentinel.write(to: catalog)
 
-        let poisonKey = OllamaEndpoints.hostsKey
-        let priorHosts = UserDefaults.standard.object(forKey: poisonKey)
-        UserDefaults.standard.set("poison.invalid", forKey: poisonKey)
-        defer {
-            if let priorHosts {
-                UserDefaults.standard.set(priorHosts, forKey: poisonKey)
-            } else {
-                UserDefaults.standard.removeObject(forKey: poisonKey)
-            }
-        }
+        // In memory only (TestPreferences): every read sees the poison; no plist is written.
+        let hostsPoison = TestPreferences.begin([OllamaEndpoints.hostsKey: "poison.invalid"])
+        defer { hostsPoison.end() }
 
         let harness = Harness(
             records: [record("/isolated/media/test.mov")],
@@ -2383,16 +2376,9 @@ struct HallieShellCLITests {
         let sentinel = Data("READ-ONLY-SENTINEL".utf8)
         try sentinel.write(to: catalog)
 
-        let poisonKey = OllamaEndpoints.hostsKey
-        let priorHosts = UserDefaults.standard.object(forKey: poisonKey)
-        UserDefaults.standard.set("poison.invalid", forKey: poisonKey)
-        defer {
-            if let priorHosts {
-                UserDefaults.standard.set(priorHosts, forKey: poisonKey)
-            } else {
-                UserDefaults.standard.removeObject(forKey: poisonKey)
-            }
-        }
+        // In memory only (TestPreferences): every read sees the poison; no plist is written.
+        let hostsPoison = TestPreferences.begin([OllamaEndpoints.hostsKey: "poison.invalid"])
+        defer { hostsPoison.end() }
 
         let harness = Harness(
             inputs: [

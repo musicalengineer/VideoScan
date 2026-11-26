@@ -24,7 +24,8 @@
 //     (VideoScanModel+Workbench); Confirm Person's catalog writeback;
 //   * this type — the edits that used to be written straight into the
 //     record from a view: star rating, disposition (Organize menu and
-//     Triage), user date, user place, the Inspector's people chips.
+//     Triage), user date (then InspectorDateEdit's archived-copy rule),
+//     user place, the Inspector's people chips.
 // The views keep their own refresh/persist tails; they run them only when
 // the edit was taken (each method returns true).
 //
@@ -110,15 +111,22 @@ struct CuratedRecordEdits {
 
     // MARK: Date and place ("When was this?" / "Where was this?")
 
-    /// `date` nil clears (with its confidence). The caller posts
-    /// `.videoScanCatalogMutated` (the save + roster refresh), as before.
-    @discardableResult
-    func setUserDate(_ date: String?, known: Bool, on rec: VideoRecord) -> Bool {
-        guard !CuratedEditGuard.refuses("date", model: model) else { return false }
-        rec.userDate = date
-        rec.userDateConfidence = date == nil ? nil
-            : (known ? UserDateConfidence.known : UserDateConfidence.estimated).rawValue
-        return true
+    /// Rick's "When was this?" entry (empty = clear) — both rules, in order:
+    /// the session's read-only guard (codex #388: nil = refused, nothing
+    /// touched), then the archive's (GH #221 / codex #383: `InspectorDateEdit`
+    /// refuses when `archived` — the record, or a live same-content copy, is
+    /// archived — and is the one writer of `userDate`). `archived` is the
+    /// caller's fresh `InspectorDateEdit.archivedCopy(fixing:…) != nil`.
+    /// The caller posts the mutation on `.saved` / `.cleared`, as before.
+    func saveUserDate(entry: String, known: Bool, on rec: VideoRecord, archived: Bool) -> InspectorDateEdit.Outcome? {
+        guard !CuratedEditGuard.refuses("date", model: model) else { return nil }
+        return InspectorDateEdit.save(entry: entry, known: known, to: rec, readOnly: archived)
+    }
+
+    /// Forget the date: the read-only guard, then the archive's rule.
+    func clearUserDate(on rec: VideoRecord, archived: Bool) -> InspectorDateEdit.Outcome? {
+        guard !CuratedEditGuard.refuses("date", model: model) else { return nil }
+        return InspectorDateEdit.clear(rec, readOnly: archived)
     }
 
     /// `place` nil clears (with its confidence). Caller posts the mutation.

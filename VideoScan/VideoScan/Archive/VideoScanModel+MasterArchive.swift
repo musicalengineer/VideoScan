@@ -1464,18 +1464,19 @@ extension VideoScanModel {
         copy.mediaDisposition = .important
         copy.masterLocation = masterArchive?.targetPath ?? ""
         if let row = manifestRow, row.count >= 12 {
-            // record_date "1992-07-15" / "1992-07-xx" / "1992-xx-xx" → user date at that precision.
-            let date = row[8]
-            let parts = date.split(separator: "-").map(String.init)
-            if let y = parts.first, y.count == 4, Int(y) != nil {
-                var canonical = y
-                if parts.count > 1, parts[1] != "xx" { canonical += "-" + parts[1] }
-                if parts.count > 2, parts[2] != "xx", canonical.count == 7 { canonical += "-" + parts[2] }
-                if let c = UserDateEntry.canonicalize(canonical) {
-                    copy.userDate = c
-                    copy.userDateConfidence = row[9] == "user-known" ? UserDateConfidence.known.rawValue
-                                                                     : UserDateConfidence.estimated.rawValue
-                }
+            // record_date "1992-07-15" / "1992-07-xx" / "1992-xx-xx" → a user
+            // date at that precision ONLY when date_confidence says it is
+            // Rick's (`user-known` / `user-estimated`) — the one rule Promote's
+            // adopt path uses (GH #477; DATE-8). An "inferred 0.87" / "low
+            // 0.41" / "" row is the machine's date: it never becomes his, or
+            // the File Journey says "date set" and the Confirmed-date filter
+            // counts it. The manifest keeps the filed date either way.
+            let indexed = PromoteToArchiveJob.userDate(fromManifestFields: row)
+            if let d = indexed.date, let c = UserDateEntry.canonicalize(d) {
+                copy.userDate = c
+                copy.userDateConfidence = indexed.confidence
+            } else if !row[8].isEmpty, !row[9].hasPrefix("user-") {
+                masterArchiveLog.notice("promote: orphan archive copy \(relativePath, privacy: .public) — the manifest's date \(row[8], privacy: .public) is the machine's ('\(row[9], privacy: .public)'), not set as a user date")
             }
             let people = row[10].split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
             if !people.isEmpty { copy.detectedPeople = people }

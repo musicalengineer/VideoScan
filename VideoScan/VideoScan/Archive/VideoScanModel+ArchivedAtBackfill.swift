@@ -4,7 +4,12 @@
 // for all files and backfill 'em this once"). Evidence, best first:
 //   1. the copy's Promote note   "Promote 2026-08-16T20:11:03Z: promoted from …"
 //   2. the manifest row          column 0 = promotedAt, keyed by record id
-//   3. archiveFixity.verifiedAt  (Verify may have refreshed it — last resort)
+// Nothing else (GH #477): `archiveFixity.verifiedAt` was a third tier, but
+// Verify Archive Copies refreshes it on every pass — it is the day of a
+// CHECK, and once frozen into archivedAt nobody can tell it from Promote's
+// own stamp. No note and no manifest row → archivedAt stays empty and the
+// File Journey says nothing rather than show a check's date. (Copies an
+// earlier build already backfilled from fixity cannot be told apart now.)
 // Idempotent: only copies with archivedAt == nil are touched; runs after
 // catalog load and costs O(archive copies). Never writes to disk except the
 // catalog save it already owes.
@@ -15,11 +20,11 @@ import VideoScanCore
 enum ArchivedAtBackfill {
 
     struct Tally: Equatable, Sendable {
-        var fromNote = 0, fromManifest = 0, fromFixity = 0, unresolved = 0
-        var filled: Int { fromNote + fromManifest + fromFixity }
+        var fromNote = 0, fromManifest = 0, unresolved = 0
+        var filled: Int { fromNote + fromManifest }
         var line: String {
             "Backfilled archived dates for \(filled) archive cop\(filled == 1 ? "y" : "ies") "
-                + "(note \(fromNote), manifest \(fromManifest), fixity \(fromFixity); \(unresolved) with no trace)"
+                + "(note \(fromNote), manifest \(fromManifest); \(unresolved) with no Promote trace, left blank)"
         }
     }
 
@@ -50,8 +55,6 @@ enum ArchivedAtBackfill {
                 copy.archivedAt = d; t.fromNote += 1
             } else if let d = manifest[copy.id] {
                 copy.archivedAt = d; t.fromManifest += 1
-            } else if let d = copy.archiveFixity?.verifiedAt {
-                copy.archivedAt = d; t.fromFixity += 1
             } else {
                 t.unresolved += 1
             }
@@ -86,7 +89,7 @@ extension VideoScanModel {
             if let root { manifest = await ArchivedAtBackfill.loadManifestDatesOffMain(rootPath: root) }
             let tally = ArchivedAtBackfill.apply(to: copies, manifest: manifest)
             guard tally.filled > 0 else {
-                log("Archived dates: \(copies.count) archive copies have no Promote trace (note, manifest or fixity) — left blank")
+                log("Archived dates: \(copies.count) archive copies have no Promote trace (note or manifest) — left blank")
                 return
             }
             noteCatalogRecordsMutated()

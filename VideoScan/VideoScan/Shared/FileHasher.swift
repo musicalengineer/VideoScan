@@ -1,6 +1,7 @@
 import CryptoKit
 import Darwin
 import Foundation
+import VideoScanCore
 
 // MARK: - FileHasher
 //
@@ -130,7 +131,41 @@ enum FileHasher {
         let fd = open(path, O_RDONLY)
         guard fd >= 0 else { return "" }
         defer { close(fd) }
+        return segmentedHash(fd: fd, segmentSize: segmentSize)
+    }
 
+    /// What a volume-checked signature read found (GH #412).
+    enum VolumeCheckedSignature: Sendable, Equatable {
+        /// The opened file is on the record's volume; its signature.
+        case signed(String)
+        /// The file at the record's path is on ANOTHER volume (`found`, nil =
+        /// it reports none): a same-named file of another disk, never signed.
+        case otherVolume(found: String?)
+        /// Could not be opened or read in full — a later run retries.
+        case unreadable
+    }
+
+    /// `segmentedHash(path:)` for a CATALOG RECORD (GH #412): signs the file
+    /// only when the volume of the OPENED file agrees with the record's
+    /// evidenced volume (`VolumeIdentity.agree` — both known and equal, or
+    /// neither known). The check is made on the same descriptor that is then
+    /// read, so a remount between the check and the read cannot slip another
+    /// disk's file in. A path names a location, never an identity (rule 6):
+    /// `/Users/rickb/Movies/x.mov` exists on two Macs' boot disks.
+    static func segmentedHash(path: String, recordVolume: String?,
+                              segmentSize: Int = FileHasher.segmentSize) -> VolumeCheckedSignature {
+        guard segmentSize > 0 else { return .unreadable }
+        let fd = open(path, O_RDONLY)
+        guard fd >= 0 else { return .unreadable }
+        defer { close(fd) }
+        let found = VolumeIdentity.uuid(forDescriptor: fd, path: path)
+        guard VolumeIdentity.agree(recordVolume, found) else { return .otherVolume(found: found) }
+        let signature = segmentedHash(fd: fd, segmentSize: segmentSize)
+        return signature.isEmpty ? .unreadable : .signed(signature)
+    }
+
+    /// The sampled read itself, on an already-open descriptor.
+    private static func segmentedHash(fd: Int32, segmentSize: Int) -> String {
         var sb = stat()
         guard fstat(fd, &sb) == 0 else { return "" }
         // Directories, devices, and FIFOs are not content to hash. A

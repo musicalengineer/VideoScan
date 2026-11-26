@@ -99,8 +99,8 @@ enum CuratedEditBattery {
             edits.setDisposition(.important, on: [r])
             edits.triageDisposition(.confirmedJunk, on: [r])
         case .date:
-            edits.setUserDate("1992", known: true, on: r)
-            edits.setUserDate(nil, known: false, on: r)
+            _ = edits.saveUserDate(entry: "1992", known: true, on: r, archived: false)
+            _ = edits.clearUserDate(on: r, archived: false)
         case .place:
             edits.setUserPlace("Cape Cod", known: true, on: r)
             edits.setUserPlace(nil, known: false, on: r)
@@ -167,6 +167,29 @@ struct CuratedEditGuardTests {
                 Comment(rawValue: again.joined(separator: " | ")))
         #expect(r.userNotes == "between episodes")
     }
+
+    // Merge of main's GH #221 / codex #383 (archived twin) with codex #388
+    // (read-only guard): the Inspector's date path keeps BOTH refusals.
+    @Test("LOGIC: the date edit keeps both rules — read-only refuses first (nil), an archived record/twin refuses next (.refusedArchived); neither writes")
+    func dateEditKeepsBothRefusals() {
+        let (model, r) = scene()
+        let edits = CuratedRecordEdits(model: model)
+        let before = CuratedSnapshot(r)
+        // Writable session, archived copy fixes the date → the archive's rule.
+        #expect(edits.saveUserDate(entry: "1992", known: true, on: r, archived: true) == .refusedArchived)
+        #expect(edits.clearUserDate(on: r, archived: true) == .refusedArchived)
+        #expect(CuratedSnapshot(r) == before)
+        // Read-only session → the guard refuses before the archive is asked.
+        model.updateReadOnlyFacts { $0.viewerRole = true }
+        #expect(edits.saveUserDate(entry: "1992", known: true, on: r, archived: false) == nil)
+        #expect(edits.clearUserDate(on: r, archived: false) == nil)
+        #expect(edits.saveUserDate(entry: "1992", known: true, on: r, archived: true) == nil)
+        #expect(CuratedSnapshot(r) == before)
+        // Writable, not archived → taken.
+        model.updateReadOnlyFacts { $0.viewerRole = false }
+        #expect(edits.saveUserDate(entry: "6/1992", known: false, on: r, archived: false) == .saved("1992-06"))
+        #expect(r.userDate == "1992-06")
+    }
 }
 
 @Suite("Curated edits — source sensors")
@@ -192,6 +215,23 @@ struct CuratedEditGuardSensorTests {
             let text = Self.code(try Self.source(view))
             let hits = text.split(separator: "\n").filter { $0.contains(pattern) }
             #expect(hits.isEmpty, Comment(rawValue: "\(view) writes a curated field directly: \(hits.joined(separator: " | "))"))
+        }
+    }
+
+    @Test("the Inspector's date field goes through CuratedRecordEdits (read-only guard) with the fresh archived-copy verdict (GH #221 / codex #383) — never InspectorDateEdit directly")
+    func inspectorDateRoutesThroughBothRules() throws {
+        let view = Self.code(try Self.source("Catalog/InspectorDateView.swift"))
+        #expect(!view.contains("InspectorDateEdit.save(") && !view.contains("InspectorDateEdit.clear("),
+                "InspectorDateView bypasses the read-only guard")
+        #expect(view.contains(".saveUserDate(entry: typed, known: isKnown, on: record,")
+                && view.contains("archived: fixedNow() != nil), typed: typed)"))
+        #expect(view.contains(".clearUserDate(on: record, archived: fixedNow() != nil)"))
+        let edits = Self.code(try Self.source("Catalog/CuratedRecordEdits.swift"))
+        for fn in ["func saveUserDate(", "func clearUserDate("] {
+            guard let start = edits.range(of: fn) else { Issue.record("\(fn) not found"); continue }
+            let body = edits[start.upperBound...].prefix(400)
+            #expect(body.contains("CuratedEditGuard.refuses(\"date\"") && body.contains("InspectorDateEdit."),
+                    Comment(rawValue: "\(fn) must ask the guard, then InspectorDateEdit"))
         }
     }
 

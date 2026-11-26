@@ -276,27 +276,17 @@ struct ScanTargetPersistenceTests {
                 "t\(id)_rA", "t\(id)_rR", "t\(id)_rW")
     }
 
-    private func cleanupKeys(_ k: (paths: String, dates: String, phases: String,
-                                    roles: String, trust: String, fs: String,
-                                    mt: String, py: String, cap: String, notes: String,
-                                    retAt: String, retRsn: String, retWit: String)) {
-        for key in [k.paths, k.dates, k.phases, k.roles, k.trust,
-                    k.fs, k.mt, k.py, k.cap, k.notes,
-                    k.retAt, k.retRsn, k.retWit] {
-            UserDefaults.standard.removeObject(forKey: key)
-        }
-    }
-
     @Test func roundTripPreservesPhases() {
         let k = makeTestKeys()
-        defer { cleanupKeys(k) }
+        let prefs = TestPreferences.scratch("ScanTargetPersistence")
+        defer { prefs.remove() }
 
         let t1 = CatalogScanTarget(searchPath: "/Volumes/Alpha")
         t1.phase = .cataloged
         let t2 = CatalogScanTarget(searchPath: "/Volumes/Beta")
         t2.phase = .noCatalog
 
-        ScanTargetPersistence.persistPaths([t1, t2], key: k.paths)
+        ScanTargetPersistence.persistPaths([t1, t2], key: k.paths, defaults: prefs.defaults)
         ScanTargetPersistence.persistMetadata(
             [t1, t2],
             savedDatesKey: k.dates, savedPhasesKey: k.phases,
@@ -306,8 +296,7 @@ struct ScanTargetPersistenceTests {
             savedNotesKey: k.notes,
             savedRetiredAtKey: k.retAt,
             savedRetiredReasonKey: k.retRsn,
-            savedRetiredWitnessesKey: k.retWit
-        )
+            savedRetiredWitnessesKey: k.retWit, defaults: prefs.defaults)
 
         let restored = ScanTargetPersistence.restore(
             existing: [],
@@ -318,8 +307,7 @@ struct ScanTargetPersistenceTests {
             savedCapacityKey: k.cap, savedNotesKey: k.notes,
             savedRetiredAtKey: k.retAt,
             savedRetiredReasonKey: k.retRsn,
-            savedRetiredWitnessesKey: k.retWit
-        )
+            savedRetiredWitnessesKey: k.retWit, defaults: prefs.defaults)
 
         #expect(restored.count == 2)
         let alpha = restored.first { $0.searchPath == "/Volumes/Alpha" }
@@ -330,13 +318,14 @@ struct ScanTargetPersistenceTests {
 
     @Test func restoreSkipsExistingTargets() {
         let k = makeTestKeys()
-        defer { cleanupKeys(k) }
+        let prefs = TestPreferences.scratch("ScanTargetPersistence")
+        defer { prefs.remove() }
 
         let existing = CatalogScanTarget(searchPath: "/Volumes/Existing")
         let t = CatalogScanTarget(searchPath: "/Volumes/Existing")
         t.phase = .cataloged
 
-        ScanTargetPersistence.persistPaths([t], key: k.paths)
+        ScanTargetPersistence.persistPaths([t], key: k.paths, defaults: prefs.defaults)
         ScanTargetPersistence.persistMetadata(
             [t],
             savedDatesKey: k.dates, savedPhasesKey: k.phases,
@@ -346,8 +335,7 @@ struct ScanTargetPersistenceTests {
             savedNotesKey: k.notes,
             savedRetiredAtKey: k.retAt,
             savedRetiredReasonKey: k.retRsn,
-            savedRetiredWitnessesKey: k.retWit
-        )
+            savedRetiredWitnessesKey: k.retWit, defaults: prefs.defaults)
 
         let restored = ScanTargetPersistence.restore(
             existing: [existing],
@@ -358,8 +346,7 @@ struct ScanTargetPersistenceTests {
             savedCapacityKey: k.cap, savedNotesKey: k.notes,
             savedRetiredAtKey: k.retAt,
             savedRetiredReasonKey: k.retRsn,
-            savedRetiredWitnessesKey: k.retWit
-        )
+            savedRetiredWitnessesKey: k.retWit, defaults: prefs.defaults)
 
         #expect(restored.isEmpty)
     }

@@ -2,9 +2,10 @@
 // "We need to see the date a file or media artefact was archived" (Rick
 // 2026-09-09). Promote now stamps `archivedAt` on the archive copy. Copies
 // promoted before that field existed still carry the date twice: in the
-// Promote note ("Promote 2026-08-16T20:11:03Z: promoted from …") and in
-// `archiveFixity.verifiedAt` (which Verify Archive Copies may refresh, so
-// it is the LAST resort, not the first).
+// Promote note ("Promote 2026-08-16T20:11:03Z: promoted from …").
+// `archiveFixity.verifiedAt` is NOT evidence of it (GH #477): Verify Archive
+// Copies refreshes it on every pass, so it is the day of a check. A copy
+// with neither shows "—" — the same rule as FileJourneyBuilder.archiveDay.
 
 import Foundation
 import VideoScanCore
@@ -16,8 +17,7 @@ extension VideoRecord {
     /// (or a copy with no trace at all).
     var resolvedArchivedAt: Date? {
         if let archivedAt { return archivedAt }
-        if let fromNote = VideoRecord.promoteStamp(inNotes: notes) { return fromNote }
-        return archiveFixity?.verifiedAt
+        return VideoRecord.promoteStamp(inNotes: notes)
     }
 
     /// Earliest "Promote <ISO-8601>:" stamp in a notes field. Pure.

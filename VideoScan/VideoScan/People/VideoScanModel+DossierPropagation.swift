@@ -17,30 +17,50 @@ import Combine
 // and missed the connected copy.
 //
 // Fix: dossier results belong to FILE CONTENT, not to a particular
-// catalog path. Group records by partialMD5; for each group, pick the
-// "best" transcript / captions / OCR (heuristic: longest non-empty
-// wins — proxy for "most words recognized" / "most scenes captured")
-// and propagate to every member of the group. Going forward, every
-// dossier writeback propagates to siblings too.
+// catalog path. Group records by their whole-file SHA-256; for each
+// group, pick the "best" transcript / captions / OCR (heuristic: longest
+// non-empty wins — proxy for "most words recognized" / "most scenes
+// captured") and propagate to every member of the group. Going forward,
+// every dossier writeback propagates to siblings too.
 //
-// Records with empty partialMD5 are treated as unique — propagation
-// can't safely identify their siblings without content-hash evidence,
-// so we leave them alone.
+// GH #413 (2026-11-25): the groups were keyed by `partialMD5` — a
+// head+tail SAMPLE. On Rick's catalog 11 partialMD5 groups (82 rows) held
+// more than one whole-file digest: same size and head/tail, different
+// interior bytes. OCR date candidates travel here and feed DateInference
+// and, through it, Promote's decade folder, so a sample must never decide
+// "same content" (CLAUDE.md rule 6). The key is now `contentKey(of:)` —
+// the commit's own digest rule (`CatalogRecordDTO.resolveDigest`), so a
+// group is exactly the rows the catalog stores under one content digest.
+// A record with no whole-file digest (not hashed yet, or two fixities
+// that disagree) propagates nothing and receives nothing.
 
 extension VideoScanModel {
 
     // MARK: - Public API
 
-    /// Propagate the freshest / largest dossier across every catalog
-    /// record sharing this record's `partialMD5`. Called after every
-    /// transcript / caption / OCR writeback so duplicate copies stay
-    /// in sync automatically. No-op when the record has no MD5 or no
-    /// siblings.
+    /// The content identity propagation groups by: the whole-file SHA-256
+    /// the commit would store for this row (`CatalogRecordDTO.resolveDigest`
+    /// — content fixity, else the archive copy's fixity, each only when it
+    /// covers the row's size; two sha256 fixities that disagree name no
+    /// identity). nil = no proof of content → no propagation (GH #413).
     @MainActor
-    func propagateDossierToMD5Duplicates(of record: VideoRecord) {
-        guard !record.partialMD5.isEmpty else { return }
+    static func contentKey(of r: VideoRecord) -> String? {
+        CatalogRecordDTO.resolveDigest(
+            content: r.contentFixity.map { .init(algorithm: $0.algorithm, digest: $0.digest, bytes: $0.byteCount) },
+            archive: r.archiveFixity.map { .init(algorithm: $0.algorithm, digest: $0.digest, bytes: $0.sizeBytes) },
+            sizeBytes: r.sizeBytes).digest
+    }
+
+    /// Propagate the freshest / largest dossier across every catalog
+    /// record holding this record's whole-file digest. Called after every
+    /// transcript / caption / OCR writeback so duplicate copies stay in
+    /// sync automatically. No-op when the record has no whole-file digest
+    /// or no siblings (GH #413: never a sampled partialMD5).
+    @MainActor
+    func propagateDossierToContentCopies(of record: VideoRecord) {
+        guard let key = Self.contentKey(of: record) else { return }
         let siblings = records.filter {
-            $0.partialMD5 == record.partialMD5 && $0.id != record.id
+            $0.id != record.id && Self.contentKey(of: $0) == key
         }
         guard !siblings.isEmpty else { return }
 
@@ -48,8 +68,9 @@ extension VideoScanModel {
         propagateBestDossier(in: group)
     }
 
-    /// One-shot backfill: scan the entire catalog, group by partialMD5,
-    /// and propagate the best dossier within each multi-member group.
+    /// One-shot backfill: scan the entire catalog, group by whole-file
+    /// digest (GH #413), and propagate the best dossier within each
+    /// multi-member group.
     /// Designed to run once on catalog load to harmonize legacy records
     /// whose dossiers diverged before per-writeback propagation existed.
     /// Returns the number of records that received a dossier update.
@@ -66,21 +87,24 @@ extension VideoScanModel {
     @MainActor
     @discardableResult
     func backfillDossierAcrossDuplicates(judge: inout DossierTextJudge) -> Int {
-        var byMD5: [String: [VideoRecord]] = [:]
-        byMD5.reserveCapacity(records.count)
-        for rec in records where !rec.partialMD5.isEmpty {
-            byMD5[rec.partialMD5, default: []].append(rec)
+        // Worst-case memory: one array entry per hashed record (a pointer
+        // each) plus one key string per distinct digest — ~10 MB at 100k.
+        var byDigest: [String: [VideoRecord]] = [:]
+        byDigest.reserveCapacity(records.count)
+        for rec in records {
+            guard let key = Self.contentKey(of: rec) else { continue }
+            byDigest[key, default: []].append(rec)
         }
 
         var totalUpdated = 0
-        for (_, members) in byMD5 where members.count >= 2 {
+        for (_, members) in byDigest where members.count >= 2 {
             totalUpdated += propagateBestDossier(in: members, judge: &judge)
         }
 
         if totalUpdated > 0 {
             objectWillChange.send()
             saveCatalogDebounced()
-            log("Dossier backfill: propagated best transcript/captions/OCR to \(totalUpdated) record(s) across duplicate-MD5 groups.")
+            log("Dossier backfill: propagated best transcript/captions/OCR to \(totalUpdated) record(s) across whole-file-digest copy groups.")
         }
         return totalUpdated
     }

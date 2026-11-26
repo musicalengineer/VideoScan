@@ -134,8 +134,12 @@ public struct AudioFingerprintStamp: Codable, Equatable, Hashable, Sendable {
 
     /// Decided on the ABSOLUTE level only — never on `activeSeconds`, whose
     /// floor moves with the normalising gain (×100 makes −92 dBFS dither
-    /// "audible"; QA P1 on af4be5f38).
+    /// "audible"; QA P1 on af4be5f38). The level decides BEFORE the landmark
+    /// count (GH #345): landmarks the gain made out of a floor that never
+    /// clears −60 dBFS are not programme. (`compute` makes none there; this
+    /// guards a print built any other way.)
     public static func reading(of fingerprint: AudioFingerprint) -> Reading {
+        if fingerprint.analyzedSeconds > 0, fingerprint.secondsAboveSilenceCeiling == 0 { return .silence }
         if fingerprint.landmarkCount > 0 { return .printable }
         guard fingerprint.analyzedSeconds > 0, let loud = fingerprint.secondsAboveSilenceCeiling else { return .notMeasured }
         return loud == 0 ? .silence : .heardTooLittle(audibleSeconds: loud)

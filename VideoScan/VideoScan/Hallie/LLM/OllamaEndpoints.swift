@@ -74,6 +74,62 @@ enum OllamaEndpoints {
         return lower.hasPrefix("http://") || lower.hasPrefix("https://")
     }
 
+    /// True when the endpoint is THIS Mac — the only place the Local brain
+    /// may send family media (GH #450; rule 13; DECISIONS 2026-10-10 R6:
+    /// the data-class policy is enforced in the adapter). Decided by the
+    /// HOST the URL actually dials, never by how it is spelled: loopback or
+    /// one of this Mac's own names (`OllamaLocalServerBootstrap
+    /// .currentLocalHostNames()`). A cloud row (`https://ollama.example.com`),
+    /// a userinfo trick (`http://localhost@evil.example`), a look-alike
+    /// (`localhost.example.com`) and another Mac on the LAN are all not this
+    /// Mac. (The fleet Macs are not listed as local in ARCHITECTURE or
+    /// DECISIONS, so they are treated as off this Mac — fail closed.)
+    ///
+    /// An IP literal is compared as an ADDRESS, never as text (Codex round 1:
+    /// `[0:0:0:0:0:0:0:1]` is `::1`): any 127/8, `::1`, or IPv4-mapped
+    /// `::ffff:127/8` is loopback; any other literal is local only if it is
+    /// the same address as one of `thisMacNames`. Only inet_pton's strict
+    /// forms are addresses — shorthand like `127.1` stays refused (fail closed).
+    static func isOnThisMac(_ endpoint: String, thisMacNames: Set<String>) -> Bool {
+        let chat = chatURLString(for: endpoint, defaultPort: 11434)
+        guard let url = URL(string: chat), let host = url.host, !host.isEmpty else { return false }
+        let target = normalizedHost(host)
+        if let address = IPAddress(target) {
+            if address.isLoopback { return true }
+            return thisMacNames.contains { IPAddress(normalizedHost($0)) == address }
+        }
+        let names = Set(thisMacNames.map(normalizedHost))
+        return names.contains(target)
+    }
+
+    /// Lower-cased, without a trailing root dot or IPv6 brackets.
+    private static func normalizedHost(_ host: String) -> String {
+        host.trimmingCharacters(in: CharacterSet(charactersIn: ".[]")).lowercased()
+    }
+
+    /// A strictly parsed IPv4 / IPv6 literal, as its canonical bytes.
+    /// IPv4-mapped IPv6 (`::ffff:a.b.c.d`) is folded to its IPv4 address.
+    struct IPAddress: Equatable {
+        let bytes: [UInt8]   // 4 (IPv4) or 16 (IPv6)
+
+        init?(_ text: String) {
+            var v4 = in_addr()
+            if inet_pton(AF_INET, text, &v4) == 1 {
+                bytes = withUnsafeBytes(of: &v4) { Array($0) }
+                return
+            }
+            var v6 = in6_addr()
+            guard inet_pton(AF_INET6, text, &v6) == 1 else { return nil }
+            let raw = withUnsafeBytes(of: &v6) { Array($0) }
+            let mappedPrefix: [UInt8] = Array(repeating: 0, count: 10) + [0xff, 0xff]
+            bytes = Array(raw.prefix(12)) == mappedPrefix ? Array(raw.suffix(4)) : raw
+        }
+
+        var isLoopback: Bool {
+            bytes.count == 4 ? bytes[0] == 127 : bytes == Array(repeating: 0, count: 15) + [1]
+        }
+    }
+
     /// Full chat URL for one endpoint.
     ///
     ///   `RicksM4.local`               → http://RicksM4.local:11434/api/chat
@@ -178,5 +234,37 @@ enum OllamaEndpoints {
         } else {
             defaults.set(serialize(cleaned), forKey: hostsKey)
         }
+    }
+}
+
+/// The URLSession every Ollama HTTP call goes through (GH #450, Codex round 1).
+///
+/// The family-media gate checks the URL it is about to dial; a server that
+/// answers 307 would move the POST — method and body kept (RFC 9110) — to a
+/// host the gate never saw. Ollama has no reason to redirect, so this session
+/// refuses EVERY redirect, for every class: the 3xx becomes the final reply,
+/// which `classify` turns into an error, so the call fails closed. (Refusing
+/// all rather than "all off this Mac" keeps one rule with nothing to spoof.)
+/// The `.curl` transport never follows redirects either: it runs without -L.
+enum OllamaHTTP {
+    static let session = makeSession(configuration: .default)
+
+    /// Tests pass a configuration carrying a URLProtocol stub; the redirect
+    /// policy is the production one either way.
+    static func makeSession(configuration: URLSessionConfiguration) -> URLSession {
+        URLSession(configuration: configuration, delegate: OllamaRedirectRefusal(), delegateQueue: nil)
+    }
+}
+
+/// Answers every "may I follow this redirect?" with no. Stateless, so
+/// Sendable. (C++: a callback object whose one hook always returns nullptr.)
+/// Completion-handler form on purpose: the async form of this delegate
+/// method crashes swift-frontend's @objc thunk emission (Swift 6.4).
+final class OllamaRedirectRefusal: NSObject, URLSessionTaskDelegate, Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping @Sendable (URLRequest?) -> Void) {
+        completionHandler(nil)
     }
 }

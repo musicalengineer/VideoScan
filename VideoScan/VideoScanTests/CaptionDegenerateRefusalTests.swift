@@ -311,6 +311,8 @@ private func reviewRecord(_ path: String, md5: String = "", dates: [String]) -> 
     r.durationSeconds = 30
     r.lifecycleStage = .cataloged
     r.partialMD5 = md5
+    // GH #413: copies share a whole-file digest; the md5 key names it.
+    r.contentFixity = DossierBackfillVerdictBudgetTests.wholeFileFixity(group: md5, size: r.sizeBytes)
     r.ocrDateCandidates = dates.enumerated().map { SceneCaption(timestamp: Double($0.offset), text: $0.element) }
     return r
 }

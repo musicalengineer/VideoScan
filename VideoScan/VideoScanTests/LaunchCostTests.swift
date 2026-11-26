@@ -1,3 +1,4 @@
+import CryptoKit
 import Testing
 import Foundation
 import VideoScanCore
@@ -33,12 +34,24 @@ struct DossierBackfillVerdictBudgetTests {
         return String(decoding: Array(s.utf8), as: UTF8.self)
     }
 
+    /// GH #413: copies of one file share a WHOLE-FILE digest — propagation
+    /// groups by it, never by partialMD5. A fixture's group key names its
+    /// content: the same key is the same digest; "" is a row never hashed.
+    static func wholeFileFixity(group key: String, size: Int64) -> ContentFixity? {
+        guard !key.isEmpty else { return nil }
+        let digest = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
+        return ContentFixity(digest: digest, byteCount: size,
+                             stamp: FileIdentityStamp(device: 1, inode: 1, size: size, mtimeNs: 1, ctimeNs: 1),
+                             computedAt: Date(timeIntervalSince1970: 1_800_000_000))
+    }
+
     static func record(md5: String, path: String, transcript: String?,
                        ocrText: [SceneCaption] = [], ocrDates: [SceneCaption] = []) -> VideoRecord {
         let r = VideoRecord()
         r.fullPath = path
         r.filename = (path as NSString).lastPathComponent
         r.partialMD5 = md5
+        r.contentFixity = wholeFileFixity(group: md5, size: r.sizeBytes)
         r.streamTypeRaw = StreamType.videoAndAudio.rawValue
         r.audioTranscript = transcript
         r.audioTranscriptModel = transcript == nil ? nil : "whisper-medium"
@@ -240,6 +253,7 @@ struct DossierBackfillEquivalenceTests {
                 r.fullPath = "/V\(c)/g\(g).mov"
                 r.filename = "g\(g).mov"
                 r.partialMD5 = g % 37 == 0 ? "" : "G\(g)"
+                r.contentFixity = DossierBackfillVerdictBudgetTests.wholeFileFixity(group: r.partialMD5, size: r.sizeBytes)
                 let unreadable = Int.random(in: 0..<10, using: &rng) == 0
                 r.streamTypeRaw = (unreadable ? StreamType.ffprobeFailed : StreamType.videoAndAudio).rawValue
                 let pick = agree ? base : (Int.random(in: 0..<txPool.count, using: &rng), Int.random(in: 0..<capPool.count, using: &rng),
@@ -258,13 +272,15 @@ struct DossierBackfillEquivalenceTests {
         return out
     }
 
-    /// Group the way `backfillDossierAcrossDuplicates` does, in record order.
+    /// Group the way `backfillDossierAcrossDuplicates` does (whole-file
+    /// digest, GH #413), in record order.
     static func groups(_ records: [VideoRecord]) -> [[VideoRecord]] {
         var order: [String] = []
         var by: [String: [VideoRecord]] = [:]
-        for r in records where !r.partialMD5.isEmpty {
-            if by[r.partialMD5] == nil { order.append(r.partialMD5) }
-            by[r.partialMD5, default: []].append(r)
+        for r in records {
+            guard let key = VideoScanModel.contentKey(of: r) else { continue }
+            if by[key] == nil { order.append(key) }
+            by[key, default: []].append(r)
         }
         return order.compactMap { key in by[key].flatMap { $0.count >= 2 ? $0 : nil } }
     }

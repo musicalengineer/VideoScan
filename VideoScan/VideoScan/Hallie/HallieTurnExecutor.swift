@@ -1645,14 +1645,16 @@ enum HallieTurnExecutor {
     /// The graph route proper, after pronoun binding. Split out so the
     /// binding note can be prefixed on whichever of the several returns
     /// answers (CyberBrain biography, bridged kinship, plain GEDCOM,
-    /// relationship).
+    /// relationship). Three stages, in order: the answers that come before
+    /// the tree is queried (`graphAnswerBeforeTree`), the subject the tree is
+    /// asked about (+GraphSubject), and the answer from the tree
+    /// (`answerFromTree`).
     private static func executeGraphCase(
         _ rawPayload: ArchivistQueryAST.Graph,
         request: Request,
         context: Context,
         dependencies: Dependencies
     ) async throws -> Result {
-        let ast = request.intent.ast
         // A military-service question is answered from the family's own
         // passages (+Service, 2026-09-11) — before the tree biography,
         // which would answer a different question with birth and death.
@@ -1672,25 +1674,39 @@ enum HallieTurnExecutor {
                 context: context, dependencies: dependencies)
             return inner.prefixingBasis(singularNote)
         }
+        if let answered = try await graphAnswerBeforeTree(
+            payload, request: request, context: context, dependencies: dependencies) {
+            return answered
+        }
+        guard let graph = context.graph else {
+            return Result(
+                route: .graph,
+                outcome: .declined,
+                prose: "I don't have an imported family tree, so I can't answer that reliably.",
+                basisLine: "Basis: no readable GEDCOM was available.",
+                queryDescription: "shape=graph",
+                citations: [],
+                catalogPersonName: nil)
+        }
+        return try await answerFromTree(
+            payload, graph: graph, request: request, context: context, dependencies: dependencies)
+    }
+
+    /// The answers that settle a graph question before the installed tree is
+    /// queried, in precedence order; `nil` = none of them applies.
+    private static func graphAnswerBeforeTree(
+        _ payload: ArchivistQueryAST.Graph,
+        request: Request,
+        context: Context,
+        dependencies: Dependencies
+    ) async throws -> Result? {
         if payload.operation == .relationship {
             return try await executeRelationship(
                 payload: payload, request: request, context: context,
                 dependencies: dependencies)
         }
-        // The model read "rick's grandma muriel" as TWO people (live
-        // 2026-08-26). A kinship with two names is one person named twice:
-        // the second name filters the relation set. Same answerer as the
-        // model-free parse; never the executor's people-count guard.
-        if payload.operation == .kinship, payload.people.count == 2,
-           let relation = payload.relation,
-           let kin = HallieKinshipApposition.Kin(astRelation: relation, side: payload.side) {
-            let owner = payload.people[0].trimmingCharacters(in: .whitespacesAndNewlines)
-            let isPronoun = ["me", "i", "my", "myself", "you"].contains(owner.lowercased())
-            let apposition = HallieKinshipApposition(
-                possessor: isPronoun ? nil : HallieLineageQuestion.capitalizedName(owner), kin: kin,
-                relationWord: (payload.side.map { "\($0.rawValue) " } ?? "") + relation.rawValue.replacingOccurrences(of: "-", with: " "),
-                name: payload.people[1].trimmingCharacters(in: .whitespacesAndNewlines))
-            return HallieLineageAnswer.kinshipApposition(apposition, context: context)
+        if let apposition = kinshipAppositionAnswer(payload, context: context) {
+            return apposition
         }
         // MAIDEN AND MARRIED, IN ONE BREATH (live 2026-09-13, the follow-up
         // to the Beth miss). Asked "which Beth?", Rick answered "Beth Breen
@@ -1758,24 +1774,46 @@ enum HallieTurnExecutor {
         // 2026-09-13 is that this was the ONLY place a profile could speak
         // on the graph route, so an installed tree silenced the People tab
         // entirely. The precedence rule for a tree that IS installed lives
-        // at the ambiguity fork below (PeopleTab.precedence) and is exact-
-        // match only. See PeopleTabPrecedenceTests.
-        if context.graph == nil, let typed = payload.people.first,
-           let result = peopleTabResult(
-               typed: typed, payload: payload, request: request, context: context,
-               queryDescription: graphQueryDescription(payload)) {
-            return result
+        // at the ambiguity fork (`graphAmbiguityResult`, PeopleTab.precedence)
+        // and is exact-match only. See PeopleTabPrecedenceTests.
+        if context.graph == nil, let typed = payload.people.first {
+            return peopleTabResult(
+                typed: typed, payload: payload, request: request, context: context,
+                queryDescription: graphQueryDescription(payload))
         }
-        guard let graph = context.graph else {
-            return Result(
-                route: .graph,
-                outcome: .declined,
-                prose: "I don't have an imported family tree, so I can't answer that reliably.",
-                basisLine: "Basis: no readable GEDCOM was available.",
-                queryDescription: "shape=graph",
-                citations: [],
-                catalogPersonName: nil)
-        }
+        return nil
+    }
+
+    /// The model read "rick's grandma muriel" as TWO people (live
+    /// 2026-08-26). A kinship with two names is one person named twice:
+    /// the second name filters the relation set. Same answerer as the
+    /// model-free parse; never the executor's people-count guard.
+    private static func kinshipAppositionAnswer(
+        _ payload: ArchivistQueryAST.Graph, context: Context
+    ) -> Result? {
+        guard payload.operation == .kinship, payload.people.count == 2,
+              let relation = payload.relation,
+              let kin = HallieKinshipApposition.Kin(astRelation: relation, side: payload.side)
+        else { return nil }
+        let owner = payload.people[0].trimmingCharacters(in: .whitespacesAndNewlines)
+        let isPronoun = ["me", "i", "my", "myself", "you"].contains(owner.lowercased())
+        let apposition = HallieKinshipApposition(
+            possessor: isPronoun ? nil : HallieLineageQuestion.capitalizedName(owner), kin: kin,
+            relationWord: (payload.side.map { "\($0.rawValue) " } ?? "") + relation.rawValue.replacingOccurrences(of: "-", with: " "),
+            name: payload.people[1].trimmingCharacters(in: .whitespacesAndNewlines))
+        return HallieLineageAnswer.kinshipApposition(apposition, context: context)
+    }
+
+    /// The single-person question asked of the installed tree: the subject
+    /// settled (+GraphSubject), then the which-one, the not-found
+    /// alternatives, or the answer with its provenance.
+    private static func answerFromTree(
+        _ payload: ArchivistQueryAST.Graph,
+        graph: GedcomFamilyGraph,
+        request: Request,
+        context: Context,
+        dependencies: Dependencies
+    ) async throws -> Result {
         // THE QUESTION TRAVELS WITH THE QUERY (first strict replay,
         // 2026-09-07 21:00). The field guards in ArchivistGraphQuery.init read
         // it — and this site never passed it, so on the single-person path
@@ -1785,182 +1823,19 @@ enum HallieTurnExecutor {
         // unit tests passed because they called the initializer directly.
         let query = ArchivistGraphQuery(payload, question: request.intent.originalQuestion)
         let queryDescription = graphQueryDescription(payload, resolved: query)
-        let inputs = ArchivistGraphInputs(
-            graph: graph,
-            profiles: (context.profiles ?? []).map {
-                ArchivistGraphProfileSnapshot(
-                    stableID: $0.stableID,
-                    canonicalName: $0.canonicalName,
-                    aliases: $0.aliases,
-                    kinships: $0.kinships,
-                    sex: $0.sex,
-                    birthdate: $0.birthdate,
-                    deathdate: $0.deathdate,
-                    uuid: $0.uuid,
-                    treeIdentity: $0.treeIdentity)
-            },
-            ownerName: context.speakers.ownerName)
-        let selection: ArchivistGraphSubjectSelection
-        // Step 0 of the owner chain (2026-08-26): a configured FamilySearch
-        // ID pins the owner's own spelling to one record before any name
-        // matching — never applied to anyone else's name.
-        var ownerNote: String?
-        switch request.selectedIdentity {
-        case nil:
-            // The pinned record is bound FIRST so its name can settle the
-            // generation (2026-09-06). "Richard Breen Sr" used to satisfy
-            // isOwnerSpelling for owner "Rick Breen" — rick expands to
-            // richard, the suffix was discarded — and this line then
-            // overwrote a father the kinship rebind had already resolved
-            // correctly with Rick's own record.
-            if let typed = payload.people.first,
-               let pinned = graph.person(familySearchID: context.speakers.ownerFamilySearchID),
-               HallieOwnerResolver.isOwnerSpelling(
-                   typed, owner: context.speakers.ownerName, ownerTreeName: pinned.name) {
-                selection = .gedcomPersonID(pinned.id)
-                ownerNote = "“you” = \(pinned.name) (FamilySearch ID \(pinned.familySearchID ?? ""))."
-            } else {
-                selection = .unresolved
-            }
-        case .profileStableID(let id): selection = .profileStableID(id)
-        case .gedcomPersonID(let id): selection = .gedcomPersonID(id)
-        case .cyberBrainPersonID:
-            return invalidContinuationResult(for: ast)
+        let binding: GraphSubjectBinding
+        switch try await bindGraphSubject(
+            payload, query: query, inputs: graphInputs(graph: graph, context: context), graph: graph,
+            queryDescription: queryDescription, request: request, context: context,
+            dependencies: dependencies) {
+        case .reply(let reply): return reply
+        case .bound(let bound): binding = bound
         }
-        let execute = dependencies.executeGraph
-        var result = try await detached {
-            execute(query, inputs, selection)
-        }
-        // The owner chain (2026-08-26): the subject is one of the owner's
-        // own spellings ("rick", "Rick Breen") and the tree could not settle
-        // on one record — several Richards, or none under that spelling —
-        // so pin the owner's record (root tie-break) and run again. Said in
-        // the basis line; never applied to anyone else's name.
-        if request.selectedIdentity == nil, ownerNote == nil,
-           result.conclusion == .personNotFound || !result.ambiguityCandidates.isEmpty,
-           let typed = payload.people.first,
-           HallieOwnerResolver.isOwnerSpelling(typed, owner: context.speakers.ownerName),
-           case .one(let owner, let note) = HallieOwnerResolver.resolve(
-               typed, graph: graph, familySearchID: context.speakers.ownerFamilySearchID) {
-            result = try await detached {
-                execute(query, inputs, .gedcomPersonID(owner.id))
-            }
-            ownerNote = note.replacingOccurrences(of: "Basis: ", with: "")
-        }
-        // The pinned owner ID is stale (codex #707): say so in the basis
-        // line rather than letting the name/root chain guess at "me".
-        if request.selectedIdentity == nil, ownerNote == nil,
-           let typed = payload.people.first,
-           HallieOwnerResolver.isOwnerSpelling(typed, owner: context.speakers.ownerName),
-           let stale = HallieOwnerResolver.stalePinLine(
-               familySearchID: context.speakers.ownerFamilySearchID, graph: graph) {
-            ownerNote = stale
-        }
-        // LIVE MISS #11 (2026-08-29): "pa oc'connor" — the SURNAME is in
-        // the tree (by spelling recovery) and the given token is a family
-        // nickname. An alias bridges it to one person, a member's own name
-        // answers or asks which one, and otherwise the surname roster is
-        // offered below — never the bare decline. See +SurnameRoster.
-        var rosterNote: String?
-        var rosterReply: Result?
-        if request.selectedIdentity == nil, ownerNote == nil,
-           result.conclusion == .personNotFound,
-           let typed = payload.people.first,
-           let step = surnameRosterStep(
-               typed: typed, request: request, context: context,
-               graph: graph, queryDescription: queryDescription) {
-            switch step {
-            case .resolved(let selection, let note):
-                result = try await detached {
-                    execute(query, inputs, selection)
-                }
-                rosterNote = note
-            case .replyNow(let reply):
-                return reply
-            case .roster(let reply):
-                rosterReply = reply
-            }
-        }
-        func withOwnerNote(_ r: Result) -> Result {
-            var out = r
-            if let rosterNote { out = out.prefixingBasis(rosterNote) }
-            if let ownerNote { out = out.prefixingBasis(ownerNote) }
-            return out
-        }
+        let result = binding.result
         if !result.ambiguityCandidates.isEmpty {
-            let choices = result.ambiguityCandidates.map { candidate in
-                switch candidate.id {
-                case .profileStableID(let id):
-                    return Candidate(
-                        id: .profileStableID(id),
-                        canonicalName: candidate.canonicalName,
-                        label: candidate.label)
-                case .gedcomPersonID(let id):
-                    return Candidate(
-                        id: .gedcomPersonID(id),
-                        canonicalName: candidate.canonicalName,
-                        label: candidate.label)
-                }
-            }
-            let stage: ClarificationStage = choices[0].source == .peopleProfile
-                ? .profileIdentity : .gedcomPerson
-            // Family-tree namesakes: anchors first, capped, or the ask for
-            // a surname/year (HallieWhichOne, 2026-08-29) — the same rule
-            // as the two-person route.
-            if stage == .gedcomPerson, let typed = payload.people.first {
-                let people = choices.compactMap { choice -> GedcomFamilyGraph.Person? in
-                    if case .gedcomPersonID(let id) = choice.id { return graph.people[id] }
-                    return nil
-                }
-                let arrangement = HallieWhichOne.arrange(
-                    people, graph: graph,
-                    ownerFamilySearchID: context.speakers.ownerFamilySearchID)
-                // PEOPLE-TAB PRECEDENCE (live miss 2026-09-13) — see
-                // `peopleTabPrecedenceResult`. `nil` = the People tab has no
-                // exact opinion, or the tree can still offer a real choice,
-                // and the namesake which-one below runs untouched.
-                if let decided = try await peopleTabPrecedenceResult(
-                    typed: typed, payload: payload, request: request,
-                    context: context, dependencies: dependencies, graph: graph,
-                    arrangement: arrangement, corrected: query,
-                    queryDescription: queryDescription) {
-                    return withOwnerNote(decided)
-                }
-                let shown = arrangement.shown.map { person in
-                    Candidate(
-                        id: .gedcomPersonID(person.id),
-                        canonicalName: person.name,
-                        label: ArchivistBiographyPolicy.disambiguationCandidate(for: person).label)
-                }
-                return withOwnerNote(Result(
-                    route: .graph,
-                    outcome: .needsClarification,
-                    prose: HallieWhichOne.prose(
-                        typed: typed, arrangement: arrangement, labels: shown.map(\.label)),
-                    basisLine: HallieWhichOne.basis(typed: typed, arrangement: arrangement),
-                    queryDescription: queryDescription,
-                    citations: [],
-                    catalogPersonName: nil,
-                    clarification: arrangement.offersChips
-                        ? Clarification(
-                            intent: request.intent, stage: stage, candidates: shown,
-                            continuationToken: context.continuationToken)
-                        : nil))
-            }
-            let clarification = Clarification(
-                intent: request.intent,
-                stage: stage,
-                candidates: choices,
-                continuationToken: context.continuationToken)
-            return Result(
-                route: .graph,
-                outcome: .needsClarification,
-                prose: result.prose,
-                basisLine: result.basisLine,
-                queryDescription: queryDescription,
-                citations: [],
-                catalogPersonName: nil,
-                clarification: clarification)
+            return try await graphAmbiguityResult(
+                payload, binding: binding, query: query, queryDescription: queryDescription,
+                graph: graph, request: request, context: context, dependencies: dependencies)
         }
         // An assumed bridge is ALWAYS said out loud, in the answer itself.
         //
@@ -1998,59 +1873,166 @@ enum HallieTurnExecutor {
         // Where the tree falls short, say how far it reaches and what the
         // family has told Hallie (quoted, attributed) — see +FamilyKnowledge.
         if result.conclusion == .personNotFound, let typed = payload.people.first {
-            // Not in the tree — but is it someone from the People tab? Then
-            // the profile answers (name, alternate names, birth date, tags);
-            // a chip chosen after "which one?" names the profile directly.
-            if let result = peopleTabResult(
-                typed: typed, payload: payload, request: request, context: context,
-                queryDescription: queryDescription) {
-                return result
-            }
-            // A near miss ("Jusson Lambe") → "Did you mean Judson Lamb?" as a
-            // clarification with the real people as choices — the existing
-            // chip/typed-reply continuation finishes the turn. Never a
-            // silent substitution (Rick 2026-08-24).
-            let suggestions = HallieNameSuggestion.suggest(
-                typed, graph: graph,
-                profiles: (context.profiles ?? []).map {
-                    (stableID: $0.stableID, name: $0.canonicalName, aliases: $0.aliases)
-                })
-            if !suggestions.isEmpty {
-                let choices = suggestions.map { suggestion -> Candidate in
-                    switch suggestion.identity {
-                    case .gedcom(let id):
-                        return Candidate(id: .gedcomPersonID(id),
-                                         canonicalName: suggestion.name, label: suggestion.label)
-                    case .profile(let stableID):
-                        return Candidate(id: .profileStableID(stableID),
-                                         canonicalName: suggestion.name, label: suggestion.label)
-                    }
-                }
-                let prose = choices.count == 1
-                    ? "I don't find \u{201C}\(typed)\u{201D} — did you mean \(choices[0].canonicalName)?"
-                    : "I don't find \u{201C}\(typed)\u{201D} — did you mean one of these?"
-                return Result(
-                    route: .graph,
-                    outcome: .needsClarification,
-                    prose: prose,
-                    basisLine: "Basis: no exact match in the family tree or People tab; the closest recorded names are offered, nothing was assumed.",
-                    queryDescription: queryDescription,
-                    citations: [],
-                    catalogPersonName: nil,
-                    clarification: Clarification(
-                        intent: request.intent,
-                        stage: .suggestedIdentity,
-                        candidates: choices,
-                        continuationToken: context.continuationToken))
-            }
-            // The surname roster (LIVE MISS #11) — after the People tab and
-            // the near-miss suggestion, before the bare decline.
-            if let rosterReply { return rosterReply }
-            return FamilyKnowledgeSupplement.notFoundOffer(base, typed: typed, graph: graph)
+            return graphNotFoundResult(
+                base, typed: typed, rosterReply: binding.rosterReply, payload: payload,
+                queryDescription: queryDescription, graph: graph, request: request, context: context)
         }
-        return withOwnerNote(FamilyKnowledgeSupplement.apply(
+        return binding.noted(FamilyKnowledgeSupplement.apply(
             to: base, payload: payload, graphResult: result,
             graph: graph, context: context))
+    }
+
+    /// The tree found several people for the subject: the which-one. Family-
+    /// tree namesakes go through HallieWhichOne (anchors first, capped, or
+    /// the ask for a surname/year) after the People tab's exact precedence;
+    /// profile candidates are offered as the executor listed them.
+    private static func graphAmbiguityResult(
+        _ payload: ArchivistQueryAST.Graph,
+        binding: GraphSubjectBinding,
+        query: ArchivistGraphQuery,
+        queryDescription: String,
+        graph: GedcomFamilyGraph,
+        request: Request,
+        context: Context,
+        dependencies: Dependencies
+    ) async throws -> Result {
+        let result = binding.result
+        let choices = result.ambiguityCandidates.map { candidate in
+            switch candidate.id {
+            case .profileStableID(let id):
+                return Candidate(
+                    id: .profileStableID(id),
+                    canonicalName: candidate.canonicalName,
+                    label: candidate.label)
+            case .gedcomPersonID(let id):
+                return Candidate(
+                    id: .gedcomPersonID(id),
+                    canonicalName: candidate.canonicalName,
+                    label: candidate.label)
+            }
+        }
+        let stage: ClarificationStage = choices[0].source == .peopleProfile
+            ? .profileIdentity : .gedcomPerson
+        // Family-tree namesakes: anchors first, capped, or the ask for
+        // a surname/year (HallieWhichOne, 2026-08-29) — the same rule
+        // as the two-person route.
+        if stage == .gedcomPerson, let typed = payload.people.first {
+            let people = choices.compactMap { choice -> GedcomFamilyGraph.Person? in
+                if case .gedcomPersonID(let id) = choice.id { return graph.people[id] }
+                return nil
+            }
+            let arrangement = HallieWhichOne.arrange(
+                people, graph: graph,
+                ownerFamilySearchID: context.speakers.ownerFamilySearchID)
+            // PEOPLE-TAB PRECEDENCE (live miss 2026-09-13) — see
+            // `peopleTabPrecedenceResult`. `nil` = the People tab has no
+            // exact opinion, or the tree can still offer a real choice,
+            // and the namesake which-one below runs untouched.
+            if let decided = try await peopleTabPrecedenceResult(
+                typed: typed, payload: payload, request: request,
+                context: context, dependencies: dependencies, graph: graph,
+                arrangement: arrangement, corrected: query,
+                queryDescription: queryDescription) {
+                return binding.noted(decided)
+            }
+            let shown = arrangement.shown.map { person in
+                Candidate(
+                    id: .gedcomPersonID(person.id),
+                    canonicalName: person.name,
+                    label: ArchivistBiographyPolicy.disambiguationCandidate(for: person).label)
+            }
+            return binding.noted(Result(
+                route: .graph,
+                outcome: .needsClarification,
+                prose: HallieWhichOne.prose(
+                    typed: typed, arrangement: arrangement, labels: shown.map(\.label)),
+                basisLine: HallieWhichOne.basis(typed: typed, arrangement: arrangement),
+                queryDescription: queryDescription,
+                citations: [],
+                catalogPersonName: nil,
+                clarification: arrangement.offersChips
+                    ? Clarification(
+                        intent: request.intent, stage: stage, candidates: shown,
+                        continuationToken: context.continuationToken)
+                    : nil))
+        }
+        let clarification = Clarification(
+            intent: request.intent,
+            stage: stage,
+            candidates: choices,
+            continuationToken: context.continuationToken)
+        return Result(
+            route: .graph,
+            outcome: .needsClarification,
+            prose: result.prose,
+            basisLine: result.basisLine,
+            queryDescription: queryDescription,
+            citations: [],
+            catalogPersonName: nil,
+            clarification: clarification)
+    }
+
+    /// Not in the tree: the People-tab profile, then a near-miss "did you
+    /// mean…" (never a silent substitution, Rick 2026-08-24), then the
+    /// surname roster, then how far the tree reaches (+FamilyKnowledge).
+    private static func graphNotFoundResult(
+        _ base: Result,
+        typed: String,
+        rosterReply: Result?,
+        payload: ArchivistQueryAST.Graph,
+        queryDescription: String,
+        graph: GedcomFamilyGraph,
+        request: Request,
+        context: Context
+    ) -> Result {
+        // Not in the tree — but is it someone from the People tab? Then
+        // the profile answers (name, alternate names, birth date, tags);
+        // a chip chosen after "which one?" names the profile directly.
+        if let result = peopleTabResult(
+            typed: typed, payload: payload, request: request, context: context,
+            queryDescription: queryDescription) {
+            return result
+        }
+        // A near miss ("Jusson Lambe") → "Did you mean Judson Lamb?" as a
+        // clarification with the real people as choices — the existing
+        // chip/typed-reply continuation finishes the turn.
+        let suggestions = HallieNameSuggestion.suggest(
+            typed, graph: graph,
+            profiles: (context.profiles ?? []).map {
+                (stableID: $0.stableID, name: $0.canonicalName, aliases: $0.aliases)
+            })
+        if !suggestions.isEmpty {
+            let choices = suggestions.map { suggestion -> Candidate in
+                switch suggestion.identity {
+                case .gedcom(let id):
+                    return Candidate(id: .gedcomPersonID(id),
+                                     canonicalName: suggestion.name, label: suggestion.label)
+                case .profile(let stableID):
+                    return Candidate(id: .profileStableID(stableID),
+                                     canonicalName: suggestion.name, label: suggestion.label)
+                }
+            }
+            let prose = choices.count == 1
+                ? "I don't find \u{201C}\(typed)\u{201D} — did you mean \(choices[0].canonicalName)?"
+                : "I don't find \u{201C}\(typed)\u{201D} — did you mean one of these?"
+            return Result(
+                route: .graph,
+                outcome: .needsClarification,
+                prose: prose,
+                basisLine: "Basis: no exact match in the family tree or People tab; the closest recorded names are offered, nothing was assumed.",
+                queryDescription: queryDescription,
+                citations: [],
+                catalogPersonName: nil,
+                clarification: Clarification(
+                    intent: request.intent,
+                    stage: .suggestedIdentity,
+                    candidates: choices,
+                    continuationToken: context.continuationToken))
+        }
+        // The surname roster (LIVE MISS #11) — after the People tab and
+        // the near-miss suggestion, before the bare decline.
+        if let rosterReply { return rosterReply }
+        return FamilyKnowledgeSupplement.notFoundOffer(base, typed: typed, graph: graph)
     }
 
     /// The privacy ceiling the app grants its own Family Archivist. Every

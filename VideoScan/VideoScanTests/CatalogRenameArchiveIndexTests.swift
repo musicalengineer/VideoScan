@@ -1,14 +1,18 @@
 // CatalogRenameArchiveIndexTests.swift
-// Renaming a file in the Catalog is THE way to fix a typo in a name, also
-// for files in the Master Archive (Rick 2026-09-25) — the rename carries
-// through to the archive's index files (ArchiveIndexRename.swift).
+// Renaming a promoted SOURCE in the Catalog carries through to the archive's
+// index files (ArchiveIndexRename.swift): the manifest's source column and
+// the journals' source paths follow. A Master Archive file itself is NOT
+// renamed here (rule 3, Codex #383 — superseding Rick 2026-09-25): only
+// Update… changes an archived file's name, locked or not.
 //
 // Dimensions (CLAUDE.md feature-test checklist):
-//   LOGIC     — happy path (9 lines in 4 files, byte-identical untouched
-//               lines, backups, record, log line); substring lookalikes
+//   LOGIC     — an archive file (promoted copy, a stray under the root, the
+//               wrong volume, a Promote running) is refused with nothing
+//               touched; source-path rename (5 lines in 2 files,
+//               byte-identical untouched lines, ledger); substring lookalikes
 //               untouched; unparseable index refuses; destination exists
-//               refuses; source-path rename; no-reference rename unchanged;
-//               publish failure rolls back; engine token rules.
+//               refuses; no-reference rename unchanged; publish failure rolls
+//               back; engine token rules.
 //   ISOLATION — tmp-dir archive only; the ledger is a per-test folder; an
 //               offline designation and a symlinked 00_Index are refused
 //               or ignored without touching anything outside the fixture.
@@ -35,6 +39,8 @@ struct CatalogRenameArchiveIndexTests {
     static let newName = "1994-xx-xx_Christmas_1994_misc.mkv"
     nonisolated static let sourceName = "Chrsitmas 1994 misc.mkv"
     static let at = Date(timeIntervalSince1970: 1_758_000_000)
+    static let newSourceBase = "Christmas 1994 misc"
+    nonisolated static let newSourceName = "Christmas 1994 misc.mkv"
 
     struct Fixture {
         let tmp: URL
@@ -49,6 +55,7 @@ struct CatalogRenameArchiveIndexTests {
         func indexFile(_ name: String) -> URL { index.appendingPathComponent(name) }
         var backups: URL { index.appendingPathComponent(ArchiveIndexRename.backupFolder) }
         let newMedia: String
+        var newSource: String { (source as NSString).deletingLastPathComponent + "/" + CatalogRenameArchiveIndexTests.newSourceName }
         func cleanup() { try? FileManager.default.removeItem(at: tmp) }
     }
 
@@ -211,98 +218,41 @@ struct CatalogRenameArchiveIndexTests {
 
     static func esc(_ s: String) -> String { s.replacingOccurrences(of: "/", with: "\\/") }
 
-    // MARK: Happy path — archive file
+    // MARK: Archive file — refused (rule 3, Codex #383)
 
-    @Test("archive file: manifest + journals rewritten (7 lines in 3 files), ledger mirror re-copied from App Support, untouched lines byte-identical, backups, record, log")
-    func archiveRenameHappyPath() async throws {
+    /// The archive file is refused before anything is read or written.
+    static func expectArchiveRefusal(_ f: Fixture, _ rec: VideoRecord, sourceLocation: SourceLocation = #_sourceLocation) {
+        let oldPath = rec.fullPath, oldName = rec.filename
+        do {
+            try f.model.renameRecord(rec, toBaseName: newBase)
+            Issue.record("an archive file must be refused", sourceLocation: sourceLocation)
+        } catch VideoScanModel.RenameError.archivedFile {
+        } catch {
+            Issue.record("wrong refusal \(error)", sourceLocation: sourceLocation)
+        }
+        #expect(FileManager.default.fileExists(atPath: oldPath), sourceLocation: sourceLocation)
+        #expect(rec.fullPath == oldPath && rec.filename == oldName, sourceLocation: sourceLocation)
+    }
+
+    @Test("archive file (unlocked promoted copy): refused — media, record, every index file and the ledger untouched, no backups, one log line")
+    func archiveFileIsRefused() async throws {
         let f = try Self.makeFixture("happy")
         defer { f.cleanup() }
         try Self.writeIndex(f)
-        // The App Support ledger (here: the per-test folder) holds the same events.
         try FileManager.default.createDirectory(at: f.model.mediaLedger.directory, withIntermediateDirectories: true)
         try MediaLedgerEvent.encodeLines(Self.ledgerEvents(f, targets: true)).write(to: f.model.mediaLedger.fileURL)
         let ledgerBefore = try Data(contentsOf: f.model.mediaLedger.fileURL)
         let before = Self.snapshot(f)
 
         let sink = InMemoryLogSink()
-        let newPath = try withAppLog(sink) { try f.model.renameRecord(f.archiveRecord, toBaseName: Self.newBase) }
+        withAppLog(sink) { Self.expectArchiveRefusal(f, f.archiveRecord) }
 
-        // Media + record.
-        #expect(newPath == f.newMedia)
-        #expect(FileManager.default.fileExists(atPath: f.newMedia))
-        #expect(!FileManager.default.fileExists(atPath: f.media))
-        #expect(f.archiveRecord.fullPath == f.newMedia)
-        #expect(f.archiveRecord.filename == Self.newName)
-
-        // Manifest: data row 1 (line index 1) only; the relPath cell only.
-        let q = { (s: String) in "\"\(s)\"" }
-        try Self.expectFile(f.indexFile(MasterArchiveLayout.manifestFilename),
-                            before: before[MasterArchiveLayout.manifestFilename]!.0, changed: [1]) {
-            $0.replacingOccurrences(of: q(Self.rel), with: q(Self.newRel))
-        }
-        // Promote journal: 4 target lines; `\/` style kept, key order kept.
-        try Self.expectFile(f.indexFile(ArchivePromoteJournal.filename),
-                            before: before[ArchivePromoteJournal.filename]!.0, changed: [0, 1, 2, 3]) {
-            $0.replacingOccurrences(of: q(Self.esc(Self.rel)), with: q(Self.esc(Self.newRel)))
-        }
-        // Attestation journal: 2 lines — fullPath AND the same-object filename.
-        try Self.expectFile(f.indexFile(ArchiveAttestationJournal.filename),
-                            before: before[ArchiveAttestationJournal.filename]!.0, changed: [0, 1]) {
-            $0.replacingOccurrences(of: q(f.media), with: q(f.newMedia))
-              .replacingOccurrences(of: q(Self.oldName), with: q(Self.newName))
-        }
-        // Ledger mirror: archived (detail.relPath) + attestation (fullPath + filename).
-        let ledgerEdit: (String) -> String = {
-            $0.replacingOccurrences(of: q(Self.rel), with: q(Self.newRel))
-              .replacingOccurrences(of: q(f.media), with: q(f.newMedia))
-              .replacingOccurrences(of: "\"filename\":\(q(Self.oldName)),\"fullPath\":\(q(f.newMedia))",
-                                    with: "\"filename\":\(q(Self.newName)),\"fullPath\":\(q(f.newMedia))")
-        }
-
-        // Decisions: never matched — byte-identical AND not rewritten.
-        let decisions = ArchivePromoteDecisions.filename
-        #expect(try Data(contentsOf: f.indexFile(decisions)) == before[decisions]!.0)
-        #expect((try FileManager.default.attributesOfItem(atPath: f.indexFile(decisions).path))[.modificationDate] as? Date
-                == before[decisions]!.1)
-
-        // Backups: one folder, the 3 affected files, original bytes.
-        let stamps = try FileManager.default.contentsOfDirectory(atPath: f.backups.path)
-        #expect(stamps.count == 1)
-        let backupDir = f.backups.appendingPathComponent(stamps[0])
-        // Plus our provenance marker (codex review of GH #204): complete,
-        // listing exactly those files.
-        let backedUp = Set(try FileManager.default.contentsOfDirectory(atPath: backupDir.path))
-            .subtracting([ArchiveIndexRename.backupMarkerName])
-        #expect(backedUp == [MasterArchiveLayout.manifestFilename, ArchivePromoteJournal.filename,
-                             ArchiveAttestationJournal.filename])
-        let marker = try #require(ArchiveIndexRename.readMarker(in: backupDir))
-        #expect(marker.complete)
-        #expect(Set(marker.files.map(\.name)) == backedUp)
-        for name in backedUp {
-            #expect(try Data(contentsOf: backupDir.appendingPathComponent(name)) == before[name]!.0)
-        }
-
-        // Readers agree.
-        #expect(ArchiveManifestCSV.rowsBySource(rootPath: f.root).values.contains { $0.relPath == Self.newRel })
-        #expect(ArchivePromoteJournal.latestBySource(rootPath: f.root)[f.sourceRecord.id]?.destRelPath == Self.newRel)
-        #expect(ArchiveAttestationJournal.entries(rootPath: f.root).filter { $0.fullPath == f.newMedia }.count == 2)
-
-        // Rick's line, preceded (m5, crash window) by the line written
-        // BEFORE the media moved, naming old → new and the backup folder.
-        let done = "Catalog: renamed \(Self.oldName) → \(Self.newName) (archive index: 7 lines in 3 files updated)"
-        let doneAt = sink.lines.firstIndex(of: done)
-        let intentAt = sink.lines.firstIndex { $0.hasPrefix("Catalog: renaming \(Self.oldName) → \(Self.newName)")
-                                                && $0.contains(backupDir.path) }
-        #expect(doneAt != nil)
-        #expect(intentAt != nil)
-        if let doneAt, let intentAt { #expect(intentAt < doneAt) }
-
-        // The App Support ledger follows off-main, then the archive's
-        // mirror is re-copied from it (it is only a copy).
+        #expect(!FileManager.default.fileExists(atPath: f.newMedia))
+        Self.expectUntouched(before, f)
+        #expect(!FileManager.default.fileExists(atPath: f.backups.path))
+        #expect(sink.lines == ["Catalog: rename of \(Self.oldName) refused — it is a Master Archive file; use Update…"])
         await f.model.mediaLedger.waitForPendingWrites()
-        try Self.expectFile(f.model.mediaLedger.fileURL, before: ledgerBefore, changed: [0, 1], edit: ledgerEdit)
-        #expect(try Data(contentsOf: f.indexFile(MediaLedger.mirrorFilename))
-                == (try Data(contentsOf: f.model.mediaLedger.fileURL)))
+        #expect(try Data(contentsOf: f.model.mediaLedger.fileURL) == ledgerBefore)
     }
 
     // MARK: Lookalikes
@@ -316,12 +266,12 @@ struct CatalogRenameArchiveIndexTests {
         #expect(before.count == 5)
 
         let sink = InMemoryLogSink()
-        try withAppLog(sink) { _ = try f.model.renameRecord(f.archiveRecord, toBaseName: Self.newBase) }
+        try withAppLog(sink) { _ = try f.model.renameRecord(f.sourceRecord, toBaseName: Self.newSourceBase) }
 
-        #expect(FileManager.default.fileExists(atPath: f.newMedia))
+        #expect(FileManager.default.fileExists(atPath: f.newSource))
         Self.expectUntouched(before, f)
         #expect(!FileManager.default.fileExists(atPath: f.backups.path))
-        #expect(sink.lines.contains("Catalog: renamed \(Self.oldName) → \(Self.newName)"))
+        #expect(sink.lines.contains("Catalog: renamed \(Self.sourceName) → \(Self.newSourceName)"))
     }
 
     // MARK: Refusals — nothing touched
@@ -338,7 +288,7 @@ struct CatalogRenameArchiveIndexTests {
         let before = Self.snapshot(f)
 
         do {
-            try f.model.renameRecord(f.archiveRecord, toBaseName: Self.newBase)
+            try f.model.renameRecord(f.sourceRecord, toBaseName: Self.newSourceBase)
             Issue.record("rename should have been refused")
         } catch VideoScanModel.RenameError.archiveIndex(let failure) {
             guard case .unparseable(let file, let line, _) = failure else {
@@ -347,10 +297,10 @@ struct CatalogRenameArchiveIndexTests {
             #expect(file == ArchiveAttestationJournal.filename)
             #expect(line == 4)
         }
-        #expect(FileManager.default.fileExists(atPath: f.media))
-        #expect(!FileManager.default.fileExists(atPath: f.newMedia))
-        #expect(f.archiveRecord.fullPath == f.media)
-        #expect(f.archiveRecord.filename == Self.oldName)
+        #expect(FileManager.default.fileExists(atPath: f.source))
+        #expect(!FileManager.default.fileExists(atPath: f.newSource))
+        #expect(f.sourceRecord.fullPath == f.source)
+        #expect(f.sourceRecord.filename == Self.sourceName)
         Self.expectUntouched(before, f)
         #expect(!FileManager.default.fileExists(atPath: f.backups.path))
     }
@@ -360,18 +310,18 @@ struct CatalogRenameArchiveIndexTests {
         let f = try Self.makeFixture("dest")
         defer { f.cleanup() }
         try Self.writeIndex(f)
-        try Data("squatter".utf8).write(to: URL(fileURLWithPath: f.newMedia))
+        try Data("squatter".utf8).write(to: URL(fileURLWithPath: f.newSource))
         let before = Self.snapshot(f)
 
         do {
-            try f.model.renameRecord(f.archiveRecord, toBaseName: Self.newBase)
+            try f.model.renameRecord(f.sourceRecord, toBaseName: Self.newSourceBase)
             Issue.record("rename should have been refused")
         } catch VideoScanModel.RenameError.destinationExists(let p) {
-            #expect(p == f.newMedia)
+            #expect(p == f.newSource)
         }
-        #expect(try Data(contentsOf: URL(fileURLWithPath: f.newMedia)) == Data("squatter".utf8))
-        #expect(try Data(contentsOf: URL(fileURLWithPath: f.media)) == Data("archive copy".utf8))
-        #expect(f.archiveRecord.fullPath == f.media)
+        #expect(try Data(contentsOf: URL(fileURLWithPath: f.newSource)) == Data("squatter".utf8))
+        #expect(try Data(contentsOf: URL(fileURLWithPath: f.source)) == Data("source".utf8))
+        #expect(f.sourceRecord.fullPath == f.source)
         Self.expectUntouched(before, f)
         #expect(!FileManager.default.fileExists(atPath: f.backups.path))
     }
@@ -456,7 +406,7 @@ struct CatalogRenameArchiveIndexTests {
         var calls = 0
 
         do {
-            try f.model.renameRecord(f.archiveRecord, toBaseName: Self.newBase, indexPublisher: { data, url in
+            try f.model.renameRecord(f.sourceRecord, toBaseName: Self.newSourceBase, indexPublisher: { data, url in
                 calls += 1
                 if calls == 2 { throw CocoaError(.fileWriteNoPermission) }
                 try ArchiveIndexRename.livePublish(data, to: url)
@@ -469,9 +419,9 @@ struct CatalogRenameArchiveIndexTests {
             #expect(file == ArchivePromoteJournal.filename)
         }
         #expect(calls == 3, "2 forward publishes + 1 restore of the manifest")
-        #expect(FileManager.default.fileExists(atPath: f.media))
-        #expect(!FileManager.default.fileExists(atPath: f.newMedia))
-        #expect(f.archiveRecord.fullPath == f.media)
+        #expect(FileManager.default.fileExists(atPath: f.source))
+        #expect(!FileManager.default.fileExists(atPath: f.newSource))
+        #expect(f.sourceRecord.fullPath == f.source)
         let after = Self.snapshot(f)
         for (name, (data, _)) in before { #expect(after[name]?.0 == data, "\(name) not restored") }
         // Rolled back = refused: its own backup folder is removed.
@@ -513,12 +463,12 @@ struct CatalogRenameArchiveIndexTests {
         let beforeBytes = try Data(contentsOf: manifest)
 
         do {
-            try f.model.renameRecord(f.archiveRecord, toBaseName: Self.newBase)
+            try f.model.renameRecord(f.sourceRecord, toBaseName: Self.newSourceBase)
             Issue.record("rename should have been refused")
         } catch VideoScanModel.RenameError.archiveIndex(let failure) {
             guard case .unreadable = failure else { Issue.record("wrong failure \(failure)"); return }
         }
-        #expect(FileManager.default.fileExists(atPath: f.media))
+        #expect(FileManager.default.fileExists(atPath: f.source))
         #expect(try Data(contentsOf: manifest) == beforeBytes)
         #expect(!FileManager.default.fileExists(atPath: elsewhere.appendingPathComponent(ArchiveIndexRename.backupFolder).path))
     }
@@ -535,7 +485,7 @@ struct CatalogRenameArchiveIndexTests {
         var refused = false
         var appendRefused = false
         do {
-            try f.model.renameRecord(f.archiveRecord, toBaseName: Self.newBase, indexPublisher: { data, url in
+            try f.model.renameRecord(f.sourceRecord, toBaseName: Self.newSourceBase, indexPublisher: { data, url in
                 calls += 1
                 if calls == 1 {
                     // Promote appends to the journal while the rename is
@@ -560,10 +510,10 @@ struct CatalogRenameArchiveIndexTests {
         #expect(appendRefused || ArchivePromoteJournal.latestBySource(rootPath: f.root)[straggler] != nil,
                 "the concurrent journal append was dropped by a whole-file publish")
         if refused {
-            #expect(FileManager.default.fileExists(atPath: f.media))
-            #expect(!FileManager.default.fileExists(atPath: f.newMedia))
-            #expect(f.archiveRecord.fullPath == f.media)
-            #expect(ArchiveManifestCSV.rowsBySource(rootPath: f.root).values.contains { $0.relPath == Self.rel },
+            #expect(FileManager.default.fileExists(atPath: f.source))
+            #expect(!FileManager.default.fileExists(atPath: f.newSource))
+            #expect(f.sourceRecord.fullPath == f.source)
+            #expect(ArchiveManifestCSV.fieldRowsBySource(rootPath: f.root).values.contains { $0[4] == f.source },
                     "the already-published manifest was restored")
             #expect(((try? FileManager.default.contentsOfDirectory(atPath: f.backups.path)) ?? []).isEmpty)
         }
@@ -585,25 +535,7 @@ struct CatalogRenameArchiveIndexTests {
         #expect(ArchivePromoteJournal.latestBySource(rootPath: f.root)[f.sourceRecord.id]?.sourcePath == newSource)
     }
 
-    @Test("m1: .promote_decisions keeps the SOURCE's filename when only `detail` (the archive path) matched")
-    func decisionsSourceFilenameUntouched() throws {
-        let f = try Self.makeFixture("decisions")
-        defer { f.cleanup() }
-        try Self.writeIndex(f)
-        let buffer = "/Volumes/Buffer/\(Self.oldName)"
-        _ = ArchivePromoteDecisions.record([.init(at: Self.at, recordID: UUID(), filename: Self.oldName,
-                                                  sourcePath: buffer, decision: "skipped",
-                                                  reason: "already in the Master Archive", detail: f.media)],
-                                           rootPath: f.root)
-
-        _ = try f.model.renameRecord(f.archiveRecord, toBaseName: Self.newBase)
-
-        let entry = ArchivePromoteDecisions.all(rootPath: f.root).first { $0.sourcePath == buffer }
-        #expect(entry?.detail == f.newMedia, "the archive path in detail follows the rename")
-        #expect(entry?.filename == Self.oldName, "the source's filename is not the archive file's")
-    }
-
-    @Test("m3: archive volume identity mismatch — an archive rename is refused, a source rename skips the index with a log line")
+    @Test("m3: archive volume identity mismatch — an archive file is refused (as everywhere), a source rename skips the index with a log line")
     func identityMismatchRefusesOrSkips() throws {
         let f = try Self.makeFixture("identity", volumeUUID: "00000000-0000-0000-0000-00000000BAD0")
         defer { f.cleanup() }
@@ -611,14 +543,7 @@ struct CatalogRenameArchiveIndexTests {
         #expect(f.model.masterArchiveIdentityRefusal() != nil)
         let before = Self.snapshot(f)
 
-        do {
-            try f.model.renameRecord(f.archiveRecord, toBaseName: Self.newBase)
-            Issue.record("archive rename on the wrong volume should be refused")
-        } catch {
-            #expect(error.localizedDescription.contains("NOT the Master Archive volume"))
-        }
-        #expect(FileManager.default.fileExists(atPath: f.media))
-        #expect(f.archiveRecord.fullPath == f.media)
+        Self.expectArchiveRefusal(f, f.archiveRecord)
 
         let sink = InMemoryLogSink()
         try withAppLog(sink) { _ = try f.model.renameRecord(f.sourceRecord, toBaseName: "Christmas 1994 misc") }
@@ -650,7 +575,7 @@ struct CatalogRenameArchiveIndexTests {
         Self.expectUntouched(before, f)
     }
 
-    @Test("nit: a file at the archive ROOT (relPath without '/') — the bare name is never used as a replacement key")
+    @Test("a stray file at the archive ROOT (never promoted) is an archive file too: refused, decisions untouched")
     func archiveRootFileBareNameNotAKey() throws {
         let f = try Self.makeFixture("rootfile")
         defer { f.cleanup() }
@@ -665,29 +590,28 @@ struct CatalogRenameArchiveIndexTests {
                                            rootPath: f.root)
         let decisionsBefore = try Data(contentsOf: f.indexFile(ArchivePromoteDecisions.filename))
 
-        _ = try f.model.renameRecord(stray, toBaseName: "clip2")
+        Self.expectArchiveRefusal(f, stray)
 
-        #expect(stray.filename == "clip2.mov")
+        #expect(stray.filename == "clip.mov")
         #expect(try Data(contentsOf: f.indexFile(ArchivePromoteDecisions.filename)) == decisionsBefore)
     }
 
-    @Test("M1: while a Promote appends to the index, a rename that would rewrite it is refused in the MODEL — archive file and promoted source alike")
+    @Test("M1: while a Promote appends to the index, a source rename that would rewrite it is refused in the MODEL; the archive file is refused as always")
     func busyArchiveRefusesInModel() throws {
         let f = try Self.makeFixture("busy")
         defer { f.cleanup() }
         try Self.writeIndex(f)
         f.model.archiveIndexWriterActive = { true }
         let before = Self.snapshot(f)
-        for rec in [f.archiveRecord, f.sourceRecord] {
-            let oldPath = rec.fullPath
-            do {
-                try f.model.renameRecord(rec, toBaseName: "renamed while busy")
-                Issue.record("\(rec.filename) should be refused while a Promote runs")
-            } catch VideoScanModel.RenameError.archiveBusy {
-            }
-            #expect(rec.fullPath == oldPath)
-            #expect(FileManager.default.fileExists(atPath: oldPath))
+        Self.expectArchiveRefusal(f, f.archiveRecord)
+        let oldPath = f.sourceRecord.fullPath
+        do {
+            try f.model.renameRecord(f.sourceRecord, toBaseName: "renamed while busy")
+            Issue.record("the source should be refused while a Promote runs")
+        } catch VideoScanModel.RenameError.archiveBusy {
         }
+        #expect(f.sourceRecord.fullPath == oldPath)
+        #expect(FileManager.default.fileExists(atPath: oldPath))
         Self.expectUntouched(before, f)
         #expect(!FileManager.default.fileExists(atPath: f.backups.path))
 
@@ -717,7 +641,7 @@ struct CatalogRenameArchiveIndexTests {
                 withIntermediateDirectories: true)
         }
 
-        _ = try f.model.renameRecord(f.archiveRecord, toBaseName: Self.newBase)
+        _ = try f.model.renameRecord(f.sourceRecord, toBaseName: Self.newSourceBase)
 
         let kept = try FileManager.default.contentsOfDirectory(atPath: f.backups.path).sorted()
         #expect(kept.count == 23, "22 legacy folders left in place + this rename's own")
@@ -772,11 +696,12 @@ struct CatalogRenameArchiveIndexTests {
 
     // MARK: Scale sensor
 
-    @Test("scale: 50k-line manifest + 50k-line promote journal rewrite within budget; the 50k-line App Support ledger follows and is re-mirrored")
+    @Test("scale: a source rename through a 50k-line manifest + 50k-line promote journal within budget; the 50k-line App Support ledger follows and is re-mirrored")
     func scaleFiftyThousandLines() async throws {
         let f = try Self.makeFixture("scale")
         defer { f.cleanup() }
         let n = 50_000
+        func original(_ i: Int) -> String { i == n / 2 ? f.source : "/Volumes/Src/clip_\(i).mkv" }
         var manifest = MasterArchiveLayout.manifestHeader + "\n"
         manifest.reserveCapacity(n * 260)
         var ledger: [MediaLedgerEvent] = []
@@ -784,12 +709,12 @@ struct CatalogRenameArchiveIndexTests {
         for i in 0..<n {
             let relPath = i == n / 2 ? Self.rel : "30_Video/1990-1999/1994/clip_\(i).mkv"
             manifest += ArchiveManifestCSV.line(for: .init(promotedAt: Self.at, archiveRelPath: relPath, sha256: "ab\(i)",
-                                                           sizeBytes: Int64(i), originalPath: "/Volumes/Src/clip_\(i).mkv",
+                                                           sizeBytes: Int64(i), originalPath: original(i),
                                                            originalVolume: "Src", recordID: UUID(), sourceRecordID: UUID(),
                                                            recordDate: "1994", dateConfidence: "estimated",
                                                            people: [], starRating: 0))
             ledger.append(MediaLedgerEvent(at: Self.at, event: .archived, recordID: UUID(), contentKey: "h:\(i)",
-                                           filename: "clip_\(i).mkv", fullPath: "/Volumes/Src/clip_\(i).mkv", by: .promote,
+                                           filename: (original(i) as NSString).lastPathComponent, fullPath: original(i), by: .promote,
                                            detail: [MediaLedgerEvent.Detail.relPath: relPath]))
         }
         try Data(manifest.utf8).write(to: f.indexFile(MasterArchiveLayout.manifestFilename))
@@ -803,7 +728,7 @@ struct CatalogRenameArchiveIndexTests {
         for i in 0..<n {
             let relPath = i == n / 2 ? Self.rel : "30_Video/1990-1999/1994/clip_\(i).mkv"
             journal.append(try enc.encode(ArchivePromoteJournal.Entry(
-                sourceRecordID: UUID(), sourcePath: "/Volumes/Src/clip_\(i).mkv", destRelPath: relPath,
+                sourceRecordID: i == n / 2 ? f.sourceRecord.id : UUID(), sourcePath: original(i), destRelPath: relPath,
                 state: .done, sha256: "ab\(i)", copyRecordID: UUID(), at: Self.at)))
             journal.append(0x0A)
         }
@@ -812,19 +737,19 @@ struct CatalogRenameArchiveIndexTests {
         let clock = ContinuousClock()
         var result = ""
         let elapsed = try clock.measure {
-            result = try f.model.renameRecord(f.archiveRecord, toBaseName: Self.newBase)
+            result = try f.model.renameRecord(f.sourceRecord, toBaseName: Self.newSourceBase)
         }
-        #expect(result == f.newMedia)
-        let rows = ArchiveManifestCSV.rowsBySource(rootPath: f.root)
-        #expect(rows.values.filter { $0.relPath == Self.newRel }.count == 1)
-        #expect(rows.values.filter { $0.relPath == Self.rel }.isEmpty)
-        #expect(ArchivePromoteJournal.latestBySource(rootPath: f.root).values.filter { $0.destRelPath == Self.newRel }.count == 1)
+        #expect(result == f.newSource)
+        let originals = ArchiveManifestCSV.fieldRowsBySource(rootPath: f.root).values.map { $0[4] }
+        #expect(originals.filter { $0 == f.newSource }.count == 1)
+        #expect(!originals.contains(f.source))
+        #expect(ArchivePromoteJournal.latestBySource(rootPath: f.root)[f.sourceRecord.id]?.sourcePath == f.newSource)
         await f.model.mediaLedger.waitForPendingWrites()
         let mirror = try Data(contentsOf: f.indexFile(MediaLedger.mirrorFilename))
         #expect(mirror == (try Data(contentsOf: f.model.mediaLedger.fileURL)))
         let mirrorText = String(decoding: mirror, as: UTF8.self)
-        #expect(mirrorText.components(separatedBy: "\"\(Self.newRel)\"").count == 2, "one ledger line follows")
-        #expect(!mirrorText.contains("\"\(Self.rel)\""))
+        #expect(mirrorText.components(separatedBy: "\"\(f.newSource)\"").count == 2, "one ledger line follows")
+        #expect(!mirrorText.contains("\"\(f.source)\""))
         let budget = PerformanceLane.debugCeiling(.seconds(2))
         print("[CatalogRenameArchiveIndexTests] 2x50k index rename: \(elapsed) (\(PerformanceLane.configurationName))")
         #expect(elapsed < budget, "2×50k index rename took \(elapsed) (budget \(budget))")

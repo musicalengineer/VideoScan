@@ -153,6 +153,9 @@ final class CatalogCommitter {
     private let sink: (String) -> Void
     /// After curated fields were copied onto other copies of a content.
     var onCopiesUpdated: () -> Void = {}
+    /// The date seam (`isDateReadOnly`): a date is never copied onto an
+    /// archived copy from one that is not (Codex #383, rule 3).
+    var dateFixed: (VideoRecord) -> Bool = { _ in false }
     /// The blocked state changed (the Reopen item follows it).
     var onBlockedChanged: (String?) -> Void = { _ in }
     /// New rows with no whole-file hash are held: queue Fill In Full Hashes.
@@ -235,12 +238,33 @@ final class CatalogCommitter {
         blockedReason = reason
     }
 
-    /// Records whose state is not in catalog.sqlite (tests; the status
-    /// line). Held rows count: they are not rows yet.
+    /// Records whose state is durable nowhere in catalog.sqlite (tests; the
+    /// quit's question). A held row counts only when it changed since its
+    /// `pending_rows` payload was stored.
     func changedRecordCount() -> Int {
+        unsavedRecords().count
+    }
+
+    /// The records whose current state is durable NOWHERE in catalog.sqlite
+    /// — changed since the baseline, or refused — and nothing else: what the
+    /// quit's rescue copy holds (GH #356), based on `knownGeneration`. A
+    /// held row whose `pending_rows` payload has exactly its current
+    /// fingerprint is durable there and is left out (Codex #381 P2: one
+    /// failed edit used to rescue the whole pending set) — the same rule as
+    /// `CatalogCommitBaseline.notDurable`.
+    /// O(records) fingerprinting; called at quit and by tests, never per frame.
+    func unsavedRecords() -> [VideoRecord] {
         let records = input().records
         let prints = CatalogChangeDetector.fingerprints(of: records.map(VideoRecordDTO.init))
-        return CatalogChangeDetector.changed(records.map(\.id), fingerprints: prints, baseline: baseline.prints).count
+        return CatalogChangeDetector.changed(records.map(\.id), fingerprints: prints, baseline: baseline.prints)
+            .filter { !baseline.isDurablyHeld(records[$0].id, at: prints[$0]) }
+            .map { records[$0] }
+    }
+
+    /// The commit can't run only because a job holds catalog writes (MOPS-16)
+    /// — the one refusal that may clear by itself (the quit waits it out).
+    var isHeldByJob: Bool {
+        !reopening && blockedReason == nil && input().readOnlyReason == nil && input().holdReason != nil
     }
 
     // MARK: - Removal markers (through CatalogMarkerRelay)
@@ -839,7 +863,11 @@ final class CatalogCommitter {
         // only together with the replacement (or once the store holds it).
         let records = input().records
         if !report.revisions.isEmpty { adoptRevisions(report.revisions, records: records) }
-        if !report.shared.isEmpty, baseline.propagate(report.shared, records: records) { onCopiesUpdated() }
+        if !report.shared.isEmpty {
+            let shared = baseline.propagate(report.shared, records: records, dateFixed: dateFixed)
+            for line in shared.declined { sink(line) }
+            if shared.touched { onCopiesUpdated() }
+        }
         if heldIDs != heldBefore { onHeldChanged(heldIDs) }
         if !report.needDigest.isEmpty { onNeedDigest(report.needDigest) }
         if report.purged > 0 { sink("Catalog store: REMOVED \(report.purged) row(s) the catalog no longer holds (tombstoned, never deleted)") }

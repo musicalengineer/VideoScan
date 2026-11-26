@@ -108,10 +108,33 @@ struct OllamaFailoverTranslator: NLQueryTranslating {
         }
     }
 
+    /// This Mac's own names (loopback included), read once per brain. The
+    /// data-class gate below asks it; tests inject their own so the answer
+    /// never depends on which Mac runs the suite.
+    var thisMacNames: Set<String> = OllamaLocalServerBootstrap.currentLocalHostNames()
+
     /// Plain-text phrasing for the grounded composer, walking the same host
     /// order with the same probe / retry policy as translation.
-    func composePlainText(system: String, user: String) async throws -> String {
-        try await walkHosts { attempt in
+    ///
+    /// THE DATA-CLASS GATE (GH #450). A host row may be a full URL to a
+    /// cloud Ollama, and this brain is Provider = Local, so the gate cannot
+    /// live in the provider choice: a `.familyMedia` prompt (text derived
+    /// from family audio or pixels — transcripts, captions, OCR) walks ONLY
+    /// the hosts that are this Mac (`OllamaEndpoints.isOnThisMac`). With
+    /// none, it throws `familyMediaRefused` before anything is dialled —
+    /// not even a liveness probe. `.familyText` and `.public` walk the
+    /// whole list, as they may go to the Cloud brain (RemoteSerializer).
+    func composePlainText(system: String, user: String,
+                          dataClass: HallieDataClass) async throws -> String {
+        var walk = self
+        if dataClass == .familyMedia {
+            let order = hosts.isEmpty ? [template.host] : hosts
+            walk.hosts = order.filter { OllamaEndpoints.isOnThisMac($0, thisMacNames: thisMacNames) }
+            guard !walk.hosts.isEmpty else {
+                throw HallieBrainError.familyMediaRefused("text, to an Ollama host off this Mac")
+            }
+        }
+        return try await walk.walkHosts { attempt in
             try await attempt.composePlainText(system: system, user: user)
         }
     }

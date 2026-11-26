@@ -124,7 +124,12 @@ struct CatalogCommitBaseline {
     /// this fingerprint), how many are NOT durable: every one except a
     /// held row whose stored payload has exactly this fingerprint.
     func notDurable(_ waitingRows: [(id: UUID, print: Fingerprint)]) -> Int {
-        waitingRows.filter { held[$0.id] != $0.print }.count
+        waitingRows.filter { !isDurablyHeld($0.id, at: $0.print) }.count
+    }
+
+    /// `pending_rows` holds `id`'s payload at exactly this fingerprint.
+    func isDurablyHeld(_ id: UUID, at print: Fingerprint) -> Bool {
+        held[id] == print
     }
 
     // MARK: - After a commit
@@ -254,19 +259,57 @@ struct CatalogCommitBaseline {
     /// baseline (the person did not change it since the store last agreed).
     /// The copy's per-field baseline takes that value (the store shows it);
     /// its fingerprint moves only when it was clean before. Returns whether
-    /// any record changed.
-    mutating func propagate(_ shares: [Share], records: [VideoRecord]) -> Bool {
+    /// any record changed, and one line per date it declined to copy.
+    ///
+    /// Codex #383 (rule 3, defence in depth): Rick's date is never copied
+    /// onto a copy `dateFixed` calls archived from a copy that is NOT — the
+    /// archived copy keeps the date it was filed under (folder, filename,
+    /// manifest row) and keeps its own baseline, so it never writes that old
+    /// date back either. The Inspector already refuses such an edit; this
+    /// catches any writer that judged only its own target. The store keeps
+    /// one date per content, so the line says honestly what a relaunch will
+    /// show. A date written BY an archived copy (Update…, Promote) still
+    /// reaches every copy.
+    mutating func propagate(_ shares: [Share], records: [VideoRecord],
+                            dateFixed: (VideoRecord) -> Bool = { _ in false }) -> (touched: Bool, declined: [String]) {
         var finals: [String: [CatalogSharedCurated.Group: Final]] = [:]
         for entry in shares {
             for group in entry.groups { finals[entry.digest, default: [:]][group] = Final(source: entry.source, value: entry.committed) }
         }
-        guard !finals.isEmpty else { return false }
+        guard !finals.isEmpty else { return (false, []) }
+        // The writers of a date, by id — only when a date was shared (rare
+        // per commit; O(records) once, never per copy).
+        let dateWriters: [UUID: VideoRecord]
+        if finals.values.contains(where: { $0[.date] != nil }) {
+            let ids = Set(finals.values.compactMap { $0[.date]?.source })
+            dateWriters = Dictionary(records.lazy.filter { ids.contains($0.id) }.map { ($0.id, $0) },
+                                     uniquingKeysWith: { first, _ in first })
+        } else {
+            dateWriters = [:]
+        }
         var touched = false
+        var declined: [String] = []
         for record in records {
             guard let digest = CatalogCommit.digest(of: record), let groups = finals[digest] else { continue }
-            if share(groups, onto: record) { touched = true }
+            var mine = groups
+            if let date = groups[.date], date.source != record.id, dateFixed(record),
+               !(dateWriters[date.source].map(dateFixed) ?? false) {
+                mine[.date] = nil
+                if record.userDate != date.value.userDate || record.userDateConfidence != date.value.userDateConfidence {
+                    declined.append(Self.declinedDateLine(record, value: date.value.userDate))
+                }
+            }
+            if share(mine, onto: record) { touched = true }
         }
-        return touched
+        return (touched, declined)
+    }
+
+    /// One audit line for a date not copied onto an archived copy.
+    static func declinedDateLine(_ copy: VideoRecord, value: String?) -> String {
+        let new = value ?? "no date"
+        return "Catalog store: \(copy.filename) is archived — date left as filed (\(copy.userDate ?? "none")); "
+            + "\(new) from another copy of the same content not written to it. The catalog keeps one date per content, "
+            + "so a relaunch shows \(new) on it. Use Update… on \(copy.filename) to change an archived file's date."
     }
 
     private mutating func share(_ groups: [CatalogSharedCurated.Group: Final], onto copy: VideoRecord) -> Bool {

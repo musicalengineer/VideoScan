@@ -326,6 +326,53 @@ struct FootageFoldersLogicTests {
         }
         #expect(FootageFolderSort.sort(from: []) == .byName)
     }
+
+    // GH #351 (Rick 10/20, option 1): Confirm keeps an unhashed file, keyed
+    // `id:<record>`. Fill In Full Hashes then gives the row a digest, so its
+    // contentKey moves on — the join must still find it by its own id, and
+    // Validate's `memberResolves` must say exactly what the join shows.
+    @Test func aFullHashFillKeepsAnUnhashedLooseFileInItsConfirmedFolder() {
+        let id = UUID()
+        let unhashed = row("cape.mov", id: id)
+        #expect(unhashed.contentKey == "id:" + id.uuidString, "no content key yet: the Events id: key")
+        let e = event("Cape Cod", [unhashed])
+        let hashed = row("cape.mov", digest: "c0ffee", id: id)
+        #expect(hashed.contentKey == "c0ffee")
+        let d = FootageFolders.build(rows: [hashed], events: [e])
+        #expect(d.folderIDs == [e.id], "the folder still exists")
+        #expect(d.ids == [e.id, id], "the file is still in it")
+        #expect(d.summaries[e.id]?.files == 1)
+        // TRUTH: Validate's answer and the join's agree.
+        var idx = CatalogConstraints.Index()
+        idx.ids = [id]
+        idx.liveIDs = [id]
+        #expect(CatalogConstraints.memberResolves(e.contentKeys[0], in: idx, live: true))
+    }
+
+    @Test func anIdMemberWithNoContentKeyStaysInItsFolderAndMatchesOnlyItsOwnRow() {
+        let id = UUID()
+        let unhashed = row("tape.dv", id: id)
+        let stranger = row("other.dv")
+        // A lower-case spelling of the id still names the same record.
+        let e = FootageFolders.Event(title: "Tape", contentKeys: ["id:" + id.uuidString.lowercased()])
+        let d = FootageFolders.build(rows: [unhashed, stranger], events: [e])
+        #expect(d.folderIDs == [e.id])
+        #expect(d.relation(of: id) == .recording, "the unhashed member is in the folder")
+        #expect(d.relation(of: stranger.id) == nil, "a different row stays loose")
+        let idx = FootageFolders.index(rows: [unhashed, stranger], events: [e])
+        #expect(idx.folders(of: id) == [e.id])
+        #expect(idx.folders(of: stranger.id).isEmpty)
+    }
+
+    @Test func aRowInTwoFoldersByIdAndByDigestShowsUnderBoth() {
+        let id = UUID()
+        let unhashed = row("party.mov", id: id)
+        let byID = event("Party", [unhashed])
+        let hashed = row("party.mov", digest: "beef", id: id)
+        let byDigest = event("Summer", [hashed])
+        let idx = FootageFolders.index(rows: [hashed], events: [byID, byDigest])
+        #expect(Set(idx.folders(of: id)) == [byID.id, byDigest.id], "one content in several folders, keyed either way")
+    }
 }
 
 // MARK: - Scale

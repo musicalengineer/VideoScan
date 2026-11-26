@@ -4,7 +4,8 @@
 
 Why (DECISIONS 2026-11-22, Rick: "Tests always use a synthetic or a copy, they can never open the real
 catalog"): the test lanes set HOME = CFFIXED_USER_HOME = <run>/home (scripts/xctest_shards.py,
-scripts/core_lane.py), so FileManager's Application Support, Logs and Preferences resolve inside the run.
+scripts/core_lane.py), so FileManager's Application Support and Logs resolve inside the run — but
+NOT UserDefaults: cfprefsd writes the real user's ~/Library/Preferences whatever HOME / CFFIXED_USER_HOME say (measured 2026-11-25 — a hosted test's .standard is Rick's real Rick-Breen.VideoScan plist); tests keep off it themselves (VideoScanTests TestPreferences, TestDefaultsWriteSensorTests).
 An EMPTY home made 35 real-data tests skip (production-shape migrations on a .backup of the live catalog,
 the real GEDCOM, search on real data, installed models — measured on the Ultra 2026-11-22: 107 skipped
 sealed vs 72 unsealed, 0 failed). So the sealed home holds today's data, copied:

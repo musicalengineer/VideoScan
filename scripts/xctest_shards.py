@@ -842,8 +842,9 @@ class SealRefused(Exception):
 def seal_xctestrun(xctestrun: Path, run_dir: Path) -> Tuple[Path, Path]:
     """(the sealed copy of the .xctestrun, the home it points at). Every test target's host gets
     HOME = CFFIXED_USER_HOME = <per-user temp>/videoscan-shards-home-<pid>-* — a fresh scratch home, so ~/Library/Application Support,
-    ~/Library/Logs and ~/Library/Preferences resolve inside the run, never to Rick's real catalog, logs
-    or defaults (DECISIONS 2026-11-22: tests never open the real catalog; the corpus runner's and the
+    ~/Library/Logs resolve inside the run, never to Rick's real catalog or logs — but NOT his defaults:
+    cfprefsd ignores HOME / CFFIXED_USER_HOME (2026-11-25), so tests keep off .standard themselves
+    (VideoScanTests TestPreferences) (DECISIONS 2026-11-22: tests never open the real catalog; the corpus runner's and the
     gauntlet's seal, applied to every app test run). The copy sits BESIDE the original (its paths are
     __TESTROOT__-relative), is a new file (O_EXCL, never through a link) and is removed by the caller;
     the build's own .xctestrun is never modified. xcodebuild itself keeps the real home (its caches).

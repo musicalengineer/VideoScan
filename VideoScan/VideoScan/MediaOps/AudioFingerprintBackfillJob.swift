@@ -495,8 +495,10 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
         switch AudioFingerprintStamp.reading(of: fingerprint) {
         case .printable, .silence: return .fingerprint(fingerprint)
         case .heardTooLittle(let audible): return .heardTooLittle(fingerprint, audibleSeconds: audible)
-        // Only a pass that skipped `AudioFingerprint.compute` (a test stub)
-        // can get here: no loudness measurement, so no verdict either way.
+        // A pass that skipped `AudioFingerprint.compute` (a test stub), or a
+        // quiet mono mix over a loud source channel with no landmark (anti-
+        // phase stereo, GH #345): no per-second measurement, so no verdict
+        // either way — never "silent".
         case .notMeasured: return .failed(notMeasuredWords)
         }
     }

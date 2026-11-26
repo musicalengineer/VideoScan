@@ -576,6 +576,11 @@ struct FixityStampVolumeIdentityTests {
             // it before the first page (and of the safety copy after its move
             // to the Trash). Never a stored stamp; any difference refuses.
             "VideoScanCore/Store/CatalogDatabaseRestore.swift": 2,
+            // Catalog free-space floor for a sealed copy (Codex #381 P2): two
+            // LIVE stats of the same instant — the copy's folder vs the
+            // catalog's folder — "is this copy on the catalog's own disk now".
+            // Never a stored stamp.
+            "VideoScanCore/Store/CatalogSpaceFloor.swift": 1,
             // (CatalogKnownCopies — STORED stamps — compares volume UUID +
             // inode, never st_dev: nightly 2026-10-12.)
         ]
