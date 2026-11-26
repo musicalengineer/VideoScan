@@ -82,8 +82,14 @@ extension DiagnosticBanner {
         // Paired since Verify wrote its row (GH #370, Rick 2026-11-25): the
         // live assessment decides — the file still has no sound track of its
         // own, but its sound is known. The card row stays as evidence.
+        // The pair answers the sound question only: when the card has any
+        // other row worse than OK, no banner — the card's own headline,
+        // which names that warning, shows instead (review 2026-11-25).
         if case .videoHalfOfPair(let soundFile)? = presence {
-            return pairedSound(soundFile)
+            let othersClean = card?.checks.allSatisfy {
+                CheckMediaRules.isNoSoundRow($0) || $0.verdict.rank <= MediaCheckVerdict.ok.rank
+            } ?? true
+            return othersClean ? pairedSound(soundFile) : nil
         }
         return DiagnosticBanner(id: noSoundID, severity: .warning, symbol: noSoundSymbol,
                                 headline: noSoundHeadline, nextStep: noSoundStep(advice),

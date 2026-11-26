@@ -12493,6 +12493,7 @@
       "suites": [
         "CatalogTagDuplicateSortLogicTests",
         "CatalogTagDuplicateSortScaleTests",
+        "CatalogTagSortRealisticShapeTests",
         "CatalogTagDuplicateSortSensorTests"
       ],
       "tests": [
@@ -12501,6 +12502,7 @@
         "bothTablesGiveTagAndDuplicateASortKey",
         "duplicateSortsByDispositionThenCopyCount",
         "hundredThousandRowsSortInsideTheBudget",
+        "hundredThousandUnreviewedRowsHalfTaggedSortFast",
         "tagOrderDoesNotDependOnInsertionOrder",
         "tagSortsByDispositionInReviewOrder",
         "theFolderSortMappingCarriesBothColumns",
@@ -15234,6 +15236,7 @@
         "singularAndNone",
         "theFreeSpaceCheckCountsTheSoundFile",
         "theLiveAssessmentWinsOverAStaleCard",
+        "thePairedSoundBannerNeverHidesAnotherWarning",
         "theProofIsThePictureUntouchedPlusTheSoundTrack",
         "verdictsMapToSeverities"
       ]
@@ -41883,7 +41886,7 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 4081,
+      "expected_floor": 4083,
       "name": "unit",
       "package_expected_floor": 1027,
       "package_selectors": [
@@ -42677,7 +42680,8 @@
         "VideoScanTests/SoundLevelsRemeasureSensorTests",
         "VideoScanTests/CatalogTagDuplicateSortLogicTests",
         "VideoScanTests/CatalogTagDuplicateSortScaleTests",
-        "VideoScanTests/CatalogTagDuplicateSortSensorTests"
+        "VideoScanTests/CatalogTagDuplicateSortSensorTests",
+        "VideoScanTests/CatalogTagSortRealisticShapeTests"
       ]
     },
     {

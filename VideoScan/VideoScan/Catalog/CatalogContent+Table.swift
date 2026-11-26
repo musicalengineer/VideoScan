@@ -415,8 +415,9 @@ extension CatalogContent {
 
                 // Tag: disposition in review order, then the workflow
                 // tags; Duplicate: Keep › Review › Extra copy › not
-                // analysed, then copy count (Rick 2026-11-25). Both O(1)-ish
-                // per read (VideoRecord+Derived.swift).
+                // analysed, then copy count (Rick 2026-11-25). Both keys are
+                // O(1) to read with no allocation; equal tag lists compare in
+                // one Array == (VideoRecord+Derived.swift, CatalogTagSortKey).
                 TableColumn("Tag", value: \VideoRecord.tagSortKey) { rec in
                     tagColumnCell(for: rec)
                 }

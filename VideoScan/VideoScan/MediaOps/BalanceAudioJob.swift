@@ -873,7 +873,7 @@ final class BalanceAudioJob: @MainActor MediaFileOperationJob {
         case .leftOnly: fixNote = "left channel copied to both sides"
         case .rightOnly: fixNote = "right channel copied to both sides"
         case .mono: fixNote = "mono sound spread to both speakers"
-        default: fixNote = analysis.classification.rawValue
+        case .trueStereo, .dualMono, .silent, .multichannel, .notMeasured: fixNote = analysis.classification.rawValue
         }
         if !analysis.droppedStreamIndices.isEmpty {
             let list = analysis.droppedStreamIndices.map(String.init).joined(separator: ", ")

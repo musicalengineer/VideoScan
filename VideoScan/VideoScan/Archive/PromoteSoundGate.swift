@@ -171,7 +171,7 @@ enum PromoteSoundGate {
         switch analysis.classification {
         case .leftOnly: return .left
         case .rightOnly: return .right
-        default: return nil
+        case .mono, .trueStereo, .dualMono, .silent, .multichannel, .notMeasured: return nil
         }
     }
 

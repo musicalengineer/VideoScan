@@ -113,6 +113,40 @@ struct CatalogTagDuplicateSortScaleTests {
     }
 }
 
+/// REVIEW (reviewer 2026-11-25) — pins VideoRecord+Derived.swift:178
+/// (`tagSortKey` sorts + joins the tags on EVERY read) and :234 (`<` has no
+/// equal-strings fast path). KeyPathComparator reads the key path twice per
+/// comparison, and a header click sorts on the main actor TWICE
+/// (ContentView `model.records.sort(using:)` + CatalogContent+Table
+/// `tableData.sort(using:)`). The realistic catalog shape — one disposition
+/// (Unreviewed) and the same tag on many rows — is the worst case: every
+/// comparison allocates two arrays and two strings, then a locale compare of
+/// equal strings. Measured standalone at -O: ~0.6 s per sort at 100k
+/// (precomputed key + `==` fast path: ~6 ms).
+@Suite("Catalog Tag sort — realistic shape, review")
+struct CatalogTagSortRealisticShapeTests {
+    @Test func hundredThousandUnreviewedRowsHalfTaggedSortFast() {
+        var rows: [VideoRecord] = []
+        rows.reserveCapacity(100_000)
+        for i in 0..<100_000 {
+            rows.append(record(.unreviewed, tags: i.isMultiple(of: 2) ? ["needs date", "birthday"] : []))
+        }
+        let load = TimingBudget.sampleLoad()
+        // Budget (2026-11-25, Ultra, Debug): a key-path sort of 100k class
+        // rows has a floor near 400–700 ms in Debug whatever the key (the Int
+        // Duplicate key: 466 ms; `tags.count`: 704 ms), so the review's 150 ms
+        // cannot be met in Debug. Measured here: the per-read sort+join key
+        // 1,140–1,145 ms (red); the allocation-free key 413–433 ms (green).
+        // 650 ms sits between them.
+        let start = ContinuousClock.now
+        let sorted = rows.sorted(using: KeyPathComparator(\VideoRecord.tagSortKey))
+        let elapsed = ContinuousClock.now - start
+        #expect(sorted.first?.tags.isEmpty == false && sorted.last?.tags.isEmpty == true)
+        expectWithinTimingBudget("Catalog Tag sort, 100k Unreviewed rows half tagged", measured: elapsed,
+                                 budget: PerformanceLane.debugCeiling(.milliseconds(650)), loadBefore: load)
+    }
+}
+
 @Suite("Catalog Tag / Duplicate sort — sensor")
 struct CatalogTagDuplicateSortSensorTests {
 

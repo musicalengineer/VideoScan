@@ -173,12 +173,11 @@ extension VideoRecord {
     /// Sort key for the catalog's Tag column (Rick 2026-11-25): the
     /// disposition in review order — Important, Recoverable, Unreviewed,
     /// Suspected Junk, Confirmed Junk — then the workflow tags (a tagged
-    /// row before an untagged one). O(tags) per read: the tags are a short
-    /// list (the cell shows two), sorted and joined once per read.
+    /// row before an untagged one). O(1) per read and no allocation: the
+    /// key holds the record's own tags array (a reference-count bump), and
+    /// the comparison does the rest (CatalogTagSortKey).
     public var tagSortKey: CatalogTagSortKey {
-        CatalogTagSortKey(dispositionRank: mediaDisposition.catalogSortRank,
-                          tags: tags.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-                            .joined(separator: ", "))
+        CatalogTagSortKey(dispositionRank: mediaDisposition.catalogSortRank, tags: tags)
     }
 
     /// Sort key for the catalog's Duplicate column (Rick 2026-11-25): the
@@ -216,25 +215,80 @@ extension VideoRecord {
 /// The Tag column's sort value. A struct, not a string, so the order is
 /// exactly the rule — no locale collation deciding where a rank prefix or
 /// an "untagged" sentinel falls. (For Rick: a POD with `operator<`.)
+///
+/// Cost (review 2026-11-25): a header click sorts on the main actor and
+/// reads this key twice per comparison, so neither the read nor the common
+/// comparison allocates. Equal tag lists (the usual case: one disposition,
+/// the same tags on many rows) stop at Array `==` (buffer identity, then
+/// element compare). Two DIFFERENT lists are put in tag order in stack
+/// buffers (`tagOrder`) — no heap allocation on any path.
 public struct CatalogTagSortKey: Comparable, Hashable, Sendable {
     /// MediaDisposition.catalogSortRank; `Int.max` for a row that is not
     /// a file (a folder in the folder table), which sorts after every file.
     public let dispositionRank: Int
-    /// The workflow tags, sorted and joined; "" when untagged.
-    public let tags: String
+    /// The workflow tags as stored (any order); empty when untagged.
+    public let tags: [String]
 
-    public init(dispositionRank: Int, tags: String) {
+    public init(dispositionRank: Int, tags: [String]) {
         self.dispositionRank = dispositionRank
         self.tags = tags
     }
 
     /// A folder row: no disposition, no tags.
-    public static let notAFile = CatalogTagSortKey(dispositionRank: .max, tags: "")
+    public static let notAFile = CatalogTagSortKey(dispositionRank: .max, tags: [])
 
     public static func < (a: CatalogTagSortKey, b: CatalogTagSortKey) -> Bool {
         if a.dispositionRank != b.dispositionRank { return a.dispositionRank < b.dispositionRank }
         if a.tags.isEmpty != b.tags.isEmpty { return !a.tags.isEmpty }      // tagged before untagged
-        return a.tags.localizedStandardCompare(b.tags) == .orderedAscending
+        if a.tags == b.tags { return false }                                  // fast path: equal lists
+        return tagOrder(a.tags, b.tags) == .orderedAscending
+    }
+
+    /// Order-independent: the same tags in another order are the same key.
+    public static func == (a: CatalogTagSortKey, b: CatalogTagSortKey) -> Bool {
+        guard a.dispositionRank == b.dispositionRank else { return false }
+        return a.tags == b.tags || tagOrder(a.tags, b.tags) == .orderedSame
+    }
+
+    /// Only what `==` can never disagree with (the localized compare may
+    /// call two spellings equal): the rank and how many tags.
+    public func hash(into h: inout Hasher) {
+        h.combine(dispositionRank)
+        h.combine(tags.count)
+    }
+
+    /// The two lists in tag order, compared element by element (a shorter
+    /// list that is a prefix sorts first). Localized standard, the
+    /// Finder's order. No heap allocation: each list is ordered in a stack
+    /// buffer (`withUnsafeTemporaryAllocation` ≈ C++ `alloca`), the strings
+    /// themselves only retained.
+    static func tagOrder(_ a: [String], _ b: [String]) -> ComparisonResult {
+        withOrdered(a) { x in
+            withOrdered(b) { y in
+                for (l, r) in zip(x, y) {
+                    let c = l.localizedStandardCompare(r)
+                    if c != .orderedSame { return c }
+                }
+                return x.count == y.count ? .orderedSame : (x.count < y.count ? .orderedAscending : .orderedDescending)
+            }
+        }
+    }
+
+    /// `body` over `tags` in tag order: an insertion sort in a temporary
+    /// (stack) buffer — the lists are a handful of tags.
+    static func withOrdered<R>(_ tags: [String], _ body: (UnsafeMutableBufferPointer<String>) -> R) -> R {
+        withUnsafeTemporaryAllocation(of: String.self, capacity: tags.count) { buf in
+            _ = buf.initialize(from: tags)
+            for i in buf.indices.dropFirst() {
+                var j = i
+                while j > 0, buf[j - 1].localizedStandardCompare(buf[j]) == .orderedDescending {
+                    buf.swapAt(j - 1, j)
+                    j -= 1
+                }
+            }
+            defer { buf.deinitialize() }
+            return body(buf)
+        }
     }
 }
 

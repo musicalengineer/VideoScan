@@ -129,6 +129,27 @@ struct DiagnosticBannerNoSoundTests {
                                          presence: .videoHalfOfPair(soundFile: "test_A01.wav"), advice: nil) == nil)
     }
 
+    /// REVIEW (GH #370, reviewer 2026-11-25) — pins DiagnosticBanner.swift:85.
+    /// The paired-sound banner REPLACES Media Info's verdict line
+    /// (MediaInfoSheet.verdictBox). When the card carries another Warning
+    /// (here: timestamps), an info banner downgrades the visible verdict
+    /// from Warning to Info and hides that warning behind the collapsed
+    /// Report card. The pair answers the sound question only; it must never
+    /// soften a non-sound warning.
+    @Test func thePairedSoundBannerNeverHidesAnotherWarning() {
+        var card = F.card(F.noSound2009)
+        card.checks.append(MediaCheck(kind: .timestamps, verdict: .warning,
+                                      sentence: "The timing jumps in 3 places."))
+        #expect(CheckMediaRules.hasNoSoundRow(card), "fixture: the no-sound row is on the card")
+        let b = DiagnosticBanner.noSound(recordID: F.pictureID, card: card,
+                                         presence: .videoHalfOfPair(soundFile: "test_A01.wav"), advice: nil)
+        // Either no banner (the card's own headline, which names the other
+        // warning, shows) or a banner no quieter than the card's worst row.
+        if let b {
+            #expect(b.severity != .info, "an info banner over a card with a Warning row understates the file")
+        }
+    }
+
     /// Get Info over a card written before the rule (no no-sound row):
     /// the live assessment still raises the banner.
     @Test func theLiveAssessmentWinsOverAStaleCard() {
