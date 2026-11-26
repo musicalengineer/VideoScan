@@ -153,6 +153,9 @@ final class CatalogCommitter {
     private let sink: (String) -> Void
     /// After curated fields were copied onto other copies of a content.
     var onCopiesUpdated: () -> Void = {}
+    /// The date seam (`isDateReadOnly`): a date is never copied onto an
+    /// archived copy from one that is not (Codex #383, rule 3).
+    var dateFixed: (VideoRecord) -> Bool = { _ in false }
     /// The blocked state changed (the Reopen item follows it).
     var onBlockedChanged: (String?) -> Void = { _ in }
     /// New rows with no whole-file hash are held: queue Fill In Full Hashes.
@@ -802,7 +805,11 @@ final class CatalogCommitter {
         // only together with the replacement (or once the store holds it).
         let records = input().records
         if !report.revisions.isEmpty { adoptRevisions(report.revisions, records: records) }
-        if !report.shared.isEmpty, baseline.propagate(report.shared, records: records) { onCopiesUpdated() }
+        if !report.shared.isEmpty {
+            let shared = baseline.propagate(report.shared, records: records, dateFixed: dateFixed)
+            for line in shared.declined { sink(line) }
+            if shared.touched { onCopiesUpdated() }
+        }
         if heldIDs != heldBefore { onHeldChanged(heldIDs) }
         if !report.needDigest.isEmpty { onNeedDigest(report.needDigest) }
         if report.purged > 0 { sink("Catalog store: REMOVED \(report.purged) row(s) the catalog no longer holds (tombstoned, never deleted)") }

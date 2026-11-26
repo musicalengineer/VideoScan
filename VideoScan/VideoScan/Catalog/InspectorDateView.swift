@@ -33,6 +33,12 @@ import SwiftUI
 // manifest row with the date. Every write goes through InspectorDateEdit,
 // which refuses a read-only record as well (belt and braces).
 //
+// Codex #383 (round 2): Rick's date is stored per CONTENT, so a record whose
+// content has a LIVE archived copy is fixed too: the section names that copy
+// and its filed date, and Update… opens THAT copy. The twin lookup is
+// O(records) (size pre-filter), memoized per (selection, records count,
+// aggregates revision) — never once per body; a Save re-asks it fresh.
+//
 // The parent embeds this with `.id(record.id)` so @State (draft text,
 // confidence toggle) reseeds when the selection changes — otherwise
 // SwiftUI would keep the previous record's draft in the same view slot.
@@ -57,6 +63,15 @@ struct InspectorDateView: View {
     /// it is open, or why it was not offered.
     @State private var updatePreview: ArchiveUpdatePreview?
     @State private var updateRefusal: String?
+    /// The archived copy that fixes this record's date (ids; empty = none).
+    /// RenderMemo is a class held by @State: filling it in body is not a
+    /// state change (CatalogPerfMemo.swift).
+    @State private var fixedByMemo = RenderMemo<FixedByKey, [UUID]>()
+
+    private struct FixedByKey: Equatable {
+        let id: UUID
+        let version: RecordsVersion
+    }
 
     init(record: VideoRecord) {
         self.record = record
@@ -67,13 +82,29 @@ struct InspectorDateView: View {
         _isKnown = State(initialValue: record.userDateStatus == .known)
     }
 
-    /// The seam's verdict — O(1) (an enum compare, a string compare, a prefix test).
-    private var dateIsFixed: Bool { model.isDateReadOnly(record) }
+    /// The archived record whose filed date fixes this one's: itself (the
+    /// seam, O(1)) or a live same-content archived copy (memoized scan).
+    private var fixedBy: VideoRecord? {
+        if model.isDateReadOnly(record) { return record }
+        let key = FixedByKey(id: record.id, version: RecordsVersion(count: model.records.count,
+                                                                    revision: model.volumeAggregatesRevision))
+        let ids = fixedByMemo.value(for: key) {
+            InspectorDateEdit.archivedCopy(fixing: record, in: model.records, isReadOnly: model.isDateReadOnly)
+                .map { [$0.id] } ?? []
+        }
+        return ids.first.flatMap { model.record(forID: $0) }
+    }
+
+    /// At a Save: asked fresh, never from the memo (a copy archived since
+    /// the last render still fixes the date).
+    private func fixedNow() -> VideoRecord? {
+        InspectorDateEdit.archivedCopy(fixing: record, in: model.records, isReadOnly: model.isDateReadOnly)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if dateIsFixed {
-                archivedFixedSection
+            if let fixedBy {
+                archivedFixedSection(fixedBy)
             } else {
                 editableSection
             }
@@ -118,13 +149,13 @@ struct InspectorDateView: View {
     // MARK: Archived: the filed date and Update… (GH #221)
 
     @ViewBuilder
-    private var archivedFixedSection: some View {
-        Text(Self.archivedFiledText(record))
+    private func archivedFixedSection(_ filed: VideoRecord) -> some View {
+        Text(Self.archivedFiledText(record, fixedBy: filed))
             .font(.system(size: 11))
             .foregroundColor(.secondary)
             .fixedSize(horizontal: false, vertical: true)
             .accessibilityIdentifier("inspector.date.archived")
-        Button("Update…") { openUpdate() }
+        Button("Update…") { openUpdate(filed.id) }
             .controlSize(.small)
             .help("Change this archived file's name or date. The folder, the filename and the archive's index move with the date.")
             .accessibilityIdentifier("inspector.date.update")
@@ -138,9 +169,16 @@ struct InspectorDateView: View {
         return "Filed as \(date) (\(how)). " + fixed
     }
 
+    /// The words when `copy` (the record itself, or an archived copy of the
+    /// same content) fixes the date: the date shown is the one the archive
+    /// filed `copy` under — the date this record will load with.
+    nonisolated static func archivedFiledText(_ record: VideoRecord, fixedBy copy: VideoRecord) -> String {
+        guard copy !== record else { return archivedFiledText(record) }
+        return "A copy of this file is in the archive (\(copy.filename)). " + archivedFiledText(copy)
+    }
+
     /// Same one-editor claim and sheet as the Archive tab's right-click.
-    private func openUpdate() {
-        let id = record.id
+    private func openUpdate(_ id: UUID) {
         Task {
             switch await model.openArchiveUpdate(recordID: id) {
             case .success(let p): updatePreview = p
@@ -316,11 +354,11 @@ struct InspectorDateView: View {
 
     private func saveEntry() {
         let typed = entryText
-        apply(InspectorDateEdit.save(entry: typed, known: isKnown, to: record, readOnly: dateIsFixed), typed: typed)
+        apply(InspectorDateEdit.save(entry: typed, known: isKnown, to: record, readOnly: fixedNow() != nil), typed: typed)
     }
 
     private func clearEntry() {
-        apply(InspectorDateEdit.clear(record, readOnly: dateIsFixed), typed: "a cleared date")
+        apply(InspectorDateEdit.clear(record, readOnly: fixedNow() != nil), typed: "a cleared date")
     }
 
     /// The edit's outcome → the field, the catalog save, the ledger line.
@@ -337,9 +375,12 @@ struct InspectorDateView: View {
         case .unreadable:
             entryRejected = true
         case .refusedArchived:
-            // Only reachable if the row became archived while the field was
-            // on screen: nothing written, one audit line, the field reseeds.
-            model.noteDateLeftAsFiled(record, writer: "Inspector", declined: typed)
+            // Only reachable if the row (or a copy of its content) became
+            // archived while the field was on screen: nothing written, one
+            // audit line naming the archived copy, the field reseeds.
+            let filed = fixedNow() ?? record
+            model.noteDateLeftAsFiled(filed, writer: filed === record ? "Inspector" : "Inspector (\(record.filename))",
+                                      declined: typed)
             entryText = record.userDate ?? ""
             entryRejected = false
             refreshTick &+= 1
