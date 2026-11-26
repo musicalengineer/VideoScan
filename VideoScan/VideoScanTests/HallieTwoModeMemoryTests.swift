@@ -207,12 +207,12 @@ struct HallieTwoModeMemoryTests {
 
     /// The mode is never persisted: no `archivist.*` key can pre-set it.
     @Test func poisonedUserDefaultsCannotPresetTheMode() {
-        let defaults = UserDefaults.standard
         let keys = ["archivist.mode", "archivist.hallieMode", "archivist.forcedMode",
                     "archivist.conversation.mode", "hallie.mode", "HallieMode"]
-        let saved = keys.map { ($0, defaults.object(forKey: $0)) }
-        defer { for (key, value) in saved { if let value { defaults.set(value, forKey: key) } else { defaults.removeObject(forKey: key) } } }
-        for key in keys { defaults.set("tree", forKey: key) }
+        let onDiskBefore = TestPreferences.persistedAppValues(forKeys: keys)
+        // In memory only (TestPreferences): every read sees the poison; no plist is written.
+        let poisoned = TestPreferences.begin(Dictionary(uniqueKeysWithValues: keys.map { ($0, "tree" as any Sendable) }))
+        defer { poisoned.end() }
         let memory = Memory()
         #expect(memory.mode == .unknown)
         #expect(memory.forcedMode == nil)
@@ -221,6 +221,7 @@ struct HallieTwoModeMemoryTests {
         var written = Memory()
         written.force(.tree)
         written.record(intent: nil, result: result(route: .graph, person: "Rick"))
-        for key in keys { #expect(defaults.string(forKey: key) == "tree", Comment(rawValue: key)) }
+        for key in keys { #expect(UserDefaults.standard.string(forKey: key) == "tree", Comment(rawValue: key)) }
+        #expect(TestPreferences.persistedAppValues(forKeys: keys) == onDiskBefore, "nothing reached the real plist")
     }
 }

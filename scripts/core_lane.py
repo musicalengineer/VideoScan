@@ -225,7 +225,8 @@ def free_dead_lanes_homes() -> None:
 
 def sealed_home() -> str:
     """A fresh scratch home for this lane's test processes (DECISIONS 2026-11-22: tests never open the
-    real catalog): FileManager's App Support, Logs and Preferences resolve inside it, never to Rick's —
+    real catalog): FileManager's App Support and Logs resolve inside it, never to Rick's (UserDefaults do NOT:
+    cfprefsd ignores HOME / CFFIXED_USER_HOME, 2026-11-25) —
     it holds a COPY of App Support (scripts/sealed_home.py). Removed when this process exits. ≈ C++: a chroot for the user's dotfiles, not the filesystem."""
     import atexit
     import tempfile

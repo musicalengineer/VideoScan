@@ -136,6 +136,9 @@ struct VolumeRoleTaxonomyMigrationTests {
 
     private struct Keys {
         let id = String(UUID().uuidString.prefix(8))
+        /// A throwaway suite per test — never the real domain (TestPreferences).
+        let prefs = TestPreferences.scratch("VolumeRoleTaxonomy")
+        var defaults: UserDefaults { prefs.defaults }
         var paths: String { "t\(id)_p" }
         var dates: String { "t\(id)_d" }
         var phases: String { "t\(id)_ph" }
@@ -149,8 +152,7 @@ struct VolumeRoleTaxonomyMigrationTests {
         var retAt: String { "t\(id)_rA" }
         var retRsn: String { "t\(id)_rR" }
         var retWit: String { "t\(id)_rW" }
-        var all: [String] { [paths, dates, phases, roles, trust, fs, mt, py, cap, notes, retAt, retRsn, retWit] }
-        func cleanup() { all.forEach { UserDefaults.standard.removeObject(forKey: $0) } }
+        func cleanup() { prefs.remove() }
     }
 
     private func restore(_ k: Keys) -> [CatalogScanTarget] {
@@ -164,16 +166,16 @@ struct VolumeRoleTaxonomyMigrationTests {
             savedRolesKey: k.roles, savedTrustKey: k.trust, savedFilesystemKey: k.fs,
             savedMediaTechKey: k.mt, savedPurchaseYearKey: k.py, savedCapacityKey: k.cap,
             savedNotesKey: k.notes, savedRetiredAtKey: k.retAt, savedRetiredReasonKey: k.retRsn,
-            savedRetiredWitnessesKey: k.retWit)
+            savedRetiredWitnessesKey: k.retWit, defaults: k.defaults)
     }
 
     private func persist(_ targets: [CatalogScanTarget], _ k: Keys) {
-        ScanTargetPersistence.persistPaths(targets, key: k.paths)
+        ScanTargetPersistence.persistPaths(targets, key: k.paths, defaults: k.defaults)
         ScanTargetPersistence.persistMetadata(
             targets, savedDatesKey: k.dates, savedPhasesKey: k.phases, savedRolesKey: k.roles,
             savedTrustKey: k.trust, savedFilesystemKey: k.fs, savedMediaTechKey: k.mt,
             savedPurchaseYearKey: k.py, savedCapacityKey: k.cap, savedNotesKey: k.notes,
-            savedRetiredAtKey: k.retAt, savedRetiredReasonKey: k.retRsn, savedRetiredWitnessesKey: k.retWit)
+            savedRetiredAtKey: k.retAt, savedRetiredReasonKey: k.retRsn, savedRetiredWitnessesKey: k.retWit, defaults: k.defaults)
     }
 
     /// Poisoned-state + isolation: a saved-roles dictionary carrying every
@@ -185,8 +187,8 @@ struct VolumeRoleTaxonomyMigrationTests {
         let realBefore = UserDefaults.standard.dictionary(forKey: VideoScanModel.savedRolesKey) as? [String: String]
 
         let paths = ["/Volumes/A", "/Volumes/B", "/Volumes/C", "/Volumes/D", "/Volumes/E"]
-        UserDefaults.standard.set(paths, forKey: k.paths)
-        UserDefaults.standard.set([
+        k.defaults.set(paths, forKey: k.paths)
+        k.defaults.set([
             "/Volumes/A": "Long-Term Archive",
             "/Volumes/B": "Retired",
             "/Volumes/C": "Bogus",
@@ -215,10 +217,10 @@ struct VolumeRoleTaxonomyMigrationTests {
         let k = Keys()
         defer { k.cleanup() }
         let stamp = Date(timeIntervalSince1970: 1_600_000_000)
-        UserDefaults.standard.set(["/Volumes/B"], forKey: k.paths)
-        UserDefaults.standard.set(["/Volumes/B": "Retired"], forKey: k.roles)
-        UserDefaults.standard.set(["/Volumes/B": stamp], forKey: k.retAt)
-        UserDefaults.standard.set(["/Volumes/B": "Relocate done"], forKey: k.retRsn)
+        k.defaults.set(["/Volumes/B"], forKey: k.paths)
+        k.defaults.set(["/Volumes/B": "Retired"], forKey: k.roles)
+        k.defaults.set(["/Volumes/B": stamp], forKey: k.retAt)
+        k.defaults.set(["/Volumes/B": "Relocate done"], forKey: k.retRsn)
         let t = try #require(restore(k).first)
         #expect(t.retiredAt == stamp)
         #expect(t.retiredReason == "Relocate done")
@@ -235,13 +237,13 @@ struct VolumeRoleTaxonomyMigrationTests {
             t.role = r
             return t
         }
-        ScanTargetPersistence.persistPaths(targets, key: k.paths)
+        ScanTargetPersistence.persistPaths(targets, key: k.paths, defaults: k.defaults)
         ScanTargetPersistence.persistMetadata(
             targets, savedDatesKey: k.dates, savedPhasesKey: k.phases, savedRolesKey: k.roles,
             savedTrustKey: k.trust, savedFilesystemKey: k.fs, savedMediaTechKey: k.mt,
             savedPurchaseYearKey: k.py, savedCapacityKey: k.cap, savedNotesKey: k.notes,
-            savedRetiredAtKey: k.retAt, savedRetiredReasonKey: k.retRsn, savedRetiredWitnessesKey: k.retWit)
-        let written = UserDefaults.standard.dictionary(forKey: k.roles) as? [String: String] ?? [:]
+            savedRetiredAtKey: k.retAt, savedRetiredReasonKey: k.retRsn, savedRetiredWitnessesKey: k.retWit, defaults: k.defaults)
+        let written = k.defaults.dictionary(forKey: k.roles) as? [String: String] ?? [:]
         #expect(Set(written.values) == Set(VolumeRole.allCases.map(\.rawValue)))
         #expect(!written.values.contains("Long-Term Archive"))
         #expect(!written.values.contains("Retired"))
@@ -858,8 +860,8 @@ struct VolumeRoleTaxonomyMigrationTests {
     @Test func m1_legacyRetired_persistedOnceOnRestore_stampStable() throws {
         let k = Keys()
         defer { k.cleanup() }
-        UserDefaults.standard.set(["/Volumes/RicksBackups"], forKey: k.paths)
-        UserDefaults.standard.set(["/Volumes/RicksBackups": "Retired"], forKey: k.roles)
+        k.defaults.set(["/Volumes/RicksBackups"], forKey: k.paths)
+        k.defaults.set(["/Volumes/RicksBackups": "Retired"], forKey: k.roles)
 
         // Launch 1: restore reports the legacy decode; the model persists.
         let r1 = restore(k, reporting: true)
@@ -868,9 +870,9 @@ struct VolumeRoleTaxonomyMigrationTests {
         let stamp1 = t1.retiredAt
         #expect(stamp1 != nil)
         persist(r1.targets, k)
-        let written = UserDefaults.standard.dictionary(forKey: k.roles) as? [String: String]
+        let written = k.defaults.dictionary(forKey: k.roles) as? [String: String]
         #expect(written?["/Volumes/RicksBackups"] == "Unassigned", "prefs healed to the current name")
-        #expect((UserDefaults.standard.dictionary(forKey: k.retAt) as? [String: Date])?["/Volumes/RicksBackups"] == stamp1)
+        #expect((k.defaults.dictionary(forKey: k.retAt) as? [String: Date])?["/Volumes/RicksBackups"] == stamp1)
 
         // Launch 2 (later): nothing legacy left; the stamp is the SAME one.
         let r2 = restore(k, reporting: true)
@@ -900,8 +902,8 @@ struct VolumeRoleTaxonomyMigrationTests {
     @Test func m6_noZombieRetirement_afterReinstateAndRestore() throws {
         let k = Keys()
         defer { k.cleanup() }
-        UserDefaults.standard.set(["/Volumes/RicksBackups"], forKey: k.paths)
-        UserDefaults.standard.set(["/Volumes/RicksBackups": "Retired"], forKey: k.roles)
+        k.defaults.set(["/Volumes/RicksBackups"], forKey: k.paths)
+        k.defaults.set(["/Volumes/RicksBackups": "Retired"], forKey: k.roles)
 
         let m = makeModel()
         m.scanTargets = restore(k)
@@ -914,7 +916,7 @@ struct VolumeRoleTaxonomyMigrationTests {
         let again = restore(k)
         #expect(again.first?.retiredAt == nil, "reinstated stays reinstated across restore")
         #expect(again.first?.role == .unassigned)
-        #expect((UserDefaults.standard.dictionary(forKey: k.roles) as? [String: String])?["/Volumes/RicksBackups"] == "Unassigned")
+        #expect((k.defaults.dictionary(forKey: k.roles) as? [String: String])?["/Volumes/RicksBackups"] == "Unassigned")
     }
 
     // MARK: - codex m5: bundle import onto an existing target
@@ -1109,10 +1111,10 @@ struct VolumeRoleTaxonomyMigrationTests {
         defer { k.cleanup() }
         let legacy = ["Long-Term Archive", "Retired", "Archive", "Backup", "Bogus", "Original", "Unassigned", "LTA"]
         let paths = (0..<1000).map { "/Volumes/Synthetic\($0)" }
-        UserDefaults.standard.set(paths, forKey: k.paths)
+        k.defaults.set(paths, forKey: k.paths)
         var roles: [String: String] = [:]
         for (i, p) in paths.enumerated() { roles[p] = legacy[i % legacy.count] }
-        UserDefaults.standard.set(roles, forKey: k.roles)
+        k.defaults.set(roles, forKey: k.roles)
 
         let m = makeModel()
         let clock = ContinuousClock()

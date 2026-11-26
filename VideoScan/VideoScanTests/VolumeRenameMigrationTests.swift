@@ -630,9 +630,8 @@ struct VolumeRenameMigrationTests {
         // READ-ONLY snapshot of the machine's real persisted scan-target
         // state (never write these keys from a test — that's the exact
         // incident class of 2026-07-05).
-        let defaults = UserDefaults.standard
-        let targetsBefore = defaults.stringArray(forKey: VideoScanModel.savedTargetsKey)
-        let phasesBefore = defaults.dictionary(forKey: VideoScanModel.savedPhasesKey) as? [String: String]
+        let targetsBefore = UserDefaults.standard.stringArray(forKey: VideoScanModel.savedTargetsKey)
+        let phasesBefore = UserDefaults.standard.dictionary(forKey: VideoScanModel.savedPhasesKey) as? [String: String]
 
         let dir = tempDir("isolation")
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -642,9 +641,9 @@ struct VolumeRenameMigrationTests {
         await model.userInitiatedVolumeRenameMigration(for: target)
         #expect(target.searchPath == newRoot, "Migration itself must succeed")
 
-        #expect(defaults.stringArray(forKey: VideoScanModel.savedTargetsKey) == targetsBefore,
+        #expect(UserDefaults.standard.stringArray(forKey: VideoScanModel.savedTargetsKey) == targetsBefore,
                 "persistScanTargets must stay gated in a test host")
-        #expect(defaults.dictionary(forKey: VideoScanModel.savedPhasesKey) as? [String: String] == phasesBefore,
+        #expect(UserDefaults.standard.dictionary(forKey: VideoScanModel.savedPhasesKey) as? [String: String] == phasesBefore,
                 "persistScanDates must stay gated in a test host")
     }
 

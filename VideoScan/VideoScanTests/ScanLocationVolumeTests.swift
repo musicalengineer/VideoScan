@@ -596,21 +596,20 @@ struct ScanLocationVolumeModelTests {
     /// fields, restored to the same location, absent key → nil.
     @Test func rememberedVolumeRoundTripsThroughUserDefaults() {
         let prefix = "ScanLocationVolumeTests.\(UUID().uuidString)."
-        let keys = ["dates", "phases", "roles", "trust", "fs", "tech", "year", "cap", "notes",
-                    "retAt", "retRsn", "retWit", "paths", "vol"].map { prefix + $0 }
-        defer { for k in keys { UserDefaults.standard.removeObject(forKey: k) } }
+        let prefs = TestPreferences.scratch("ScanLocationVolume")
+        defer { prefs.remove() }
         let t = CatalogScanTarget(searchPath: offlinePath())
         t.volumeUUID = ultra
         let other = CatalogScanTarget(searchPath: offlinePath())
-        ScanTargetPersistence.persistPaths([t, other], key: prefix + "paths")
+        ScanTargetPersistence.persistPaths([t, other], key: prefix + "paths", defaults: prefs.defaults)
         ScanTargetPersistence.persistMetadata(
             [t, other],
             savedDatesKey: prefix + "dates", savedPhasesKey: prefix + "phases", savedRolesKey: prefix + "roles",
             savedTrustKey: prefix + "trust", savedFilesystemKey: prefix + "fs", savedMediaTechKey: prefix + "tech",
             savedPurchaseYearKey: prefix + "year", savedCapacityKey: prefix + "cap", savedNotesKey: prefix + "notes",
             savedRetiredAtKey: prefix + "retAt", savedRetiredReasonKey: prefix + "retRsn",
-            savedRetiredWitnessesKey: prefix + "retWit", savedVolumeUUIDKey: prefix + "vol")
-        #expect(UserDefaults.standard.dictionary(forKey: prefix + "vol") as? [String: String] == [t.searchPath: ultra])
+            savedRetiredWitnessesKey: prefix + "retWit", savedVolumeUUIDKey: prefix + "vol", defaults: prefs.defaults)
+        #expect(prefs.defaults.dictionary(forKey: prefix + "vol") as? [String: String] == [t.searchPath: ultra])
 
         let restored = ScanTargetPersistence.restore(
             existing: [], savedTargetsKey: prefix + "paths",
@@ -618,7 +617,7 @@ struct ScanLocationVolumeModelTests {
             savedTrustKey: prefix + "trust", savedFilesystemKey: prefix + "fs", savedMediaTechKey: prefix + "tech",
             savedPurchaseYearKey: prefix + "year", savedCapacityKey: prefix + "cap", savedNotesKey: prefix + "notes",
             savedRetiredAtKey: prefix + "retAt", savedRetiredReasonKey: prefix + "retRsn",
-            savedRetiredWitnessesKey: prefix + "retWit", savedVolumeUUIDKey: prefix + "vol")
+            savedRetiredWitnessesKey: prefix + "retWit", savedVolumeUUIDKey: prefix + "vol", defaults: prefs.defaults)
         #expect(restored.first { $0.searchPath == t.searchPath }?.volumeUUID == ultra)
         #expect(restored.first { $0.searchPath == other.searchPath }?.volumeUUID == nil)
     }

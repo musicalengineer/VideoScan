@@ -3,7 +3,7 @@ import Testing
 @testable import VideoScan
 
 @MainActor
-// serialized: one test writes UserDefaults.standard (the Ollama hosts key) and restores it; the 100k-record budget and cancel-promptly tests are wall-clock (red 4 of 5 parallel runs 2026-11-21)
+// serialized: one test poisons the Ollama hosts key (in memory, TestPreferences); the 100k-record budget and cancel-promptly tests are wall-clock (red 4 of 5 parallel runs 2026-11-21)
 @Suite("Hallie shared turn executor", .serialized)
 struct HallieTurnExecutorTests {
     private let confirmedAt = Date(timeIntervalSince1970: 1_700_000_000)
@@ -693,16 +693,9 @@ struct HallieTurnExecutorTests {
     }
 
     @Test func injectedContextIgnoresPoisonedGlobalSettings() async throws {
-        let key = OllamaEndpoints.hostsKey
-        let prior = UserDefaults.standard.object(forKey: key)
-        UserDefaults.standard.set("poison.invalid", forKey: key)
-        defer {
-            if let prior {
-                UserDefaults.standard.set(prior, forKey: key)
-            } else {
-                UserDefaults.standard.removeObject(forKey: key)
-            }
-        }
+        // In memory only (TestPreferences): every read sees the poison; no plist is written.
+        let hostsPoison = TestPreferences.begin([OllamaEndpoints.hostsKey: "poison.invalid"])
+        defer { hostsPoison.end() }
 
         let path = "/isolated/not-the-real-catalog/family.avi"
         let result = try await HallieTurnExecutor.execute(

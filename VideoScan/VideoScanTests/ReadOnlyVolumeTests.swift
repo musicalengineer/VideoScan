@@ -535,16 +535,16 @@ struct ReadOnlyVolumeSettingsTests {
     @Test func theMarkIsSavedWithTheVolumeSettingsAndOlderSettingsStillRestore() throws {
         let token = UUID().uuidString
         func key(_ name: String) -> String { "test.readonly.\(token).\(name)" }
-        let keys = ["targets", "dates", "phases", "roles", "trust", "fs", "tech", "year", "cap", "notes", "retAt", "retRsn", "retWit", "ro"]
-        defer { keys.forEach { UserDefaults.standard.removeObject(forKey: key($0)) } }
+        let prefs = TestPreferences.scratch("ReadOnlyVolume")
+        defer { prefs.remove() }
         func persist(_ targets: [CatalogScanTarget], readOnlyKey: String?) {
-            ScanTargetPersistence.persistPaths(targets, key: key("targets"))
+            ScanTargetPersistence.persistPaths(targets, key: key("targets"), defaults: prefs.defaults)
             ScanTargetPersistence.persistMetadata(
                 targets, savedDatesKey: key("dates"), savedPhasesKey: key("phases"), savedRolesKey: key("roles"),
                 savedTrustKey: key("trust"), savedFilesystemKey: key("fs"), savedMediaTechKey: key("tech"),
                 savedPurchaseYearKey: key("year"), savedCapacityKey: key("cap"), savedNotesKey: key("notes"),
                 savedRetiredAtKey: key("retAt"), savedRetiredReasonKey: key("retRsn"), savedRetiredWitnessesKey: key("retWit"),
-                savedReadOnlyKey: readOnlyKey)
+                savedReadOnlyKey: readOnlyKey, defaults: prefs.defaults)
         }
         func restore(readOnlyKey: String?) -> [CatalogScanTarget] {
             ScanTargetPersistence.restore(
@@ -552,14 +552,14 @@ struct ReadOnlyVolumeSettingsTests {
                 savedRolesKey: key("roles"), savedTrustKey: key("trust"), savedFilesystemKey: key("fs"),
                 savedMediaTechKey: key("tech"), savedPurchaseYearKey: key("year"), savedCapacityKey: key("cap"),
                 savedNotesKey: key("notes"), savedRetiredAtKey: key("retAt"), savedRetiredReasonKey: key("retRsn"),
-                savedRetiredWitnessesKey: key("retWit"), savedReadOnlyKey: readOnlyKey)
+                savedRetiredWitnessesKey: key("retWit"), savedReadOnlyKey: readOnlyKey, defaults: prefs.defaults)
         }
         let marked = target("/Volumes/ReadOnlyTest-\(token)", readOnly: true, uuid: "AAA-111")
         let plain = target("/Volumes/PlainTest-\(token)")
 
         // Settings written BEFORE the field existed: no key at all.
         persist([marked, plain], readOnlyKey: nil)
-        #expect(UserDefaults.standard.object(forKey: key("ro")) == nil)
+        #expect(prefs.defaults.object(forKey: key("ro")) == nil)
         #expect(restore(readOnlyKey: key("ro")).allSatisfy { $0.readOnlyMark == nil }, "older settings: every volume allows changes")
         #expect(restore(readOnlyKey: nil).count == 2, "a caller that does not know the field still restores")
 
@@ -569,12 +569,12 @@ struct ReadOnlyVolumeSettingsTests {
         #expect(back.map(\.searchPath) == [marked.searchPath, plain.searchPath])
         #expect(back[0].readOnlyMark == marked.readOnlyMark && back[1].readOnlyMark == nil)
         // Only marked volumes have an entry; unmarking removes it.
-        #expect((UserDefaults.standard.dictionary(forKey: key("ro")) ?? [:]).keys.sorted() == [marked.searchPath])
+        #expect((prefs.defaults.dictionary(forKey: key("ro")) ?? [:]).keys.sorted() == [marked.searchPath])
         marked.readOnlyMark = nil
         persist([marked, plain], readOnlyKey: key("ro"))
         #expect(restore(readOnlyKey: key("ro")).allSatisfy { $0.readOnlyMark == nil })
         // A damaged entry is still a mark (refuse over guess).
-        UserDefaults.standard.set([plain.searchPath: ["markedAt": "not a date"]], forKey: key("ro"))
+        prefs.defaults.set([plain.searchPath: ["markedAt": "not a date"]], forKey: key("ro"))
         #expect(restore(readOnlyKey: key("ro"))[1].readOnlyMark == VolumeReadOnlyMark(markedAt: .distantPast, volumeUUID: nil))
         #expect(VideoScanModel.savedReadOnlyKey == "VideoScan.scanTargetReadOnly")
     }
