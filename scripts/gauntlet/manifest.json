@@ -33737,17 +33737,21 @@
         "test_complexity_swift_regex.py"
       ],
       "tests": [
+        "test_a_raw_string_holding_nested_literals_yields_one_span",
         "test_a_slash_followed_by_space_is_an_operator_not_a_regex",
+        "test_a_string_with_a_nested_literal_is_one_neutral_span",
         "test_bare_regex_in_expression_position_becomes_an_empty_string",
         "test_comments_are_untouched",
         "test_division_is_untouched",
         "test_extended_regex_single_and_multi_line_keep_the_line_count",
-        "test_fixture_reproduces_the_bug_without_neutralising",
+        "test_fixture_regex_get_needs_no_accessor_and_is_neutralised",
         "test_get_inside_a_regex_does_not_create_a_function",
         "test_member_init_reference_does_not_open_an_initializer",
+        "test_nested_interpolation_with_an_apostrophe_keeps_every_function",
         "test_raw_string_and_availability_keep_braces_balanced",
         "test_raw_strings_become_empty_strings_and_other_hashes_spaces",
         "test_regex_spans_report_only_regex_literals",
+        "test_set_and_get_bindings_are_not_accessors",
         "test_strings_and_interpolations_are_untouched"
       ]
     },

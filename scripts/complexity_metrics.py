@@ -856,10 +856,22 @@ _SWIFT_WORD = re.compile(r"[A-Za-z0-9_$@`\u0080-\U0010ffff]+")
 
 def swift_lizard_spans(src: str) -> List[Tuple[int, int, str]]:
     """(start, end, kind) of everything lizard misreads in Swift source:
-    "regex" (a regex literal), "raw" (a raw string literal) or "hash" (one
-    `#` that is not part of a line-leading compiler directive)."""
+    "regex" (a regex literal), "raw" (a raw string literal, or an ordinary one
+    whose interpolation holds another string literal) or "hash" (one `#`
+    that is not part of a line-leading compiler directive). Spans never
+    overlap: a literal span swallows any span found inside it.
+
+    Why nested literals (#398): lizard tokenises `"\\(ok ? "You're" : "x")"`
+    as three strings and a stray `'`, opens a char literal, and mis-brackets
+    the rest of the function (`answer` swallowed its neighbours, or vanished).
+    The whole outer literal becomes one `""`."""
     n = len(src)
     spans: List[Tuple[int, int, str]] = []
+    open_strings: List[bool] = []   # per open literal: did its interpolation hold a literal?
+
+    def literal_span(start: int, end: int) -> None:
+        spans[:] = [s for s in spans if s[0] < start]   # inner spans are inside this one
+        spans.append((start, end, "raw"))
 
     def skip_block_comment(i: int) -> int:          # src[i:i+2] == "/*"
         depth, i = 1, i + 2
@@ -873,6 +885,16 @@ def swift_lizard_spans(src: str) -> List[Tuple[int, int, str]]:
         return i
 
     def skip_string(i: int, hashes: int) -> int:     # src[i] == '"' after `hashes` #s
+        if open_strings:
+            open_strings[-1] = True                   # a literal inside an interpolation
+        open_strings.append(False)
+        end = skip_string_body(i, hashes)
+        nested = open_strings.pop()
+        if nested and not open_strings and not hashes:
+            literal_span(i, end)                      # raw strings: the caller records them
+        return end
+
+    def skip_string_body(i: int, hashes: int) -> int:
         quotes = 3 if src.startswith('"""', i) else 1
         close = '"' * quotes + "#" * hashes
         escape = "\\" + "#" * hashes
@@ -949,7 +971,7 @@ def swift_lizard_spans(src: str) -> List[Tuple[int, int, str]]:
                     j += 1
                 if j < n and src[j] == '"':
                     end = skip_string(j, j - i)
-                    spans.append((i, end, "raw"))
+                    literal_span(i, end)
                     i, prev = end, "value"
                     continue
                 if j < n and src[j] == "/":
@@ -1025,6 +1047,8 @@ def neutralize_swift_for_lizard(src: str) -> str:
 # scanning (needs lizard; everything above is pure)
 
 _SWIFT_DECL_WORDS = frozenset({"init", "subscript", "get", "set", "willSet", "didSet", "deinit"})
+_SWIFT_ACCESSOR_WORDS = frozenset({"get", "set", "willSet", "didSet", "deinit"})
+_SWIFT_ACCESSOR_EFFECTS = frozenset({"async", "throws", "rethrows", "mutating", "nonmutating"})
 
 
 def install_swift_property_support() -> None:
@@ -1033,7 +1057,12 @@ def install_swift_property_support() -> None:
     `.init` / `.get` after a dot (`map(String.init)`) is a member reference,
     not the start of an initializer or accessor (stock lizard opened a
     function there and swallowed the rest of the body: cloud review N1007,
-    `HalliePersonaQuestion.init` was really `detect`). Idempotent."""
+    `HalliePersonaQuestion.init` was really `detect`). An accessor word
+    opens a function only when its body follows (`get {`, `get async throws {`,
+    `set(v) {`); stock lizard opened one at ANY `get`/`set` and waited for the
+    next `{`, so `case .country(let c, let set):` or `private(set)` swallowed
+    the code after it (#458: `Scan.apply` read 32/238, really 16/36).
+    Idempotent."""
     from lizard_languages.swift import SwiftStates
     if getattr(SwiftStates, "_videoscan_props", False):
         return
@@ -1042,6 +1071,10 @@ def install_swift_property_support() -> None:
     def _state_global(self, token):
         if token in _SWIFT_DECL_WORDS and self.last_token == ".":
             return      # `String.init`, `cache.get(k)`: a member reference, not a declaration
+        if token in _SWIFT_ACCESSOR_WORDS:
+            self._vs_accessor = (token, self.context.current_line, 0)
+            self._state = self._vs_after_accessor_word
+            return
         if token == "var":
             self._vs_line = self.context.current_line
             self._state = self._vs_var_name
@@ -1064,7 +1097,25 @@ def install_swift_property_support() -> None:
             self.context.push_new_function(self._vs_name)
             self.next(self._function_impl, token)
 
+    def _vs_after_accessor_word(self, token):
+        word, line, parens = self._vs_accessor
+        if parens:                                  # inside `set(newValue)`
+            parens += {"(": 1, ")": -1}.get(token, 0)
+            self._vs_accessor = (word, line, parens)
+        elif token == "(" and word in ("set", "willSet", "didSet"):
+            self._vs_accessor = (word, line, 1)
+        elif token in _SWIFT_ACCESSOR_EFFECTS:
+            pass
+        elif token == "{":
+            self.context.push_new_function(word)
+            self.context.current_function.start_line = line
+            self.next(self._function_impl, token)
+        else:                                       # a binding or a value named get/set
+            self._state = self._state_global
+            self._state_global(token)
+
     SwiftStates._state_global = _state_global
+    SwiftStates._vs_after_accessor_word = _vs_after_accessor_word
     SwiftStates._vs_var_name = _vs_var_name
     SwiftStates._vs_after_var_name = _vs_after_var_name
     SwiftStates._videoscan_props = True
