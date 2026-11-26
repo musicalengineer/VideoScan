@@ -1480,6 +1480,17 @@ NAME_TOKEN_PY
 # suite-qualified ("Suite.method()") while a Swift Testing failure line is not
 # ("method()"). Sets CRASHED and CRASHED_NAMES_JSON; both are empty on a run
 # where every failure announced itself normally.
+#
+# GH #420: a Swift Testing test with a display name fails as `✘ Test "NARROW:
+# …" failed`, but the block lists it as `Suite.method()`; no token rule links
+# the two, and the log never prints the method of a display-named test. Each
+# display-named failure accounts for exactly one block entry the tokens leave
+# unmatched, so that many unmatched entries are ordinary failures, not crashes.
+# Which ones: first an entry whose suite printed `✘ Suite <Suite> failed` (a
+# suite whose host died never prints its verdict), then one not named by a
+# "Restarting after unexpected exit … in <entry>" line; the rest are crashes.
+# When the pairing is short (display names collapsed by sort -u), the excess
+# stays a crash: a false crash is noise, a hidden one is not allowed.
 parse_crashed_tests() {
     local out="$1"
     local parsed
@@ -1487,15 +1498,24 @@ parse_crashed_tests() {
 import json, os, sys
 
 try:
-    counted = {token(n) for n in json.loads(os.environ["COUNTED_NAMES"])}
+    counted_names = [str(n) for n in json.loads(os.environ["COUNTED_NAMES"])]
 except Exception:
-    counted = set()
+    counted_names = []
+counted = {token(n) for n in counted_names}
+displayed = sum(1 for n in counted_names if n.strip().startswith("\""))
 
 crashed, in_block = [], False
+failed_suites, restarted = set(), set()
 try:
     with open(os.environ["NIGHTLY_LOG"], errors="replace") as fh:
         for line in fh:
             stripped = line.strip()
+            m = re.match(r"✘ Suite ([A-Za-z_][\w.]*) failed after ", stripped)
+            if m:
+                failed_suites.add(m.group(1).rsplit(".", 1)[-1])
+            m = re.match(r"Restarting after unexpected exit, crash, or test timeout in (\S+?);", stripped)
+            if m:
+                restarted.add(token(m.group(1)))
             if stripped == "Failing tests:":
                 in_block = True
                 continue
@@ -1510,7 +1530,16 @@ try:
 except OSError:
     pass
 
-names = sorted(set(crashed))
+def suite_of(entry):
+    parts = re.sub(r"\(.*$", "", entry).split(".")
+    return parts[-2] if len(parts) >= 2 else ""
+
+entries = sorted(set(crashed))
+if displayed:
+    ranked = sorted(entries, key=lambda x: (suite_of(x) not in failed_suites, token(x) in restarted))
+    explained = set(ranked[:displayed])
+    entries = [x for x in entries if x not in explained]
+names = entries
 print(len(names))
 print(json.dumps(names))
 ' 2>/dev/null)

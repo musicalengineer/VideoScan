@@ -628,6 +628,51 @@ else
         fail "crashed-test recovery broke: got '$got', want '$want'"
     fi
 
+    # 8d2: GH #420. A Swift Testing test with a display name prints its failure
+    # as `✘ Test "display name" failed after …`, while the Failing-tests block
+    # lists it as `Suite.method()`: the tokens never match, so the one ordinary
+    # failure was ALSO published as a crash. Want crashed 0 — and a real crash
+    # beside a display-named failure must still be named.
+    cat > "$SANDBOX/display_failure.log" <<'LOG'
+◇ Suite VerifyCatalogExpectedSilenceTests started.
+◇ Test "NARROW: a long clip with silence still flags" started.
+✘ Test "NARROW: a long clip with silence still flags" recorded an issue at VerifyCatalogExpectedSilenceTests.swift:88:9: Expectation failed
+✘ Test "NARROW: a long clip with silence still flags" failed after 0.010 seconds with 1 issue.
+✘ Suite VerifyCatalogExpectedSilenceTests failed after 0.020 seconds with 1 issue.
+✔ Test quietIsStrict() passed after 0.001 seconds.
+
+Failing tests:
+	VideoScanTests.VerifyCatalogExpectedSilenceTests.narrowRuleStillFlags()
+
+** TEST FAILED **
+LOG
+    got=$(run_parse_crashed "$SANDBOX/display_failure.log")
+    if [ "$got" = "0|[]" ]; then
+        pass "display-named failure: counted once as a failure, never as a crash (#420)"
+    else
+        fail "display-named failure published as a crash: got '$got', want '0|[]'"
+    fi
+    cat > "$SANDBOX/display_failure_and_crash.log" <<'LOG'
+◇ Suite VerifyCatalogExpectedSilenceTests started.
+◇ Test "NARROW: a long clip with silence still flags" started.
+✘ Test "NARROW: a long clip with silence still flags" failed after 0.010 seconds with 1 issue.
+✘ Suite VerifyCatalogExpectedSilenceTests failed after 0.020 seconds with 1 issue.
+◇ Test diesHard() started.
+Restarting after unexpected exit, crash, or test timeout in CrashSuite.diesHard(); summary will include totals from previous launches.
+
+Failing tests:
+	CrashSuite.diesHard()
+	VideoScanTests.VerifyCatalogExpectedSilenceTests.narrowRuleStillFlags()
+
+** TEST EXECUTE FAILED **
+LOG
+    got=$(run_parse_crashed "$SANDBOX/display_failure_and_crash.log")
+    if [ "$got" = '1|["CrashSuite.diesHard()"]' ]; then
+        pass "display-named failure beside a crash: only the crash is named (#420)"
+    else
+        fail "display failure + crash: got '$got', want '1|[\"CrashSuite.diesHard()\"]'"
+    fi
+
     # 8e: a run where every failure announced itself normally must report NO
     # crashes — the new parser may not invent them from an ordinary block.
     for f in nightly_excerpt_green.log nightly_excerpt_one_failure.log; do
