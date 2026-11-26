@@ -309,13 +309,17 @@ if current and baseline:
         flags.append(f"Test count DROPPED {ct-bt:+d} ({bt} → {ct}) vs {baseline['_date']} — tests removed or not compiled?")
 
 # Static-analysis day-over-day (concurrency warnings are the live regression knob).
+# Only the M4 analysis lane's rows, compared with each other (#426): the stream
+# interleaves GitHub's nightly rows (these fields null, the build jobs are off)
+# and a lane row next to a GitHub row is never a day-over-day. The lane does not
+# measure CodeQL, so CodeQL is not compared here.
 sa_rows = load((TD_SA := os.environ.get("TD_SA","")).splitlines()) if os.environ.get("TD_SA") else []
+sa_rows = [r for r in sa_rows if r.get("source") == "m4-analysis-lane"]
 sa_rows.sort(key=lambda r: str(r.get("ts","")))
 if len(sa_rows) >= 2:
     a, b = sa_rows[-2], sa_rows[-1]
     for key, label in (("concurrency_warnings","concurrency warnings"),
-                       ("swiftlint_strict","swiftlint-strict"),
-                       ("codeql_findings","CodeQL findings")):
+                       ("swiftlint_strict","swiftlint-strict")):
         av, bv = a.get(key), b.get(key)
         if isinstance(av,int) and isinstance(bv,int) and bv - av >= 5:
             flags.append(f"{label} rose {bv-av:+d} ({av} → {bv}).")
