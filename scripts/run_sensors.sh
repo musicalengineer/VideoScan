@@ -27,8 +27,28 @@ set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 
-python3 "$HERE/sensor_lane.py" run "$@"
-rc=$?
+# 2026-11-07 (GH #453): `run_sensors.sh --help` exited 0 and was stamped green
+# with no test run. A stamp now needs the lane's own "sensor lane GREEN (N
+# tests)" line with N > 0 (rule 9: a run with no number is red). Help never
+# stamps; any other exit 0 without that line is red. The lane's output is
+# streamed (python3 -u, tee) and kept in a temp file only to read that line;
+# the file is one lane's console output (a few KB) and is deleted here.
+lane_out="$(mktemp "${TMPDIR:-/tmp}/run-sensors.XXXXXX")" || { echo "run_sensors.sh: mktemp failed" >&2; exit 1; }
+python3 -u "$HERE/sensor_lane.py" run "$@" | tee "$lane_out"
+rc=${PIPESTATUS[0]}
+ran=$(sed -nE 's/^sensor lane GREEN \(([0-9]+) tests?\)$/\1/p' "$lane_out" | tail -n 1)
+rm -f "$lane_out"
+asked_help=false
+for arg in "$@"; do
+    case "$arg" in -h|--help) asked_help=true ;; esac
+done
+if [ "$rc" -eq 0 ] && $asked_help; then
+    exit 0                                   # the help screen: not a run, never a stamp
+fi
+if [ "$rc" -eq 0 ] && [ "${ran:-0}" -le 0 ]; then
+    echo "sensor lane stamp NOT recorded: the lane exited 0 without a 'sensor lane GREEN (N tests)' line with N > 0 — a run with no number is red" >&2
+    rc=1
+fi
 if [ "$rc" -eq 0 ]; then
     # The stamp lives in scripts/sensor_lane_stamp.sh (tested by
     # tests/test_sensor_lane_stamp.py). 2026-10-25: the inline version built

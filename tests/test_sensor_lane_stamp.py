@@ -89,5 +89,67 @@ class Stamp(unittest.TestCase):
             self.assertIn("NOT recorded", out.stderr)
 
 
+# ── run_sensors.sh stamps only a lane that ran and printed its count (#453) ──
+# 2026-11-07: `scripts/run_sensors.sh --help` exited 0 (argparse's help) and the
+# wrapper stamped tree 68d56967 green with no test run. The fake lane below
+# stands in for sensor_lane.py; run_sensors.sh and the stamp script are the real ones.
+RUN_SENSORS = REPO / "scripts" / "run_sensors.sh"
+FAKE_LANE = """import sys
+mode = open(__file__.replace("sensor_lane.py", "mode")).read().strip()
+if "--help" in sys.argv or "-h" in sys.argv:
+    print("usage: sensor_lane.py run [-h] [--app-only]"); sys.exit(0)
+if mode == "green":
+    print("sensor lane: 2 app + 1 core sensors (Debug)"); print("sensor lane GREEN (3 tests)"); sys.exit(0)
+if mode == "zero":
+    print("sensor lane GREEN (0 tests)"); sys.exit(0)
+if mode == "silent":
+    sys.exit(0)
+print("SENSOR LANE RED", file=sys.stderr); sys.exit(1)
+"""
+
+
+class RunSensorsStamp(unittest.TestCase):
+    def lane(self, d: Path, mode: str, *args: str):
+        r = make_repo(d)
+        scripts = r / "scripts"
+        scripts.mkdir()
+        (scripts / "run_sensors.sh").write_text(RUN_SENSORS.read_text())
+        (scripts / "sensor_lane_stamp.sh").write_text(SCRIPT.read_text())
+        (scripts / "sensor_lane.py").write_text(FAKE_LANE)
+        (scripts / "mode").write_text(mode)
+        out = subprocess.run(["bash", str(scripts / "run_sensors.sh"), *args],
+                             capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
+        return out, r / ".git" / "sensor-lane-green"
+
+    def test_help_never_stamps(self):
+        with tempfile.TemporaryDirectory() as d:
+            out, stamp = self.lane(Path(d), "green", "--help")
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertIn("usage:", out.stdout)
+            self.assertFalse(stamp.exists(), "help is not a green run")
+
+    def test_a_run_that_prints_no_count_is_red_and_never_stamps(self):
+        for mode in ("silent", "zero"):
+            with tempfile.TemporaryDirectory() as d:
+                out, stamp = self.lane(Path(d), mode)
+                self.assertNotEqual(out.returncode, 0, f"{mode}: a run with no number is red (rule 9)")
+                self.assertFalse(stamp.exists(), mode)
+                self.assertIn("NOT recorded", out.stderr, mode)
+
+    def test_a_red_run_never_stamps(self):
+        with tempfile.TemporaryDirectory() as d:
+            out, stamp = self.lane(Path(d), "red")
+            self.assertEqual(out.returncode, 1)
+            self.assertFalse(stamp.exists())
+
+    def test_a_green_run_with_its_count_stamps_and_streams_its_output(self):
+        with tempfile.TemporaryDirectory() as d:
+            out, stamp = self.lane(Path(d), "green", "--app-only")
+            self.assertEqual(out.returncode, 0, out.stderr)
+            self.assertIn("sensor lane GREEN (3 tests)", out.stdout)
+            self.assertIn("sensor lane stamp: tree ", out.stdout)
+            self.assertTrue(stamp.exists())
+
+
 if __name__ == "__main__":
     unittest.main()
