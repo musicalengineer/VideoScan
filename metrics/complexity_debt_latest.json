@@ -1,15 +1,15 @@
 {
  "overrides_recent": [],
  "overrides_total": 0,
- "ts": "2026-11-25T15:10:37Z",
- "sha": "d43c3013",
+ "ts": "2026-11-26T14:36:42Z",
+ "sha": "f2b8b56b",
  "thresholds": {
   "ccn": 15,
   "nloc": 80
  },
- "offenders": 361,
- "baseline_before": 349,
- "baseline_after": 349,
+ "offenders": 364,
+ "baseline_before": 351,
+ "baseline_after": 351,
  "new": [
   {
    "key": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesDiskWorker.deleteQuarantinedWhileReserved",
@@ -40,7 +40,7 @@
    "file": "VideoScan/VideoScan/Media/VideoScanModel+ProbeEngine.swift",
    "function": "VideoScanModel.probeFileOutcome",
    "ccn": 15,
-   "nloc": 86,
+   "nloc": 88,
    "lang": "swift"
   },
   {
@@ -56,7 +56,15 @@
    "file": "VideoScan/VideoScan/Volumes/VideoScanModel+ScanMerge.swift",
    "function": "VideoScanModel.commitScanResults",
    "ccn": 14,
-   "nloc": 85,
+   "nloc": 87,
+   "lang": "swift"
+  },
+  {
+   "key": "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI+Picker.swift::HallieShellCLI.pick",
+   "file": "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI+Picker.swift",
+   "function": "HallieShellCLI.pick",
+   "ccn": 14,
+   "nloc": 81,
    "lang": "swift"
   },
   {
@@ -124,7 +132,7 @@
    "file": "VideoScan/VideoScan/App/VideoScanApp.swift",
    "function": "VideoScanApp.body",
    "ccn": 15,
-   "nloc": 271,
+   "nloc": 270,
    "lang": "swift",
    "base_ccn": 13,
    "base_nloc": 238

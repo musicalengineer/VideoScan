@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 349,
+ "entry_count": 351,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 17,
@@ -150,6 +150,10 @@
    "ccn": 17,
    "nloc": 66
   },
+  "VideoScan/VideoScan/ArchiveAngel/Recommend/AngelRuleLanguage.swift::AngelCondition.matches": {
+   "ccn": 17,
+   "nloc": 29
+  },
   "VideoScan/VideoScan/ArchiveAngel/Recommend/AngelRuleLanguage.swift::AngelEvalContext.candidateFlag": {
    "ccn": 17,
    "nloc": 22
@@ -215,8 +219,8 @@
    "nloc": 27
   },
   "VideoScan/VideoScan/Catalog/CatalogSearchIndex.swift::CatalogSearchIndex.loadFromDisk": {
-   "ccn": 18,
-   "nloc": 49
+   "ccn": 19,
+   "nloc": 50
   },
   "VideoScan/VideoScan/Catalog/CatalogToolbar.swift::CatalogToolbar.body": {
    "ccn": 21,
@@ -247,7 +251,7 @@
    "nloc": 44
   },
   "VideoScan/VideoScan/Catalog/TriageView.swift::TriageView.fileTable": {
-   "ccn": 11,
+   "ccn": 12,
    "nloc": 87
   },
   "VideoScan/VideoScan/Catalog/TriageView.swift::TriageView.toolbar": {
@@ -268,7 +272,7 @@
   },
   "VideoScan/VideoScan/Catalog/VideoScanModel+CatalogVerification.swift::VideoScanModel.backfillAllProvenance": {
    "ccn": 12,
-   "nloc": 96
+   "nloc": 88
   },
   "VideoScan/VideoScan/Catalog/VideoScanModel+CatalogVerification.swift::VideoScanModel.verifyCatalog": {
    "ccn": 20,
@@ -280,7 +284,7 @@
   },
   "VideoScan/VideoScan/Catalog/VideoScanModel+DateInference.swift::VideoScanModel.unwindUnverifiedPropagatedDates": {
    "ccn": 17,
-   "nloc": 75
+   "nloc": 73
   },
   "VideoScan/VideoScan/Catalog/VideoScanModel+Provenance.swift::VideoScanModel.buildMigrationOverview": {
    "ccn": 10,
@@ -291,8 +295,8 @@
    "nloc": 85
   },
   "VideoScan/VideoScan/Catalog/VideoScanModel+Rename.swift::VideoScanModel.renameRecord": {
-   "ccn": 26,
-   "nloc": 94
+   "ccn": 20,
+   "nloc": 87
   },
   "VideoScan/VideoScan/FamilyTree/FamilyAssetStore.swift::FamilyAssetImageValidator.isStructurallyComplete": {
    "ccn": 17,
@@ -333,6 +337,10 @@
   "VideoScan/VideoScan/FamilyTree/FamilyTreeCards.swift::FamilyTreePersonCard.body": {
    "ccn": 18,
    "nloc": 180
+  },
+  "VideoScan/VideoScan/FamilyTree/FamilyTreeLiveModel.swift::FamilyTreeLiveModel.init": {
+   "ccn": 20,
+   "nloc": 74
   },
   "VideoScan/VideoScan/FamilyTree/FamilyTreeLiveModel.swift::FamilyTreeLiveModel.refilterNow": {
    "ccn": 20,
@@ -391,12 +399,12 @@
    "nloc": 98
   },
   "VideoScan/VideoScan/Hallie/ArchivistChatWindow.swift::ArchivistChatWindow.handle": {
-   "ccn": 24,
+   "ccn": 23,
    "nloc": 75
   },
   "VideoScan/VideoScan/Hallie/ArchivistChatWindow.swift::ArchivistChatWindow.identityHeader": {
    "ccn": 16,
-   "nloc": 109
+   "nloc": 111
   },
   "VideoScan/VideoScan/Hallie/ArchivistConversationCommand.swift::ArchivistConversationCommand.detectSocialLine": {
    "ccn": 18,
@@ -546,9 +554,9 @@
    "ccn": 16,
    "nloc": 70
   },
-  "VideoScan/VideoScan/Hallie/HallieEnglishWords.swift::HallieEnglishWords.set": {
+  "VideoScan/VideoScan/Hallie/HallieEnglishWords.swift::HallieEnglishWords.contains": {
    "ccn": 19,
-   "nloc": 17
+   "nloc": 13
   },
   "VideoScan/VideoScan/Hallie/HallieGeneralAnswerBoundary.swift::HallieGeneralAnswerBoundary.isFamilyAdvice": {
    "ccn": 23,
@@ -627,7 +635,7 @@
    "nloc": 89
   },
   "VideoScan/VideoScan/Hallie/HallieTurnExecutor+Conversation.swift::HallieTurnExecutor.joinedTwoQuestionAnswer": {
-   "ccn": 20,
+   "ccn": 18,
    "nloc": 70
   },
   "VideoScan/VideoScan/Hallie/HallieTurnExecutor+Conversation.swift::HallieTurnExecutor.lineageTurn": {
@@ -867,8 +875,8 @@
    "nloc": 89
   },
   "VideoScan/VideoScan/Media/VideoScanModel+ProbeEngine.swift::VideoScanModel.runTargetProbeGroup": {
-   "ccn": 15,
-   "nloc": 129
+   "ccn": 14,
+   "nloc": 122
   },
   "VideoScan/VideoScan/MediaOps/BalanceAudioJob.swift::BalanceAudioJob.runBalance": {
    "ccn": 30,
@@ -967,12 +975,12 @@
    "nloc": 116
   },
   "VideoScan/VideoScan/MediaOps/VerifyVideoRules.swift::VerifyVideoRules.noteFragment": {
-   "ccn": 24,
+   "ccn": 22,
    "nloc": 42
   },
   "VideoScan/VideoScan/MediaOps/VideoScanModel+Combine.swift::VideoScanModel.combineAllPairsInternal": {
    "ccn": 19,
-   "nloc": 116
+   "nloc": 112
   },
   "VideoScan/VideoScan/MediaOps/VideoScanModel+Combine.swift::VideoScanModel.runMuxAndVerify": {
    "ccn": 14,
@@ -1031,7 +1039,7 @@
    "nloc": 176
   },
   "VideoScan/VideoScan/People/PersonEditSheet.swift::PersonEditSheet.relationshipsSection": {
-   "ccn": 13,
+   "ccn": 15,
    "nloc": 91
   },
   "VideoScan/VideoScan/People/PersonEvaluationCLI.swift::PersonEvaluationCLI.evaluate": {
