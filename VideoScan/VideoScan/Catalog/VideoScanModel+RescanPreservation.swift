@@ -490,10 +490,17 @@ struct RescanPreservedFields: Sendable {
     /// size is the size the fresh record carries (the commit binds the
     /// digest to it). Anything else → nil: the file is hashed again.
     /// A sampled hash or a path never qualifies (rule 6).
+    ///
+    /// Round 2 (Codex #387 F3): the probe's stamp is as old as the probe —
+    /// Update Catalog's Apply can come long after its Preview. `now` is a
+    /// stamp taken AT THE MERGE (`gatherMergeTimeStamps`); the digest must
+    /// describe it too, so bytes rewritten after the probe (ctime moved) are
+    /// hashed again. nil `now` (not stamped, file gone) → nil.
     @MainActor
-    static func carriedContentFixity(live: ContentFixity?, onto rec: VideoRecord) -> ContentFixity? {
+    static func carriedContentFixity(live: ContentFixity?, onto rec: VideoRecord,
+                                     now: FileIdentityStamp?) -> ContentFixity? {
         guard let live, let stamp = rec.scanIdentityStamp, stamp.size == rec.sizeBytes,
-              live.describesFileNow(stamp) else { return nil }
+              live.describesFileNow(stamp), live.describesFileNow(now) else { return nil }
         return live
     }
 

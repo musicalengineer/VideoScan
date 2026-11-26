@@ -311,6 +311,39 @@ extension VideoScanModel {
         return await evidenceTask.value
     }
 
+    /// GH #434 r2 — the paths whose stored whole-file digest MAY follow
+    /// the file (the fresh record has none, its probe stamp exists, and a
+    /// live row at the path holds a digest that describes that stamp), each
+    /// stamped again NOW, off the main actor. Only these are opened: a
+    /// rescan of files with no digest stamps nothing.
+    ///
+    /// Cost: one O(records) pass on the main actor (dictionary lookups),
+    /// then per candidate open + fstat + fgetattrlist + stat on a detached
+    /// task (~10 µs local, a few round trips on SMB). Worst-case memory:
+    /// one path + one FileIdentityStamp (~100 B) per candidate — 100k
+    /// candidates ≈ 10 MB, freed when the merge returns.
+    func gatherMergeTimeStamps(targetRecords: [VideoRecord]) async -> [String: FileIdentityStamp] {
+        var probed: [String: FileIdentityStamp] = [:]
+        for fresh in targetRecords where fresh.contentFixity == nil {
+            if let stamp = fresh.scanIdentityStamp { probed[fresh.fullPath] = stamp }
+        }
+        guard !probed.isEmpty else { return [:] }
+        var candidates = Set<String>()
+        for rec in records {
+            guard let fixity = rec.contentFixity, let probe = probed[rec.fullPath],
+                  fixity.describesFileNow(probe) else { continue }
+            candidates.insert(rec.fullPath)
+        }
+        guard !candidates.isEmpty else { return [:] }
+        let paths = Array(candidates)
+        // Task.detached ≈ std::async on a pool thread, not the UI thread.
+        return await Task.detached(priority: .userInitiated) {
+            var now = [String: FileIdentityStamp](minimumCapacity: paths.count)
+            for path in paths { now[path] = FileIdentityStamp.capture(path: path) }
+            return now
+        }.value
+    }
+
     /// Step 3 — POST-await re-derivation (synchronous, main actor).
     ///
     /// ATOMICITY RE-DERIVATION (QA correctness constraint, 2026-07-02):
@@ -430,8 +463,10 @@ extension VideoScanModel {
     ///   consecutive-inaccessible threshold: volume unmounted mid-scan) —
     ///   the merge then upserts and NEVER prunes.
     ///
-    /// ASYNC (2026-07-02): complete-scan merges suspend ONCE, while the
-    /// existence sweep runs off-actor. Partial merges never suspend.
+    /// ASYNC (2026-07-02): complete-scan merges suspend while the existence
+    /// sweep runs off-actor. GH #434 r2: every merge first suspends once for
+    /// the merge-time stamp sweep (`gatherMergeTimeStamps`), before anything
+    /// is derived from `records`; after that a partial merge never suspends.
     ///
     /// Caller is responsible for persisting (saveCatalogDebounced) — kept
     /// out of here so tests can assert pure in-memory semantics.
@@ -442,8 +477,15 @@ extension VideoScanModel {
         targetRecords: [VideoRecord],
         scanWasComplete: Bool
     ) async -> ScanMergeOutcome {
+        // GH #434 r2 (Codex #387 F3): a stored digest follows a re-seen file
+        // only if the file is unchanged NOW, at the merge (Update Catalog's
+        // Apply may come long after its Preview probed the file). Keyed by
+        // path, so it survives the suspensions below like the existence
+        // evidence does.
+        let stampsNow = await gatherMergeTimeStamps(targetRecords: targetRecords)
         guard scanWasComplete else {
-            return mergePartialScanResults(root: root, volName: volName, targetRecords: targetRecords)
+            return mergePartialScanResults(root: root, volName: volName, targetRecords: targetRecords,
+                                           stampsNow: stampsNow)
         }
         var outcome = ScanMergeOutcome()
         outcome.upserted = targetRecords.count
@@ -533,7 +575,7 @@ extension VideoScanModel {
         // this pass and removeAll/append, so stale scan/preview instances can
         // no longer replay an earlier value over a later edit or verdict.
         (outcome.liveValuesApplied, outcome.hashesKept) = reconcileLivePreservedFieldsBeforeReplacement(
-            root: root, targetRecords: targetRecords)
+            root: root, targetRecords: targetRecords, stampsNow: stampsNow)
         // Remove only what the scan re-saw (replaced by the fresh instance)
         // or what is genuinely gone from disk — retained-invisible records
         // stay untouched (original instances, so their dossier/user fields
@@ -667,7 +709,8 @@ extension VideoScanModel {
     private func mergePartialScanResults(
         root: String,
         volName: String,
-        targetRecords: [VideoRecord]
+        targetRecords: [VideoRecord],
+        stampsNow: [String: FileIdentityStamp]
     ) -> ScanMergeOutcome {
         var outcome = ScanMergeOutcome()
         let newPaths = Set(targetRecords.map(\.fullPath))
@@ -684,7 +727,7 @@ extension VideoScanModel {
         // every replacement door has one live-wins contract (curated values
         // edited during the scan, and the fixity verdict).
         (outcome.liveValuesApplied, outcome.hashesKept) = reconcileLivePreservedFieldsBeforeReplacement(
-            root: root, targetRecords: targetRecords)
+            root: root, targetRecords: targetRecords, stampsNow: stampsNow)
         let keptHistory = Self.historyRowsKeptAtReseenPaths(records, root: root, newPaths: newPaths)
         let leaving: (VideoRecord) -> Bool = {
             PathScope.contains($0.fullPath, within: root) && newPaths.contains($0.fullPath)
@@ -806,7 +849,8 @@ extension VideoScanModel {
     @discardableResult
     func reconcileLivePreservedFieldsBeforeReplacement(
         root: String,
-        targetRecords: [VideoRecord]
+        targetRecords: [VideoRecord],
+        stampsNow: [String: FileIdentityStamp]
     ) -> (applied: Int, hashesKept: Int) {
         let restoredFromSnapshot = pendingRescanRestoredPaths.removeValue(forKey: PathScope.normalize(root)) ?? []
         let wantedPaths = Set(targetRecords.map(\.fullPath))
@@ -833,11 +877,13 @@ extension VideoScanModel {
             guard let live = liveByPath[fresh.fullPath], live !== fresh else { continue }
             liveIDs[fresh.fullPath] = live.id
             // GH #434: the live row's whole-file digest follows a file the
-            // probe proved unchanged; read here, at the last moment, so a
-            // digest Verify cleared or Fill In wrote during the scan is the
-            // one judged. A fresh record that already carries one keeps it.
+            // probe proved unchanged AND the merge-time stamp proves still
+            // unchanged (r2); read here, at the last moment, so a digest
+            // Verify cleared or Fill In wrote during the scan is the one
+            // judged. A fresh record that already carries one keeps it.
             if fresh.contentFixity == nil,
-               let kept = RescanPreservedFields.carriedContentFixity(live: live.contentFixity, onto: fresh) {
+               let kept = RescanPreservedFields.carriedContentFixity(live: live.contentFixity, onto: fresh,
+                                                                     now: stampsNow[fresh.fullPath]) {
                 fresh.contentFixity = kept
                 hashesKept += 1
             }

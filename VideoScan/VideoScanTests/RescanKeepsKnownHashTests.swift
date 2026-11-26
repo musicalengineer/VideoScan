@@ -24,6 +24,10 @@
 //   aRacilyCleanStampIsNeverTrusted (truth) .......................... green → green
 //   theCarryRuleAt100kRowsFitsTheBudget (scale) ...................... green → green
 //
+// Round 2 (Codex #387, 2026-11-26) — red on f46238563, green after:
+//   aFileRewrittenBetweenProbeAndApplyIsHashedAgain (truth) .......... RED → green
+//   aFileRewrittenBeforeAPartialMergeIsHashedAgain (truth) ........... RED → green
+//
 // Dimensions: LOGIC + TRUTH (above); CATALOG WRITER — an edit inside the
 // debounce window, during a write hold, across a role flip, then relaunch
 // (each test ends with a relaunch read of catalog.sqlite); SCALE (100k);
@@ -214,6 +218,66 @@ struct RescanKeepsKnownHashTests {
         #expect(fresh.contentFixity == nil, "a rewritten file kept the old digest — a lie about its bytes")
     }
 
+    /// Codex #387 finding 3: Update Catalog Preview probes (and stamps) the
+    /// file; Apply merges later. The bytes change in between — same size,
+    /// mtime put back, only ctime moves. The probe's stamp still matches the
+    /// stored digest's; only a stamp taken at Apply can see the change.
+    static func rewriteKeepingSizeAndMtime(_ c: Catalogued) throws {
+        let mtime = try #require(c.record.contentFixity?.stamp.mtimeNs)
+        usleep(20_000)
+        let handle = try FileHandle(forWritingTo: c.url)
+        try handle.seek(toOffset: 1000); try handle.write(contentsOf: Data([0xFF, 0xFE])); try handle.close()
+        try Self.age(c.url, mtime: Date(timeIntervalSince1970: Double(mtime) / 1e9))
+    }
+
+    @Test("TRUTH: a file rewritten AFTER the probe (Preview) and before the merge (Apply) is hashed again")
+    func aFileRewrittenBetweenProbeAndApplyIsHashedAgain() async throws {
+        let scene = try CutoverScene.make("r434_preview_apply"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        let c = try Self.catalogue(in: scene)
+        let target = CatalogScanTarget(searchPath: c.root)
+        scene.model.snapshotPreservedFieldsForRescan(of: target)
+        let fresh = await Self.probe(scene.model, c.url)                 // Preview
+        try #require(fresh.scanIdentityStamp != nil, "the probe stamped the file")
+        try Self.rewriteKeepingSizeAndMtime(c)                           // between Preview and Apply
+        scene.model.applyPreservedFieldsAfterRescan(of: target, onto: [fresh])
+        let outcome = await scene.model.commitScanResults(root: c.root, volName: "Fixture",
+                                                          targetRecords: [fresh], scanWasComplete: true)  // Apply
+        #expect(fresh.contentFixity == nil, "the old digest was carried onto bytes that changed after the probe")
+        #expect(outcome.hashesKept == 0)
+    }
+
+    @Test("TRUTH: a file rewritten after the probe is hashed again by a PARTIAL (stopped) scan's merge too")
+    func aFileRewrittenBeforeAPartialMergeIsHashedAgain() async throws {
+        let scene = try CutoverScene.make("r434_partial"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        let c = try Self.catalogue(in: scene)
+        let target = CatalogScanTarget(searchPath: c.root)
+        scene.model.snapshotPreservedFieldsForRescan(of: target)
+        let fresh = await Self.probe(scene.model, c.url)
+        try Self.rewriteKeepingSizeAndMtime(c)
+        scene.model.applyPreservedFieldsAfterRescan(of: target, onto: [fresh])
+        let outcome = await scene.model.commitScanResults(root: c.root, volName: "Fixture",
+                                                          targetRecords: [fresh], scanWasComplete: false)
+        #expect(fresh.contentFixity == nil, "a partial merge carried the old digest onto changed bytes")
+        #expect(outcome.hashesKept == 0)
+    }
+
+    @Test("control: an unchanged file keeps its hash through a PARTIAL (stopped) scan's merge")
+    func anUnchangedFileKeepsItsHashThroughAPartialMerge() async throws {
+        let scene = try CutoverScene.make("r434_partial_ok"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        let c = try Self.catalogue(in: scene)
+        let target = CatalogScanTarget(searchPath: c.root)
+        scene.model.snapshotPreservedFieldsForRescan(of: target)
+        let fresh = await Self.probe(scene.model, c.url)
+        scene.model.applyPreservedFieldsAfterRescan(of: target, onto: [fresh])
+        let outcome = await scene.model.commitScanResults(root: c.root, volName: "Fixture",
+                                                          targetRecords: [fresh], scanWasComplete: false)
+        #expect(VideoScanModel.storedFullDigest(fresh) == c.digest)
+        #expect(outcome.hashesKept == 1)
+    }
+
     @Test("TRUTH: another file put at the path (new inode, same size and mtime) is hashed again")
     func aFileReplacedAtThePathIsHashedAgain() async throws {
         let scene = try CutoverScene.make("r434_replace"); defer { scene.cleanup() }
@@ -280,7 +344,7 @@ struct RescanKeepsKnownHashTests {
         let clock = ContinuousClock()
         var kept = 0
         let elapsed = clock.measure {
-            for (live, fresh) in pairs where RescanPreservedFields.carriedContentFixity(live: live, onto: fresh) != nil { kept += 1 }
+            for (live, fresh) in pairs where RescanPreservedFields.carriedContentFixity(live: live, onto: fresh, now: fresh.scanIdentityStamp) != nil { kept += 1 }
         }
         print("[scale] carry rule over 100,000 rows: \(elapsed), kept \(kept)")
         #expect(kept == 90_000, "every unchanged stamp kept, every changed one dropped")

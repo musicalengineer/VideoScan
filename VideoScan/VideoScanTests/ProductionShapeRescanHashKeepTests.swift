@@ -49,14 +49,15 @@ struct ProductionShapeRescanHashKeepTests {
             let unchanged = VideoRecord()
             unchanged.apply(ProbeOutcome(scanDerivedFrom: live))
             unchanged.scanIdentityStamp = fixity.stamp
-            if RescanPreservedFields.carriedContentFixity(live: fixity, onto: unchanged) != nil { keptUnchanged += 1 }
+            if RescanPreservedFields.carriedContentFixity(live: fixity, onto: unchanged, now: fixity.stamp) != nil { keptUnchanged += 1 }
 
             let s = fixity.stamp
             let touched = VideoRecord()
             touched.apply(ProbeOutcome(scanDerivedFrom: live))
             touched.scanIdentityStamp = FileIdentityStamp(device: s.device, inode: s.inode, size: s.size, mtimeNs: s.mtimeNs,
                                                           ctimeNs: s.ctimeNs &+ 1, volumeUUID: s.volumeUUID)
-            if RescanPreservedFields.carriedContentFixity(live: fixity, onto: touched) != nil { keptTouched += 1 }
+            if RescanPreservedFields.carriedContentFixity(live: fixity, onto: touched, now: touched.scanIdentityStamp) != nil
+                || RescanPreservedFields.carriedContentFixity(live: fixity, onto: unchanged, now: touched.scanIdentityStamp) != nil { keptTouched += 1 }
         }
         await shape.close()
         print("rescan hash keep (production shape): \(withDigest) live rows with a whole-file digest · "
