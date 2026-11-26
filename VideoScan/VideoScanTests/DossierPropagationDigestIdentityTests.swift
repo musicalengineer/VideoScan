@@ -80,7 +80,7 @@ struct DossierPropagationDigestIdentityTests {
 
         model.applyAudioTranscript("happy birthday grandma", modelID: "whisper-test", to: target)
 
-        #expect(other.audioTranscript ?? "" == "", "a transcript crossed to different bytes")
+        #expect((other.audioTranscript ?? "").isEmpty, "a transcript crossed to different bytes")
     }
 
     @Test("same partialMD5, neither hashed in full: nothing propagates")
