@@ -312,7 +312,16 @@ struct FilenameDatePatternTests {
             ("IMG_2004-03.MOV",                      "-"),
             ("DSC_2001_05.mov",                      "-"),
             ("100_2005-06.MOV",                      "-"),
+            ("101_2005-06.MOV",                      "-"),                // DCF folder 100-999
+            ("1000_2005-06.MOV",                     "-"),
             // Still months: a real year beside a month word or a suffix.
+            // Codex #232 round 1: a 1-2 digit tape / reel / part number
+            // before an explicit year-month is not a camera counter.
+            ("Tape1_1998-09.mov",                    "1998-09 month"),
+            ("Tape2-2003-07.avi",                    "2003-07 month"),
+            ("Reel_1_1985-12.mov",                   "1985-12 month"),
+            ("Part 12_1994-06.dv",                   "1994-06 month"),
+            ("Tape1_1998.mov",                       "1998 year"),
             ("May_1994_1920x1080.mov",               "1994-05 month"),
             ("June 1994 cookout.dv",                 "1994-06 month"),
             ("Tape 1998-09.avi",                     "1998-09 month"),

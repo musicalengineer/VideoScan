@@ -492,10 +492,17 @@ public enum FilenameDatePattern {
         guard s.plausibleYear(r.value) else { return false }
         // Camera counters, not years: "IMG_1995", "DSC2001", "100_2005"
         // (Kodak folder_frame). Look at what sits just before the
-        // digits, through at most one "_" / "-".
+        // digits, through at most one "_" / "-". A number there is a
+        // counter's folder only at 3+ digits (DCF folders are 100-999);
+        // a 1-2 digit one is a tape / reel / part number and the year
+        // stands: "Tape1_1998-09", "Reel_1_1985-12" (Codex #232 round 1).
         var e = r.start
         if e > 0, s.chars[e - 1] == "_" || s.chars[e - 1] == "-" { e -= 1 }
-        if e > 0, s.chars[e - 1].isNumber { return false }
+        var digitsBefore = 0
+        while digitsBefore < 3, e - digitsBefore > 0, s.chars[e - digitsBefore - 1].isNumber {
+            digitsBefore += 1
+        }
+        if digitsBefore >= 3 { return false }
         // QA v12 #1: a dimension, bitrate or rate is not a year —
         // "1920x1080", "1080x1920", "2000k", "2000kbps", "2000fps",
         // "1920p". Only IMMEDIATE neighbours count ("1994pics" and
