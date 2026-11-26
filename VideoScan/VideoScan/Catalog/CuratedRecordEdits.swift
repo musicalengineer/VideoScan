@@ -118,15 +118,18 @@ struct CuratedRecordEdits {
     /// archived — and is the one writer of `userDate`). `archived` is the
     /// caller's fresh `InspectorDateEdit.archivedCopy(fixing:…) != nil`.
     /// The caller posts the mutation on `.saved` / `.cleared`, as before.
+    /// GH #528: the model's date seam is asked here as well, so a caller that
+    /// passes a stale `archived` can never write a date onto any copy of
+    /// archived content.
     func saveUserDate(entry: String, known: Bool, on rec: VideoRecord, archived: Bool) -> InspectorDateEdit.Outcome? {
         guard !CuratedEditGuard.refuses("date", model: model) else { return nil }
-        return InspectorDateEdit.save(entry: entry, known: known, to: rec, readOnly: archived)
+        return InspectorDateEdit.save(entry: entry, known: known, to: rec, readOnly: archived || model.isDateReadOnly(rec))
     }
 
     /// Forget the date: the read-only guard, then the archive's rule.
     func clearUserDate(on rec: VideoRecord, archived: Bool) -> InspectorDateEdit.Outcome? {
         guard !CuratedEditGuard.refuses("date", model: model) else { return nil }
-        return InspectorDateEdit.clear(rec, readOnly: archived)
+        return InspectorDateEdit.clear(rec, readOnly: archived || model.isDateReadOnly(rec))
     }
 
     /// `place` nil clears (with its confidence). Caller posts the mutation.

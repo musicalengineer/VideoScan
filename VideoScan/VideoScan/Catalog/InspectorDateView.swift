@@ -63,15 +63,6 @@ struct InspectorDateView: View {
     /// it is open, or why it was not offered.
     @State private var updatePreview: ArchiveUpdatePreview?
     @State private var updateRefusal: String?
-    /// The archived copy that fixes this record's date (ids; empty = none).
-    /// RenderMemo is a class held by @State: filling it in body is not a
-    /// state change (CatalogPerfMemo.swift).
-    @State private var fixedByMemo = RenderMemo<FixedByKey, [UUID]>()
-
-    private struct FixedByKey: Equatable {
-        let id: UUID
-        let version: RecordsVersion
-    }
 
     init(record: VideoRecord) {
         self.record = record
@@ -82,23 +73,16 @@ struct InspectorDateView: View {
         _isKnown = State(initialValue: record.userDateStatus == .known)
     }
 
-    /// The archived record whose filed date fixes this one's: itself (the
-    /// seam, O(1)) or a live same-content archived copy (memoized scan).
+    /// The archived record whose filed date fixes this one's: itself, or a
+    /// live same-content archived copy (GH #528: O(1) through the model's
+    /// ArchivedContentIndex — no scan, no memo, current after any change).
     private var fixedBy: VideoRecord? {
-        if model.isDateReadOnly(record) { return record }
-        let key = FixedByKey(id: record.id, version: RecordsVersion(count: model.records.count,
-                                                                    revision: model.volumeAggregatesRevision))
-        let ids = fixedByMemo.value(for: key) {
-            InspectorDateEdit.archivedCopy(fixing: record, in: model.records, isReadOnly: model.isDateReadOnly)
-                .map { [$0.id] } ?? []
-        }
-        return ids.first.flatMap { model.record(forID: $0) }
+        model.archivedCopyFixingDate(of: record)
     }
 
-    /// At a Save: asked fresh, never from the memo (a copy archived since
-    /// the last render still fixes the date).
+    /// At a Save: the same O(1) question, asked at the moment of the write.
     private func fixedNow() -> VideoRecord? {
-        InspectorDateEdit.archivedCopy(fixing: record, in: model.records, isReadOnly: model.isDateReadOnly)
+        model.archivedCopyFixingDate(of: record)
     }
 
     var body: some View {
