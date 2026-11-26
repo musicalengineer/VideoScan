@@ -7,18 +7,21 @@
 // as OFFERS. It writes NOTHING: no catalog row, no file, no ledger line; the
 // carry is a separate act Rick confirms (HeldBackStore.carry).
 //
-// Proof (HeldBackProver): whole-file SHA-256 read now against the row's
-// stored digest when it has one; else the `v1:` sampled hash read now
-// against the row's stored one (the offer says "weaker"); a row with neither
-// is never offered. A name + size match whose content proof fails is NOT
-// offered — it is counted "differs" and named in the log.
+// Proof (HeldBackProver), bound to the DESTINATION (Codex #385 #1): the
+// live file's catalog row must store a whole-file SHA-256 (else not offered
+// — "needs a full hash"), and every byte read now must hash to it (else not
+// offered — "not the content its row records"). Then: that digest equal to
+// the row's stored one → PROVEN; else the `v1:` sampled hash read now equal
+// to the row's → LIKELY the same file (sampled check — every word says so);
+// a row with neither is never offered. A name + size match whose content
+// differs is NOT offered — counted "differs" and named in the log.
 //
 // Pause / Stop between files and inside a whole-file read (the gate's
 // stop cancels the read at the next 1 MiB block). Stop keeps what was
 // proven so far. START / per-pair / OUTCOME through `note`.
 //
-// Memory: one 1 MiB read buffer at a time (the whole-file read) or three
-// 1 MiB windows (the sampled hash); the plan (≈ 1 KB a task) and the offers
+// Memory: one 1 MiB read buffer at a time (the whole-file read, then for a
+// sampled row three 1 MiB windows); the plan (≈ 1 KB a task) and the offers
 // (≈ 1 KB each) stay with the row. Reads are sequential: one file at a time,
 // so a USB drive is never asked for two streams.
 //
@@ -37,7 +40,10 @@ final class FindMovedCopiesJob: @MainActor MediaFileOperationJob {
         var rows = 0
         var candidates = 0
         var proven = 0
+        var likely = 0
         var differs = 0
+        var notRecordedContent = 0
+        var needsFullHash = 0
         var noEvidence = 0
         var couldNotRead = 0
         var notStarted = 0
@@ -124,8 +130,9 @@ final class FindMovedCopiesJob: @MainActor MediaFileOperationJob {
                 }
                 subtitleText = "Checking \(done + 1) of \(plan.candidateCount) — \(live.filename)"
                 let prover = self.prover, digest = t.entry.digest, sampled = t.entry.sampledHash, path = live.fullPath
+                let destination = live.digest
                 let result = await Task.detached(priority: .userInitiated) {
-                    prover.prove(rowDigest: digest, rowSampled: sampled, candidatePath: path)
+                    prover.prove(rowDigest: digest, rowSampled: sampled, candidatePath: path, destinationDigest: destination)
                 }.value
                 record(result, task: t, live: live)
                 done += 1
@@ -146,13 +153,21 @@ final class FindMovedCopiesJob: @MainActor MediaFileOperationJob {
         let pair = "row \(t.entry.qid) \(t.entry.filename) → \(live.fullPath)"
         switch result {
         case .proven(let evidence, let stamp):
-            tally.proven += 1
+            if evidence == .wholeFileSHA256 { tally.proven += 1 } else { tally.likely += 1 }
             let offer = HeldBackOffer.make(entry: t.entry, old: t.old, live: live, evidence: evidence, stamp: stamp)
             offers.append(offer)
-            note("  PROVEN \(pair) by \(evidence.rawValue)" + (offer.blocked.map { " — not offered: \($0)" } ?? ""))
+            note("  \(evidence == .wholeFileSHA256 ? "PROVEN" : "LIKELY") \(pair) — \(evidence.label)"
+                 + (offer.blocked.map { " — not offered: \($0)" } ?? ""))
         case .differs(let evidence):
             tally.differs += 1
             note("  DIFFERS \(pair): same name and size, different content (\(evidence.rawValue)) — not offered")
+        case .notTheRecordedContent:
+            tally.notRecordedContent += 1
+            note("  NOT OFFERED \(pair): every byte read now does not hash to the SHA-256 its own catalog row records — "
+                 + "its values cannot be carried onto that row")
+        case .noDestinationDigest:
+            tally.needsFullHash += 1
+            note("  NOT OFFERED \(pair): \(HeldBackWords.needsFullHash)")
         case .noEvidence:
             tally.noEvidence += 1
             note("  NO PROOF \(pair): the old row carries no whole-file or sampled hash — not offered")
@@ -178,7 +193,11 @@ final class FindMovedCopiesJob: @MainActor MediaFileOperationJob {
     }
 
     nonisolated static func summary(_ t: Tally) -> String {
-        var parts = ["\(t.proven) proven", "\(t.differs) differ"]
+        var parts = ["\(t.proven) proven (whole-file SHA-256)"]
+        if t.likely > 0 { parts.append("\(t.likely) likely the same file (sampled check)") }
+        parts.append("\(t.differs) differ")
+        if t.notRecordedContent > 0 { parts.append("\(t.notRecordedContent) not the content their catalog row records") }
+        if t.needsFullHash > 0 { parts.append("\(t.needsFullHash) need a full hash first") }
         if t.couldNotRead > 0 { parts.append("\(t.couldNotRead) not checked") }
         if t.noEvidence > 0 { parts.append("\(t.noEvidence) no proof possible") }
         if t.notStarted > 0 { parts.append("\(t.notStarted) not started") }
@@ -199,7 +218,7 @@ extension MediaFileOperationsCenter {
         guard add(job) else { return nil }
         job.start()
         appLog.write(Self.startSummaryLine(verb: job.kind.logVerb, title: job.title,
-                                           plan: "\(plan.candidateCount) live file(s) to read for \(plan.tasks.count) held-back row(s) — proves by content; writes nothing"))
+                                           plan: "\(plan.candidateCount) live file(s) to read for \(plan.tasks.count) held-back row(s) — checks by content (whole-file SHA-256 proves; a sampled check says only likely); writes nothing"))
         return job
     }
 }

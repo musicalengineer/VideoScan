@@ -370,6 +370,17 @@ final class CatalogCommitter {
         return saveRefusal() ?? ids.lazy.compactMap { self.baseline.waiting[$0]?.words }.first ?? "the rows could not be stored"
     }
 
+    /// GH #339 (Codex #385 #5): BEFORE a carry touches these records, the
+    /// person's own pending edits on them (typed inside the 2 s debounce)
+    /// are committed now through the ordinary save door — durable, and
+    /// attributed to the person, not to `import carry`. nil = every one is
+    /// durable (a clean row is); else the words, and the carry writes nothing.
+    func commitPending(ids: Set<UUID>) -> String? {
+        if let why = saveRefusal() { return why }
+        if commitNow(ids: ids) { return nil }
+        return saveRefusal() ?? ids.lazy.compactMap { self.baseline.waiting[$0]?.words }.first ?? "the rows could not be stored"
+    }
+
     /// A safety copy of catalog.sqlite is about to be sealed (`VACUUM INTO`,
     /// B2.3): what is in memory is committed FIRST, so the copy holds what
     /// the person sees — including an edit typed inside the 2 s debounce
@@ -438,10 +449,13 @@ final class CatalogCommitter {
     /// ONE synchronous write of a side-table change, on the main actor like
     /// every commit here. nil = committed; else the words, and nothing was
     /// written. Records are not touched: their baseline is unaffected (the
-    /// store tracks the generation itself).
-    func commitSideTables(_ what: String, via table: SideTable, _ body: (any CatalogTransaction) throws -> Void) -> String? {
+    /// store tracks the generation itself). `writer`: the generation_history
+    /// writer (a person's decision is `.ui`; GH #339's closure after a carry
+    /// is `.importCarry`, Codex #385 #9).
+    func commitSideTables(_ what: String, via table: SideTable, as writer: CatalogWriter = .ui,
+                          _ body: (any CatalogTransaction) throws -> Void) -> String? {
         if let why = saveRefusal() { return why }
-        switch repository.writeBlocking(as: .ui, body) {
+        switch repository.writeBlocking(as: writer, body) {
         case .committed(let generation):
             knownGeneration = generation   // codex cycle #116 F3: the quit copy's header stamp
             sink("Catalog store: OUTCOME commit generation \(generation) via \(table.rawValue) — \(what)")

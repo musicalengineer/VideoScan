@@ -39229,6 +39229,32 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HeldBackReviewTests.swift",
+      "stage": "regression",
+      "suites": [
+        "HeldBackReviewTests"
+      ],
+      "tests": [
+        "alreadyBackNeedsIdentity",
+        "alreadyPresentIsDurable",
+        "archivedSiblingKeepsDate",
+        "batchConflictSameContent",
+        "batchConflictSameDestination",
+        "batchResolvePure",
+        "batchResolveScale",
+        "carrySkipsChangedIdentity",
+        "closureWriterIsImportCarry",
+        "confirmationCoversCurrentFields",
+        "failedClosureStaysVisible",
+        "failedInspectionIsNotGone",
+        "offersWords",
+        "proofBindsToDestination",
+        "sampledCollisionIsReal",
+        "sampledIsLikely"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HeldBackSensorTests.swift",
       "stage": "unit",
       "suites": [
@@ -43321,7 +43347,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 1055,
+      "expected_floor": 1071,
       "name": "regression",
       "package_expected_floor": 362,
       "package_selectors": [
@@ -43391,6 +43417,7 @@
       ],
       "selectors": [
         "VideoScanTests/AdvJunkDeleteHeldTests",
+        "VideoScanTests/HeldBackReviewTests",
         "VideoScanTests/AdvRelocateBucketBHeldTests",
         "VideoScanTests/AdvRelocateBucketBPresentFileTests",
         "VideoScanTests/AdvRelocateClosingSummaryTests",

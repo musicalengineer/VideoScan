@@ -3,7 +3,8 @@
 //   * ONE writer closes held-back rows: `resolveHeldBack(` is called only by
 //     HeldBackStore (the confirmed carry) — no job, view or model file;
 //   * Find Moved Copies writes nothing: no commit, no carry, no record field;
-//   * the sheet carries only from its confirmation dialog, and reads no
+//   * the sheet carries only from its confirmation dialog — handing over the
+//     preview that dialog showed (Codex #385 #2) — and reads no
 //     `records` (no O(records) work in a view body).
 // Source scans only (comments stripped).
 
@@ -36,7 +37,7 @@ struct HeldBackSensorTests {
     func sheetConfirmsAndStaysO1() throws {
         let code = try SourceTree.appCode(named: "HeldBackSheet.swift")
         #expect(code.components(separatedBy: "store.carry(").count == 2, "one carry call")
-        #expect(code.contains("Button(\"Carry\") { _ = store.carry(selected)"))
+        #expect(code.contains("Button(\"Carry\") { finish(store.carry(p)) }"), "only the confirmation's Carry, with the preview it showed")
         #expect(!code.contains("records"))
         #expect(!code.contains("model."))
     }

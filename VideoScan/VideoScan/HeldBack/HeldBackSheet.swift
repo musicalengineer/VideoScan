@@ -5,8 +5,10 @@
 //
 // Nothing here writes. The list reads `store.sections` (computed once per
 // load, never in this body — no O(records) work here); Find Moved Copies is
-// the MFO job; Carry Selected… asks once more and then calls the store's
-// one writer, which re-checks every pair against the catalog and the disk.
+// the MFO job; Carry Selected… asks the store what WOULD be written now
+// (`previewCarry`), shows exactly that — the Confirmed Junk warning included —
+// and on Carry hands that preview to the store's one writer, which writes
+// only if it is still what would be written (else it is shown again).
 //
 // (For Rick: a dumb view over the store's published values; the only
 // actions are "start the job" and "call carry(ids)".)
@@ -21,6 +23,9 @@ struct HeldBackSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var selected: Set<String> = []
     @State private var confirming = false
+    /// What the confirmation shows: the store's preview, never the offer list.
+    @State private var pending: HeldBackCarryPreview?
+    @State private var pendingChanged = false
     @State private var jobNote: String?
 
     var body: some View {
@@ -31,6 +36,7 @@ struct HeldBackSheet: View {
             stateLine
             ScrollView(.vertical) {
                 LazyVStack(alignment: .leading, spacing: 10) {
+                    if !store.lastCarryLines.isEmpty { carryLinesSection }
                     if !store.offers.isEmpty { offersSection }
                     ForEach(store.sections) { section in
                         sectionView(section)
@@ -44,17 +50,24 @@ struct HeldBackSheet: View {
         .frame(minWidth: 760, idealWidth: 860, minHeight: 560, idealHeight: 720)
         .accessibilityIdentifier("sheet.heldBack")
         .task { if store.listState == .idle { await store.loadList() } }
-        .confirmationDialog(confirmTitle, isPresented: $confirming) {
-            Button("Carry") { _ = store.carry(selected); selected = [] }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("Only fields the live file does not have yet are set; nothing you already set is changed, and an archived file's date is never touched. Each held-back row is then closed and kept as history.")
+        .confirmationDialog(pending.map(HeldBackWords.confirmTitle) ?? "", isPresented: $confirming, presenting: pending) { p in
+            Button("Carry") { finish(store.carry(p)) }
+            Button("Cancel", role: .cancel) { pending = nil }
+        } message: { p in
+            Text(HeldBackWords.confirmMessage(p, changed: pendingChanged))
         }
     }
 
-    private var confirmTitle: String {
-        let n = selected.count
-        return "Carry onto \(n) file\(n == 1 ? "" : "s")?"
+    /// After Carry: a changed preview is shown again (nothing was written).
+    private func finish(_ outcome: HeldBackStore.CarryOutcome) {
+        if case .reconfirm(let now) = outcome {
+            pending = now
+            pendingChanged = true
+            Task { @MainActor in confirming = true }
+            return
+        }
+        pending = nil
+        selected = []
     }
 
     @ViewBuilder
@@ -92,25 +105,39 @@ struct HeldBackSheet: View {
             if case .resolved(let note) = e.whereNow {
                 Text(note).font(.caption).foregroundStyle(.green).fixedSize(horizontal: false, vertical: true)
             }
+            if case .couldNotCheck(let why) = e.whereNow {
+                Text("Couldn't check: \(why)").font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding(.leading, 8)
     }
 
     // MARK: Offers
 
-    private var offersSection: some View {
+    /// The last carry's lines — its own group, so a failed closure's words
+    /// stay visible when no offer is left (Codex #385 #10).
+    private var carryLinesSection: some View {
         GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Each pair below was proven the same content, read from the live file just now. Tick the ones to carry; nothing is written until you confirm.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                ForEach(store.offers) { offer in offerRow(offer) }
-                if !store.lastCarryLines.isEmpty {
-                    ForEach(store.lastCarryLines, id: \.self) { Text($0).font(.caption).textSelection(.enabled) }
-                }
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(store.lastCarryLines.enumerated()), id: \.offset) { Text($0.element).font(.caption).textSelection(.enabled) }
             }
             .padding(4)
         } label: {
-            Text("Moved copies proven — \(store.offers.count.formatted())").font(.headline)
+            Text("Last carry").font(.headline)
+        }
+        .accessibilityIdentifier("heldBack.lastCarry")
+    }
+
+    private var offersSection: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(HeldBackWords.offersLead(store.offers))
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                ForEach(store.offers) { offer in offerRow(offer) }
+            }
+            .padding(4)
+        } label: {
+            Text(HeldBackWords.offersTitle(store.offers)).font(.headline)
         }
     }
 
@@ -124,7 +151,7 @@ struct HeldBackSheet: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(o.oldName) → \(o.liveName)").font(.callout.weight(.medium))
                 Text(o.livePath).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                Text("Proof: \(o.evidence.words)").font(.caption)
+                Text("Evidence: \(o.evidence.words)").font(.caption)
                 ForEach([HeldBackWords.field("Tag", o.fields.tag), HeldBackWords.field("Date", o.fields.date),
                          HeldBackWords.field("Place", o.fields.place)].compactMap { $0 }, id: \.self) { Text($0).font(.caption) }
                 if case .carry(let tag)? = o.fields.tag, tag == MediaDisposition.confirmedJunk.rawValue {
@@ -142,14 +169,18 @@ struct HeldBackSheet: View {
         HStack {
             Button(HeldBackWords.findButton) { startJob() }
                 .disabled(store.listState == .loading || store.entries.isEmpty)
-                .help("Reads each gone row's same-name, same-size live file and proves it by content. Writes nothing.")
+                .help("Reads each gone row's same-name, same-size live file and checks it by content: a whole-file SHA-256 proves it, a sampled check says only likely. Writes nothing.")
                 .accessibilityIdentifier("heldBack.find")
             Button("Check Again") { Task { await store.loadList() } }
                 .disabled(store.listState == .loading)
                 .help("Reads the rows again and checks the disk now (stat only).")
             if let jobNote { Text(jobNote).font(.caption).foregroundStyle(.secondary) }
             Spacer()
-            Button(HeldBackWords.carryButton) { confirming = true }
+            Button(HeldBackWords.carryButton) {
+                pending = store.previewCarry(selected)
+                pendingChanged = false
+                confirming = true
+            }
                 .disabled(selected.isEmpty || isReadOnly || store.writeRefusal != nil)
                 .help(store.writeRefusal ?? "Asks once more, then carries the ticked values.")
                 .accessibilityIdentifier("heldBack.carry")

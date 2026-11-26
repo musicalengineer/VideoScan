@@ -47,9 +47,9 @@ enum HeldBackFixture {
                      userDate: date, userPlace: place, dateReadOnly: archived)
     }
 
-    /// Drive "Online" is mounted; "Offline" is not; `files` exist.
+    /// Drive "Online" is mounted; "Offline" is not; `files` exist (regular files), the rest are absent.
     static func disk(_ files: Set<String>) -> HeldBackDisk {
-        HeldBackDisk(driveOnline: { !$0.hasPrefix("/Volumes/Offline/") }, fileExists: { files.contains($0) })
+        HeldBackDisk(driveOnline: { !$0.hasPrefix("/Volumes/Offline/") }, probe: { files.contains($0) ? .regularFile : .absent })
     }
 
     static func sha256(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
@@ -74,31 +74,42 @@ struct HeldBackPlanTests {
 
     @Test("LOGIC: each row lands in the group its evidence says")
     func groups() {
-        let back = F.live("back.mov", path: "/Volumes/Online/a/back.mov")
+        let a = String(repeating: "a", count: 64), b = String(repeating: "b", count: 64)
+        let back = F.live("back.mov", path: "/Volumes/Online/a/back.mov", digest: a)
+        let other = F.live("taken.mov", path: "/Volumes/Online/a/taken.mov", digest: b)
         let moved = F.live("moved.mov", path: "/Volumes/Online/new/moved.mov")
-        let index = HeldBackLiveIndex([back, moved])
+        let index = HeldBackLiveIndex([back, other, moved])
         let rows = [
-            F.row(1, path: "/Volumes/Online/a/back.mov"),
+            F.row(1, path: "/Volumes/Online/a/back.mov", digest: a),
             F.row(2, path: "/Volumes/Online/a/loose.mov"),
             F.row(3, path: "/Volumes/Online/old/moved.mov"),
             F.row(4, path: "/Volumes/Online/old/moved.mov", size: 101),
             F.row(5, path: "/Volumes/Offline/x/moved.mov"),
             F.row(6, path: "/Volumes/Online/a/done.mov", resolvedNote: "carried"),
+            F.row(7, path: "/Volumes/Online/a/taken.mov", digest: a),
+            F.row(8, path: "/Volumes/Online/a/denied.mov"),
         ]
-        let entries = HeldBackClassifier.classify(rows, live: index, disk: F.disk(["/Volumes/Online/a/back.mov", "/Volumes/Online/a/loose.mov"]))
-        #expect(entries[0].whereNow == .alreadyBack(recordID: back.id))
+        let present: Set<String> = ["/Volumes/Online/a/back.mov", "/Volumes/Online/a/loose.mov", "/Volumes/Online/a/taken.mov"]
+        let disk = HeldBackDisk(driveOnline: { !$0.hasPrefix("/Volumes/Offline/") }, probe: { path in
+            if path.hasSuffix("denied.mov") { return .couldNotCheck("Permission denied (errno 13)") }
+            return present.contains(path) ? .regularFile : .absent
+        })
+        let entries = HeldBackClassifier.classify(rows, live: index, disk: disk)
+        #expect(entries[0].whereNow == .alreadyBack(recordID: back.id), "same path AND same whole-file SHA-256")
         #expect(entries[1].whereNow == .onDiskNotCatalogued)
         #expect(entries[2].whereNow == .goneLikelyMoved(candidates: [moved.id]))
         #expect(entries[3].whereNow == .goneNoMatch, "same name, different size is no lead")
         #expect(entries[4].whereNow == .driveNotConnected(drive: "Offline"))
         #expect(entries[5].whereNow == .resolved(note: "carried"))
+        #expect(entries[6].whereNow == .pathTaken(recordID: other.id, candidates: [other.id]), "a path is not an identity; the occupant is only a name + size lead")
+        #expect(entries[7].whereNow == .couldNotCheck(reason: "Permission denied (errno 13)"))
         #expect(HeldBackClassifier.grouped(entries).map(\.group) == HeldBackGroup.allCases)
     }
 
     @Test("TRUTH: a row whose drive is not connected is never called gone, and its file is never asked about")
     func offlineIsNeverGone() {
         let asked = HeldBackAskedPaths()
-        let disk = HeldBackDisk(driveOnline: { _ in false }, fileExists: { asked.add($0); return false })
+        let disk = HeldBackDisk(driveOnline: { _ in false }, probe: { asked.add($0); return .absent })
         let entries = HeldBackClassifier.classify([F.row(1, path: "/Volumes/Offline/a.mov")],
                                                   live: HeldBackLiveIndex([F.live("a.mov", path: "/Volumes/Online/a.mov")]), disk: disk)
         #expect(entries[0].whereNow.group == .driveNotConnected)
@@ -214,10 +225,14 @@ struct HeldBackProofTests {
         try bytes.write(to: a)
         try Data(repeating: 8, count: 4_096).write(to: b)
         let prover = HeldBackProver.live(shouldCancel: { false })
-        guard case .proven(.wholeFileSHA256, let stamp) = prover.prove(rowDigest: F.sha256(bytes), rowSampled: nil, candidatePath: a.path)
+        let digestA = F.sha256(bytes), digestB = F.sha256(Data(repeating: 8, count: 4_096))
+        guard case .proven(.wholeFileSHA256, let stamp) = prover.prove(rowDigest: digestA, rowSampled: nil, candidatePath: a.path,
+                                                                       destinationDigest: digestA)
         else { Issue.record("not proven"); return }
         #expect(stamp == FileIdentityStamp.capture(path: a.path))
-        #expect(prover.prove(rowDigest: F.sha256(bytes), rowSampled: nil, candidatePath: b.path) == .differs(.wholeFileSHA256))
+        #expect(prover.prove(rowDigest: digestA, rowSampled: nil, candidatePath: b.path, destinationDigest: digestB) == .differs(.wholeFileSHA256))
+        #expect(prover.prove(rowDigest: digestA, rowSampled: nil, candidatePath: a.path, destinationDigest: nil) == .noDestinationDigest,
+                "no stored identity on the live file's row: nothing to bind the proof to")
     }
 
     @Test("PROOF: the sampled hash proves only as sampled; no stored hash is no proof; a missing file is not checked")
@@ -226,14 +241,20 @@ struct HeldBackProofTests {
         let a = dir.appendingPathComponent("a.mov")
         try Data(repeating: 3, count: 10_000).write(to: a)
         let stored = FileHasher.segmentedHash(path: a.path)
+        let mine = F.sha256(try Data(contentsOf: a))
         let prover = HeldBackProver.live(shouldCancel: { false })
-        guard case .proven(.sampledHash, _) = prover.prove(rowDigest: nil, rowSampled: stored, candidatePath: a.path) else { Issue.record("not proven"); return }
-        #expect(prover.prove(rowDigest: nil, rowSampled: "v1:" + String(repeating: "0", count: 64), candidatePath: a.path) == .differs(.sampledHash))
-        #expect(prover.prove(rowDigest: nil, rowSampled: nil, candidatePath: a.path) == .noEvidence)
+        guard case .proven(.sampledHash, _) = prover.prove(rowDigest: nil, rowSampled: stored, candidatePath: a.path, destinationDigest: mine)
+        else { Issue.record("not proven"); return }
+        #expect(prover.prove(rowDigest: nil, rowSampled: "v1:" + String(repeating: "0", count: 64), candidatePath: a.path,
+                             destinationDigest: mine) == .differs(.sampledHash))
+        #expect(prover.prove(rowDigest: nil, rowSampled: stored, candidatePath: a.path, destinationDigest: String(repeating: "e", count: 64))
+                == .notTheRecordedContent, "a sampled match onto a row whose stored identity is not the file's is never offered")
+        #expect(prover.prove(rowDigest: nil, rowSampled: nil, candidatePath: a.path, destinationDigest: mine) == .noEvidence)
         guard case .couldNotRead = prover.prove(rowDigest: String(repeating: "a", count: 64), rowSampled: nil,
-                                                 candidatePath: dir.appendingPathComponent("gone.mov").path)
+                                                 candidatePath: dir.appendingPathComponent("gone.mov").path,
+                                                 destinationDigest: String(repeating: "a", count: 64))
         else { Issue.record("a missing file must be 'not checked'"); return }
-        #expect(HeldBackEvidence.sampledHash.words.contains("weaker"))
+        #expect(HeldBackEvidence.sampledHash.words.contains("likely the same file"))
     }
 
     @Test("PROOF: the job offers the proven pair, never the same-name, same-size file whose content differs — and writes nothing")
@@ -246,8 +267,9 @@ struct HeldBackProofTests {
         let bytes = Data(repeating: 9, count: 2_048)
         try bytes.write(to: goodDir.appendingPathComponent("clip.mov"))
         try Data(repeating: 1, count: 2_048).write(to: badDir.appendingPathComponent("clip.mov"))
-        let good = F.live("clip.mov", path: goodDir.appendingPathComponent("clip.mov").path, size: 2_048)
-        let bad = F.live("clip.mov", path: badDir.appendingPathComponent("clip.mov").path, size: 2_048)
+        let good = F.live("clip.mov", path: goodDir.appendingPathComponent("clip.mov").path, size: 2_048, digest: F.sha256(bytes))
+        let bad = F.live("clip.mov", path: badDir.appendingPathComponent("clip.mov").path, size: 2_048,
+                         digest: F.sha256(Data(repeating: 1, count: 2_048)))
         let index = HeldBackLiveIndex([good, bad])
         let rows = [F.row(1, path: "/Volumes/Online/old/clip.mov", size: 2_048, digest: F.sha256(bytes))]
         let plan = HeldBackJobPlan.make(entries: HeldBackClassifier.classify(rows, live: index, disk: F.disk([])), live: index)
@@ -285,7 +307,7 @@ struct HeldBackScene {
         try await scene.launchOnSQLite()
         #expect(scene.model.saveCatalogNow(), "the launch commit lands first")
         let s = HeldBackScene(scene: scene)
-        s.store.disk = HeldBackDisk(driveOnline: { _ in true }, fileExists: { _ in false })
+        s.store.disk = HeldBackDisk(driveOnline: { _ in true }, probe: { _ in .absent })
         await s.store.loadList()
         return s
     }
@@ -317,6 +339,12 @@ struct HeldBackScene {
         let offer = HeldBackOffer.make(entry: entry, old: HeldBackFixture.curated(old), live: live, evidence: .wholeFileSHA256, stamp: stamp)
         store.setOffers([offer])
         return offer
+    }
+
+    /// Carry exactly what the confirmation would show now (preview → carry).
+    @discardableResult
+    func carryNow(_ ids: Set<String>) -> HeldBackStore.CarryOutcome {
+        store.carry(store.previewCarry(ids))
     }
 
     func generation() async throws -> Int {
@@ -358,7 +386,7 @@ struct HeldBackCarryTests {
         #expect(try await s.openCountInDatabase() == open)
         #expect(record.mediaDisposition == .unreviewed)
         #expect(record.userDate == nil)
-        #expect(s.store.carry([]) == .refused("nothing was selected"))
+        #expect(s.carryNow([]) == .refused("nothing was selected"))
         #expect(try await s.generation() == generation)
     }
 
@@ -368,7 +396,7 @@ struct HeldBackCarryTests {
         let record = try s.liveRecord()
         let offer = try s.offer(Self.old, onto: record)
         let open = try await s.openCountInDatabase()
-        let outcome = s.store.carry([offer.id])
+        let outcome = s.carryNow([offer.id])
         #expect(outcome == .carried(carried: 1, closed: 1, skipped: 0))
         #expect(record.mediaDisposition == .important)
         #expect(record.userDate == "1992-06")
@@ -385,7 +413,7 @@ struct HeldBackCarryTests {
         #expect(try s.query("SELECT resolved_file_id FROM quarantine WHERE qid = \(offer.qid)") == record.id.uuidString)
         #expect(try s.query("SELECT resolution_note FROM quarantine WHERE qid = \(offer.qid)")?.contains("October import row") == true)
         #expect(try s.query("SELECT count(*) FROM row_knowledge WHERE source = 'app:import carry' AND field = 'userDate'") == "1")
-        #expect(try s.query("SELECT count(*) FROM generation_history WHERE writer = 'import carry'") == "1")
+        #expect(try s.query("SELECT count(*) FROM generation_history WHERE writer = 'import carry'") == "2", "the records, then the closure")
         #expect(s.scene.sandbox.catalogLogText().contains("via import carry"))
     }
 
@@ -398,7 +426,7 @@ struct HeldBackCarryTests {
         #expect(s.model.saveCatalogNow())
         let offer = try s.offer(Self.old, onto: record)
         #expect(offer.fields.date == .conflict(old: "1992-06", live: "1980"))
-        #expect(s.store.carry([offer.id]) == .carried(carried: 1, closed: 1, skipped: 0))
+        #expect(s.carryNow([offer.id]) == .carried(carried: 1, closed: 1, skipped: 0))
         #expect(record.userDate == "1980")
         #expect(record.mediaDisposition == .important)
         #expect(try await s.scene.reloaded(.healthy).userDate == "1980")
@@ -413,7 +441,7 @@ struct HeldBackCarryTests {
         record.userPlace = "Boston"                           // Rick types a place; the 2 s timer is pending
         record.userPlaceConfidence = UserPlaceConfidence.known.rawValue
         s.model.saveCatalogDebounced()
-        #expect(s.store.carry([offer.id]) == .carried(carried: 1, closed: 1, skipped: 0))
+        #expect(s.carryNow([offer.id]) == .carried(carried: 1, closed: 1, skipped: 0))
         #expect(record.userPlace == "Boston")
         #expect(try await s.scene.reloaded(.healthy).userPlace == "Boston", "his edit was committed with the carry, not replaced")
     }
@@ -425,7 +453,7 @@ struct HeldBackCarryTests {
         let offer = try s.offer(Self.old, onto: record)
         let open = try await s.openCountInDatabase()
         #expect(await s.model.catalogStore.holdWrites(reason: "a test job", owner: CatalogWriteHoldOwner()) == .taken)
-        let outcome = s.store.carry([offer.id])
+        let outcome = s.carryNow([offer.id])
         _ = s.model.catalogStore.releaseWriteHold()
         guard case .refused(let why) = outcome else { Issue.record("expected refused, got \(outcome)"); return }
         #expect(why.contains("held"), Comment(rawValue: why))
@@ -441,7 +469,7 @@ struct HeldBackCarryTests {
         let offer = try s.offer(Self.old, onto: record)
         let generation = try await s.generation()
         s.model.applyReadOnlyMode(true)
-        guard case .refused(let why) = s.store.carry([offer.id]) else { Issue.record("expected refused"); return }
+        guard case .refused(let why) = s.carryNow([offer.id]) else { Issue.record("expected refused"); return }
         #expect(why.contains("read-only"), Comment(rawValue: why))
         #expect(record.mediaDisposition == .unreviewed)
         #expect(try await s.generation() == generation)
@@ -455,7 +483,7 @@ struct HeldBackCarryTests {
         #expect(s.model.saveCatalogNow())
         let offer = try s.offer(Self.old, onto: record)
         #expect(offer.fields.date == .archived("1992-06"))
-        #expect(s.store.carry([offer.id]) == .carried(carried: 1, closed: 1, skipped: 0))
+        #expect(s.carryNow([offer.id]) == .carried(carried: 1, closed: 1, skipped: 0))
         #expect(record.userDate == nil)
         #expect(record.mediaDisposition == .important)
     }
@@ -467,7 +495,7 @@ struct HeldBackCarryTests {
         let offer = try s.offer(Self.old, onto: record)
         let open = try await s.openCountInDatabase()
         try Data(repeating: 6, count: 2_000).write(to: URL(fileURLWithPath: record.fullPath))
-        #expect(s.store.carry([offer.id]) == .carried(carried: 0, closed: 0, skipped: 1))
+        #expect(s.carryNow([offer.id]) == .carried(carried: 0, closed: 0, skipped: 1))
         #expect(s.store.lastCarryLines.first?.contains("changed") == true)
         #expect(record.mediaDisposition == .unreviewed)
         #expect(try await s.openCountInDatabase() == open)
