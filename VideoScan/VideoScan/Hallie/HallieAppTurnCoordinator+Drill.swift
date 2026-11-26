@@ -243,17 +243,37 @@ extension HallieAppTurnCoordinator {
         } catch {
             return .failure(error)
         }
-        logTaught(word: word, saidAs: saidAs + (phonemes.map { " /\($0)/" } ?? ""))
+        logTaught(word: word, saidAs: saidAs + (phonemes.map { " /\($0)/" } ?? ""), target: target)
         return .success(target)
     }
 
-    /// `[hallie-voice] taught: McGill ← MahGill | MicGill` in Rick's private
-    /// file log; the name reaches OSLog only at debug level with default
-    /// (private) redaction — never the public stream (codex #861).
-    static func logTaught(word: String, saidAs: String) {
-        appLog.write("[hallie-voice] taught: \(word) ← \(saidAs)")
+    /// `[hallie-voice] taught: Tamsin ← TAM-sin (Tamsin)` in Rick's private
+    /// file log — the word only where the log may show it (`taughtForLog`);
+    /// the name reaches OSLog only at debug level with default (private)
+    /// redaction — never the public stream (codex #861).
+    static func logTaught(word: String, saidAs: String, target: PronunciationTarget) {
+        appLog.write("[hallie-voice] taught: \(taughtForLog(word: word, saidAs: saidAs, target: target))")
         voiceLog.debug("taught: \(word, privacy: .private) ← \(saidAs, privacy: .private)")
         voiceLog.info("pronunciation taught (1 name)")
+    }
+
+    /// What the local log may say about a taught word (DECISIONS 2026-11-25).
+    /// The word is a name token — often a surname — so it and its respelling
+    /// (which spells the same name by ear) appear only when the person's log
+    /// rendering (`PersonLogName`) already shows that word. The target
+    /// carries only a name, no dates, so the person is treated as living:
+    /// the first name passes, a surname never does. A word kept for no one
+    /// person (several carry it) is withheld. Pure.
+    static func taughtForLog(word: String, saidAs: String, target: PronunciationTarget) -> String {
+        switch target {
+        case .cyberBrainPerson(_, let name), .treePerson(let name, _, _):
+            let who = PersonLogName.named(name)
+            return PersonLogName.mayShow(word: word, rendering: who)
+                ? "\(word) ← \(saidAs) (\(who))"
+                : "a name of \(who) (word withheld: it is not a name the log may show)"
+        case .file:
+            return "a name kept for no one person (word withheld: it may be a living surname)"
+        }
     }
 
     /// Session counts only — no names (codex #861).

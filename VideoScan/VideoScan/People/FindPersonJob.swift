@@ -37,6 +37,10 @@ final class FindPersonJob: @MainActor MediaFileOperationJob {
 
     /// Person this job hunts (v1: "Donna" — the only tuned recipe).
     let person: String
+    /// `person` as the log names them (PersonLogName, DECISIONS 2026-11-25):
+    /// the job holds only a name, so the person is treated as living — the
+    /// first name, never a surname.
+    var logPerson: String { PersonLogName.named(person) }
     let recipeID: String
     let records: [VideoRecord]
 
@@ -338,7 +342,7 @@ final class FindPersonJob: @MainActor MediaFileOperationJob {
         }
         // Durable trace FIRST — a cancel that then wedges must be
         // attributable from the log alone (codex #284).
-        appLog.write("Find \(person) cancel requested (\(completed)/\(actionableTotal) done)")
+        appLog.write("Find \(logPerson) cancel requested (\(completed)/\(actionableTotal) done)")
         findLog.info("find \(self.person, privacy: .public) cancel requested")
         task?.cancel()
         // The per-clip score task is UNSTRUCTURED (deliberately — the
@@ -414,7 +418,7 @@ final class FindPersonJob: @MainActor MediaFileOperationJob {
         // predecessor writes (confirmed/rejected/auto-tags) must count
         // when this batch finally filters.
         if let predecessor = precededBy, predecessor.state.isActive {
-            appLog.write("Find \(person) queued: \(records.count) file(s) — waiting for the running Find \(predecessor.person) scan")
+            appLog.write("Find \(logPerson) queued: \(records.count) file(s) — waiting for the running Find \(predecessor.logPerson) scan")
             subtitleText = "Waiting for the current Find \(person) scan…"
             while let p = precededBy, p.state.isActive {
                 if Task.isCancelled || state == .cancelling {
@@ -461,7 +465,7 @@ final class FindPersonJob: @MainActor MediaFileOperationJob {
             guard let n = skipCounts[reason], n > 0 else { return nil }
             return "\(n) \(reason.rawValue)"
         }
-        appLog.write("Find \(person) started: \(records.count) selected → \(actionable.count) to scan"
+        appLog.write("Find \(logPerson) started: \(records.count) selected → \(actionable.count) to scan"
                      + (breakdown.isEmpty ? "" : " | filtered: " + breakdown.joined(separator: ", "))
                      + (humanSkipped > 0 ? " | \(humanSkipped) already confirmed/rejected" : "")
                      + (offline > 0 ? " | \(offline) on offline volumes" : "")
@@ -664,14 +668,14 @@ final class FindPersonJob: @MainActor MediaFileOperationJob {
                 verdict = prior.verdict
                 clipStartedAt = Date()
                 findLog.info("find \(self.person, privacy: .public) duplicate: \(clip.lastPathComponent, privacy: .public) = \(prior.witness, privacy: .public) — verdict reused")
-                appLog.write("Find \(person) duplicate \(completed + 1)/\(total): \(clip.lastPathComponent) = \(prior.witness) — verdict reused")
+                appLog.write("Find \(logPerson) duplicate \(completed + 1)/\(total): \(clip.lastPathComponent) = \(prior.witness) — verdict reused")
             } else {
                 // Logged BEFORE the score (durably, not just unified) so
                 // a wedged clip is named — the 2026-08-03 overnight stall
                 // died on an unidentifiable file because only completions
                 // logged.
                 findLog.info("find \(self.person, privacy: .public) scanning: \(clip.lastPathComponent, privacy: .public)")
-                appLog.write("Find \(person) scanning \(completed + 1)/\(total): \(clip.lastPathComponent)")
+                appLog.write("Find \(logPerson) scanning \(completed + 1)/\(total): \(clip.lastPathComponent)")
                 clipStartedAt = Date()
                 // Score races the stall watchdog: a wedged decode is
                 // ABANDONED (the task leaks — bounded by the consecutive
@@ -787,7 +791,7 @@ final class FindPersonJob: @MainActor MediaFileOperationJob {
                let quartile = Self.quartileToLog(fraction: clamped,
                                                  alreadyLogged: clipQuartileLogged) {
                 clipQuartileLogged = quartile
-                appLog.write("Find \(person) scanning \(completed + 1)/\(actionableTotal): \(name) — \(quartile * 25)% of \(Self.durationText(mediaSeconds))")
+                appLog.write("Find \(logPerson) scanning \(completed + 1)/\(actionableTotal): \(name) — \(quartile * 25)% of \(Self.durationText(mediaSeconds))")
             }
         }
     }
@@ -839,7 +843,7 @@ final class FindPersonJob: @MainActor MediaFileOperationJob {
                 // both engines leave the same pre-stall evidence.
                 if currentClipName != filename {
                     currentClipName = filename
-                    appLog.write("Find \(person) scanning \(completed + 1)/\(total): \(filename)")
+                    appLog.write("Find \(logPerson) scanning \(completed + 1)/\(total): \(filename)")
                 }
             }
         case .result:
@@ -978,7 +982,7 @@ final class FindPersonJob: @MainActor MediaFileOperationJob {
         clipGeneration += 1   // invalidate the abandoned task's completion
         clipAbandonContinuation = nil
         let name = currentClipName ?? "?"
-        appLog.write("Find \(person) WEDGED: skipping \(completed + 1)/\(actionableTotal): \(name) — no progress for \(Int(silentFor))s, decode abandoned (GH #156)")
+        appLog.write("Find \(logPerson) WEDGED: skipping \(completed + 1)/\(actionableTotal): \(name) — no progress for \(Int(silentFor))s, decode abandoned (GH #156)")
         findLog.error("find \(self.person, privacy: .public) wedged clip skipped: \(name, privacy: .public) after \(Int(silentFor), privacy: .public)s")
         pending.resume(returning: nil)
         // Fresh liveness clock for the next clip (the fired monitor's
@@ -1005,7 +1009,7 @@ final class FindPersonJob: @MainActor MediaFileOperationJob {
         lastLongRunLogAt = Date()
         let suspect = mediaSeconds < Self.longRunLogIntervalSeconds
             ? " (declared \(Int(mediaSeconds))s — suspect metadata)" : ""
-        appLog.write("Find \(person) still scanning \(completed + 1)/\(actionableTotal): \(name) — \(Int(wall / 60))m elapsed, frame \(frameIndex)\(suspect)")
+        appLog.write("Find \(logPerson) still scanning \(completed + 1)/\(actionableTotal): \(name) — \(Int(wall / 60))m elapsed, frame \(frameIndex)\(suspect)")
     }
 
     // MARK: Read-ahead warming (GH #157 stage 2)
@@ -1096,7 +1100,7 @@ final class FindPersonJob: @MainActor MediaFileOperationJob {
             total: actionableTotal,
             currentFilename: currentClipName)
         terminalCause.record(.stall(reason: reason))
-        appLog.write("Find \(person) STALL: \(reason)")
+        appLog.write("Find \(logPerson) STALL: \(reason)")
         task?.cancel()
     }
 
@@ -1121,12 +1125,12 @@ final class FindPersonJob: @MainActor MediaFileOperationJob {
             let denom = actionableTotal > 0 ? actionableTotal : records.count
             subtitleText = "Cancelled — \(completed) of \(denom) scored"
             findLog.info("find person cancelled: \(self.person, privacy: .public) — \(self.completed) of \(denom) scored")
-            appLog.write("Find \(person) cancelled — \(completed) of \(denom) scored")
+            appLog.write("Find \(logPerson) cancelled — \(completed) of \(denom) scored")
         } else if let failed {
             state = .failed(message: failed)
             subtitleText = failed
             findLog.error("find person FAILED: \(self.person, privacy: .public) — \(failed, privacy: .public)")
-            appLog.write("Find \(person) FAILED: \(failed)")
+            appLog.write("Find \(logPerson) FAILED: \(failed)")
         } else if completed > 0, errors == completed {
             // Every scanned file errored — a green check here reads as
             // "all done, nothing found", which is a lie (Rick 2026-08-02).
@@ -1134,13 +1138,13 @@ final class FindPersonJob: @MainActor MediaFileOperationJob {
             state = .failed(message: text)
             subtitleText = text
             findLog.error("find person FAILED: \(self.person, privacy: .public) — \(text, privacy: .public)")
-            appLog.write("Find \(person) FAILED: \(text)")
+            appLog.write("Find \(logPerson) FAILED: \(text)")
         } else {
             let text = summary ?? "done"
             state = .finished(summary: text)
             subtitleText = text
             findLog.info("find person done: \(self.person, privacy: .public) — \(text, privacy: .public)")
-            appLog.write("Find \(person) done: \(text)")
+            appLog.write("Find \(logPerson) done: \(text)")
         }
     }
 }

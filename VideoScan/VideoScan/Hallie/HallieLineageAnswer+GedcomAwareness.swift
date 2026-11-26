@@ -231,7 +231,7 @@ extension HallieLineageAnswer {
                                      medium: WorldKnowledge.Medium) -> String? {
         guard let line = WorldKnowledge.photography.impossibilityLine(person: person, medium: medium),
               let note = WorldKnowledge.photography.impossibilityNote(person: person, medium: medium) else { return nil }
-        appLog.write("[hallie] \(medium.rawValue) offer suppressed: \(person.name) (\(note))")
+        appLog.write("[hallie] \(medium.rawValue) offer suppressed: \(PersonLogName.of(person)) (\(note))")
         return line
     }
 

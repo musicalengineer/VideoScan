@@ -154,7 +154,8 @@ extension HallieShellCLI {
         if options.remember {
             do {
                 try dependencies.recordPronunciation(.init(word: word, saidAs: told.saidAs, phonemes: phonemes, target: target))
-                HallieAppTurnCoordinator.logTaught(word: word, saidAs: told.saidAs + (phonemes.map { " /\($0)/" } ?? ""))
+                HallieAppTurnCoordinator.logTaught(word: word, saidAs: told.saidAs + (phonemes.map { " /\($0)/" } ?? ""),
+                                                    target: target)
                 var store = dependencies.loadDrillStore()
                 let derived = hint != nil || freeform?.explicit == false
                 store.set(name: word, status: alternatives.count > 1 ? .alternativesPending : .taught,

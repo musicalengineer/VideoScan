@@ -276,7 +276,7 @@ extension PersonFinderModel {
         // headline above that detail.
         if !newJobs.isEmpty {
             let volume = URL(fileURLWithPath: path).lastPathComponent
-            let names = newJobs.compactMap { $0.assignedProfile?.name }
+            let names = newJobs.compactMap { $0.assignedProfile.map { PersonLogName.of(profile: $0) } }
                 .joined(separator: ", ")
             appLog.write("Search for Family on \(volume): \(newJobs.count) parallel job(s) — \(names)")
             let skipped = savedProfiles.count - newJobs.count
@@ -507,11 +507,12 @@ extension PersonFinderModel {
         guard !job.status.isActive else { return }
 
         // Resolve person name for narration
+        // As the log names a person (PersonLogName, DECISIONS 2026-11-25).
         let personName: String
         if let profile = job.assignedProfile {
-            personName = profile.name
+            personName = PersonLogName.of(profile: profile)
         } else if let name = scanningPersonName, !name.isEmpty {
-            personName = name
+            personName = PersonLogName.named(name)
         } else {
             personName = "(global)"
         }
@@ -696,7 +697,7 @@ extension PersonFinderModel {
             job.completedAt = Date()
             job.currentFile = ""
             osLog.info("Job stopped: \(job.searchPath, privacy: .public) — was \(prev.label, privacy: .public), scanned \(job.videosScanned)/\(job.videosTotal)")
-            let personName = job.assignedProfile?.name ?? "(global)"
+            let personName = job.assignedProfile.map { PersonLogName.of(profile: $0) } ?? "(global)"
             let volumeName = URL(fileURLWithPath: job.searchPath).lastPathComponent
             appLog.write("Stopped search for \(personName) on \(volumeName) (scanned \(job.videosScanned)/\(job.videosTotal))")
             // Persist so the partially-scanned search reappears on next launch.
@@ -713,7 +714,7 @@ extension PersonFinderModel {
         job.completedAt = Date()
         job.pauseElapsedTimer()
         osLog.info("Job paused: \(job.searchPath, privacy: .public)")
-        let personName = job.assignedProfile?.name ?? "(global)"
+        let personName = job.assignedProfile.map { PersonLogName.of(profile: $0) } ?? "(global)"
         let volumeName = URL(fileURLWithPath: job.searchPath).lastPathComponent
         appLog.write("Paused search for \(personName) on \(volumeName)")
         // Same rationale as stopJob — a paused search the user comes back to
@@ -747,7 +748,7 @@ extension PersonFinderModel {
 
     func resumeJob(_ job: ScanJob) {
         guard job.status == .paused else { return }
-        let personName = job.assignedProfile?.name ?? "(global)"
+        let personName = job.assignedProfile.map { PersonLogName.of(profile: $0) } ?? "(global)"
         let volumeName = URL(fileURLWithPath: job.searchPath).lastPathComponent
         if job.wasRestoredFromDisk {
             // Restored-from-disk pause: scanTask was nil'd by app exit, so

@@ -138,7 +138,7 @@ enum TreeIdentityPinning {
         do { try store(updated) } catch {
             return .refused("Could not save \(profile.name)'s pin: \(error.localizedDescription)")
         }
-        appLog.write("[people] pinned \(profile.name) → \(candidate.code) (\(attestation.replacingOccurrences(of: "derived: ", with: "")))")
+        appLog.write("[people] pinned \(PersonLogName.of(profile: profile)) → \(candidate.code) (\(attestation.replacingOccurrences(of: "derived: ", with: "")))")
         mirrorOwner(profile: profile, familySearchID: candidate.familySearchID,
                     ownerName: ownerName, defaults: defaults)
         return .saved(updated)
@@ -157,7 +157,7 @@ enum TreeIdentityPinning {
         do { try store(updated) } catch {
             return .refused("Could not save \(profile.name): \(error.localizedDescription)")
         }
-        appLog.write("[people] unpinned \(profile.name) (undo)")
+        appLog.write("[people] unpinned \(PersonLogName.of(profile: profile)) (undo)")
         return .saved(updated)
     }
 
@@ -173,7 +173,7 @@ enum TreeIdentityPinning {
         do { try store(updated) } catch {
             return .refused("Could not save \(profile.name): \(error.localizedDescription)")
         }
-        appLog.write("[people] \(profile.name) marked not in the family tree")
+        appLog.write("[people] \(PersonLogName.of(profile: profile)) marked not in the family tree")
         return .saved(updated)
     }
 
@@ -192,6 +192,6 @@ enum TreeIdentityPinning {
         guard (try? WritePermit.current.withWrite("owner FamilySearch ID") {
             defaults.set(familySearchID, forKey: key)
         }) != nil else { return }
-        appLog.write("[people] owner FamilySearch ID \(current.isEmpty ? "set" : "changed from \(current)") to \(familySearchID) (mirrored from \(profile.name)'s pin)")
+        appLog.write("[people] owner FamilySearch ID \(current.isEmpty ? "set" : "changed from \(current)") to \(familySearchID) (mirrored from \(PersonLogName.of(profile: profile))'s pin)")
     }
 }

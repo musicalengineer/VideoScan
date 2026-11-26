@@ -136,7 +136,8 @@ extension HallieShellCLI {
                     word: word, saidAs: saidAs, phonemes: phonemes, target: target))
                 HallieAppTurnCoordinator.logTaught(
                     word: word,
-                    saidAs: saidAs + (phonemes.map { " /\($0)/" } ?? ""))
+                    saidAs: saidAs + (phonemes.map { " /\($0)/" } ?? ""),
+                    target: target)
             } catch {
                 return await emit(
                     Mode.failedTeachReply(word: word, error: error.localizedDescription, session: session),

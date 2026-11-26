@@ -145,11 +145,11 @@ enum FeaturedVideos {
         do {
             try profile.save(writingFeaturedVideos: true)
         } catch {
-            appLog.write("People tab: could not save \(profile.displayName)'s page — \(error.localizedDescription)")
+            appLog.write("People tab: could not save \(PersonLogName.of(profile: profile))'s page — \(error.localizedDescription)")
             return false
         }
         appLog.write("People tab: \(on ? "added" : "removed") \(count) video(s) "
-            + "\(on ? "to" : "from") \(profile.displayName)'s page (\(profile.featuredVideos.count) now)")
+            + "\(on ? "to" : "from") \(PersonLogName.of(profile: profile))'s page (\(profile.featuredVideos.count) now)")
         NotificationCenter.default.post(name: Self.changed, object: profileUUID)
         return true
     }
@@ -183,10 +183,10 @@ enum FeaturedVideos {
         do {
             try profile.save(writingFeaturedVideos: true)
         } catch {
-            appLog.write("People tab: could not save \(profile.displayName)'s page — \(error.localizedDescription)")
+            appLog.write("People tab: could not save \(PersonLogName.of(profile: profile))'s page — \(error.localizedDescription)")
             return false
         }
-        appLog.write("People tab: removed \(count) video(s) from \(profile.displayName)'s page (\(profile.featuredVideos.count) now)")
+        appLog.write("People tab: removed \(count) video(s) from \(PersonLogName.of(profile: profile))'s page (\(profile.featuredVideos.count) now)")
         NotificationCenter.default.post(name: Self.changed, object: profileUUID)
         return true
     }

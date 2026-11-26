@@ -122,7 +122,8 @@ extension HallieShellCLI {
             do {
                 try dependencies.recordPronunciation(.init(word: word, saidAs: candidate.respelling, phonemes: candidate.phonemes,
                                                            target: target, origin: "picked"))
-                HallieAppTurnCoordinator.logTaught(word: word, saidAs: candidate.respelling + " /\(candidate.phonemes)/")
+                HallieAppTurnCoordinator.logTaught(word: word, saidAs: candidate.respelling + " /\(candidate.phonemes)/",
+                                                    target: target)
             } catch {
                 let telling = HallieTellingMode.PronunciationTelling(word: word, alternatives: [candidate.respelling])
                 state.picker = offer

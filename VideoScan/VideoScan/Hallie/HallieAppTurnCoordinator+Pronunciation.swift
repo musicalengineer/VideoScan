@@ -418,13 +418,14 @@ extension HallieAppTurnCoordinator {
         // are synced from the master; a viewer never writes them.
         try ViewerWriteGuard.check("Pronunciation.record")
         switch write.target {
-        case .cyberBrainPerson(let id, let name):
+        case .cyberBrainPerson(let id, _):
             guard let root = cyberBrainRootURL else {
                 throw CyberBrainWriter.WriteError.unsafeRoot("Application Support unavailable")
             }
             let receipt = try CyberBrainWriter.setPronunciation(
                 personID: id, token: write.word, saidAs: write.saidAs, rootURL: root)
-            appLog.write("[hallie-voice] kept pronunciation \(receipt.word) → \(write.saidAs) on \(name) (\(id))")
+            appLog.write("[hallie-voice] kept pronunciation "
+                + "\(taughtForLog(word: receipt.word, saidAs: write.saidAs, target: write.target)) (\(id))")
             try keepPhonemesInFile(write, fileURL: fileURL)
         case .treePerson(let name, let gedcomID, let aliases):
             guard let root = cyberBrainRootURL else {
@@ -433,7 +434,9 @@ extension HallieAppTurnCoordinator {
             let receipt = try CyberBrainWriter.setPronunciation(
                 subjectName: name, gedcomPersonID: gedcomID, aliases: aliases,
                 token: write.word, saidAs: write.saidAs, rootURL: root)
-            appLog.write("[hallie-voice] kept pronunciation \(receipt.word) → \(write.saidAs) on \(name) (\(receipt.personID)\(receipt.createdPerson ? ", new record" : ""))")
+            appLog.write("[hallie-voice] kept pronunciation "
+                + "\(taughtForLog(word: receipt.word, saidAs: write.saidAs, target: write.target)) "
+                + "(\(receipt.personID)\(receipt.createdPerson ? ", new record" : ""))")
             try keepPhonemesInFile(write, fileURL: fileURL)
         case .file:
             guard let fileURL else {

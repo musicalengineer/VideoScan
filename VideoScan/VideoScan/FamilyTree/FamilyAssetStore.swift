@@ -627,13 +627,15 @@ struct FamilyAssetPerson: Sendable, Equatable {
     /// the one-photo-per-person folder (`People/<FSID>/`, 2026-08-29): a
     /// re-pull renumbers `@I` pointers but never this.
     let familySearchID: String?
+    /// How the local log names this person (`PersonLogName`, DECISIONS
+    /// 2026-11-25): full name when deceased, first name when living. Decided
+    /// once, from the tree record when there is one.
+    let logName: String
 
     init(gedcomID: String? = nil, name: String, birthYear: Int? = nil,
          familySearchID: String? = nil) {
-        self.gedcomID = gedcomID
-        self.name = name
-        self.birthYear = birthYear
-        self.familySearchID = familySearchID
+        self.init(gedcomID: gedcomID, name: name, birthYear: birthYear, familySearchID: familySearchID,
+                  logName: PersonLogName.named(name, birthYear: birthYear))
     }
 
     init(_ person: GedcomFamilyGraph.Person) {
@@ -641,7 +643,16 @@ struct FamilyAssetPerson: Sendable, Equatable {
             gedcomID: person.id,
             name: person.name,
             birthYear: person.birthYear,
-            familySearchID: person.familySearchID)
+            familySearchID: person.familySearchID,
+            logName: PersonLogName.of(person))
+    }
+
+    private init(gedcomID: String?, name: String, birthYear: Int?, familySearchID: String?, logName: String) {
+        self.gedcomID = gedcomID
+        self.name = name
+        self.birthYear = birthYear
+        self.familySearchID = familySearchID
+        self.logName = logName
     }
 }
 

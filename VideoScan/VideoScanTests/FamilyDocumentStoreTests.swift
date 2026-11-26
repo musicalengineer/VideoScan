@@ -184,11 +184,29 @@ struct FamilyDocumentStoreTests {
         let added = lock.withLock { lines }
         #expect(added.count == 1)
         let line = try #require(added.first)
-        // QA 2026-10-01 P3-1: the app log names the person by KEY, never by
-        // name (os_log keeps the name private as before).
-        #expect(line.hasPrefix("[tree] added Birth certificate for LZ7X-ABC — \(doc.filename), "), "\(line)")
-        #expect(!line.contains("Mary"), "\(line)")
+        // DECISIONS 2026-11-25 (#466): the log names the person through
+        // PersonLogName — Mary (born 1861) is deceased, so in full — and
+        // keeps the KEY beside the name.
+        #expect(line.hasPrefix("[tree] added Birth certificate for Mary C O'Connor (LZ7X-ABC) — \(doc.filename), "), "\(line)")
         #expect(line.hasSuffix("KB") || line.hasSuffix("bytes") || line.hasSuffix("MB"))
+    }
+
+    @Test func aLivingPersonsDocumentLineCarriesTheFirstNameNeverTheSurname() throws {
+        let sb = try sandbox(clock: fixedClock)
+        defer { try? fileManager.removeItem(at: sb.base) }
+        var lines: [String] = []
+        let lock = NSLock()
+        PersonDocumentLog.shared.setExtraSink { line in lock.withLock { lines.append(line) } }
+        defer { PersonDocumentLog.shared.setExtraSink(nil) }
+        let tobin = FamilyAssetPerson(gedcomID: "@I77@", name: "Tobin Ashcombe", birthYear: 1990, familySearchID: "QQ9Z-TOB")
+        let folder = try sb.store.folderForPhotoRequest(person: tobin)
+        let pdf = try write(try pdfData(), named: "bc.pdf", in: sb)
+        let doc = try sb.store.importPersonDocument(from: pdf, kind: .birth, note: "", into: folder, for: tobin)
+        try sb.store.removeDocument(doc, for: tobin)
+        let all = lock.withLock { lines }
+        #expect(all.count == 2)
+        #expect(all.allSatisfy { $0.contains(" for Tobin (QQ9Z-TOB) — ") }, "\(all)")
+        #expect(!all.joined().contains("Ashcombe"), "never a living surname in the log: \(all)")
     }
 
     // MARK: Logic — refusals (negative)
@@ -348,8 +366,9 @@ struct FamilyDocumentStoreTests {
         #expect(fileManager.fileExists(atPath: trash.appendingPathComponent(doc.filename).path))
         #expect(sb.store.documents(for: mary).isEmpty)
         #expect(try sidecarRows(in: folder).isEmpty)
-        #expect(lock.withLock { lines }.contains { $0.hasPrefix("[tree] removed Birth certificate for LZ7X-ABC — \(doc.filename) moved to Documents/.trash/") })
-        #expect(!lock.withLock { lines }.joined().contains("Mary"), "QA P3-1: no names in the app log")
+        #expect(lock.withLock { lines }.contains {
+            $0.hasPrefix("[tree] removed Birth certificate for Mary C O'Connor (LZ7X-ABC) — \(doc.filename) moved to Documents/.trash/")
+        })
 
         // Gone from the list → a second remove says so, and nothing in
         // .trash is touched.

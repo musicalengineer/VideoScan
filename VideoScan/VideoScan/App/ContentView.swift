@@ -762,7 +762,7 @@ struct CatalogView: View {
     private func choosePerson(_ id: UUID?) {
         personFilter.select(id: id)
         if id != nil { filterByIDs = []; focusMatchScore = nil; model.focusedMediaIDs = [] }
-        appLog.write("Catalog: Person \u{25BE} \(personFilter.selected?.name ?? CatalogPersonMenu.everyone)")
+        appLog.write("Catalog: Person \u{25BE} \(personFilter.selected.map { PersonLogName.named($0.name) } ?? CatalogPersonMenu.everyone)")
     }
 
     private var catalogContent: some View {

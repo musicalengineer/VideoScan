@@ -261,7 +261,7 @@ final class TreeIdentityCenter: ObservableObject {
                 derivations[profile.id] = nil
                 pinnedAny = true
             case .refused(let why):
-                appLog.write("[people] auto-pin of \(profile.name) refused: \(why)")
+                appLog.write("[people] auto-pin of \(PersonLogName.of(profile: profile)) refused: \(why)")
             }
         }
         if pinnedAny { pinsRevision += 1 }
