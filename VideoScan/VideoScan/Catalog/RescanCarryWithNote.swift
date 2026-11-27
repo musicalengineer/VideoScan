@@ -14,19 +14,35 @@
 // else a size change (both sides known); else two partialMD5s that disagree.
 // No evidence either way is the same file — carried quietly, as before.
 //
-// When it IS a different file and the earlier record is ACTIVE, not archived
-// itself, and holds any of Rick's curated values (`RescanCuratedGroup`):
+// When it IS a different file and the earlier record is active or Missing
+// (Codex r2 F5), not archived itself, and holds any of Rick's curated values
+// (`RescanCuratedGroup`):
 //   * the earlier record is stamped `replacedAtPath` (a disk fact: that path no
 //     longer holds those bytes; the B2.4 shape `placeRecord` uses) and KEPT —
 //     never purged — so the values it held stay in the catalog's history; the
-//     next rescan keeps it beside its successor (`historyRowsKeptAtReseenPaths`);
+//     next rescan keeps it beside its successor (`historyRowsKeptAtReseenPaths`),
+//     and a complete scan never removes it by path (Codex r2 F4, ScanMerge).
+//     When that marker cannot be stored first (B2.3 refusal) NOTHING moves:
+//     the earlier record stays as it is and the new file's record waits for
+//     the next scan (`deferred`) — never a replacement without its history
+//     (Codex r2 F3);
+//   * a group is set on the new record ONLY when the new file's CONTENT (its
+//     other copies, by whole-file SHA-256) has no value of its own for it: a
+//     value the content holds is the new record's value and is never
+//     overwritten or claimed by the carry (the store keeps one value per
+//     content, so a carried value would have overwritten every copy);
 //   * the new record gets one File Journey line in `notes` (machine text, shown
 //     in the Inspector's Notes and in its "Copied From an Earlier File" section):
 //       Carry <ISO>: Copied from the earlier file <name> (SHA-256 <12 hex>…) at
 //       this path on <yyyy-MM-dd>; review if this is not the same footage.
-//       Earlier record <UUID>.
+//       Carry record: {"earlier":"<UUID>","set":{"date":["1984-07","known"],…}}
+//     The JSON is the carry's IMMUTABLE RECEIPT: exactly which groups it set
+//     and the exact values it wrote. One line whatever the name or the values
+//     hold (control characters escaped — Codex r2 F6); no schema change.
 //     ("SHA-256 not computed" when the earlier record had no whole-file
 //     digest — never a sample passed off as one.)
+//   * the new file never inherits the earlier record's Missing marker: it is
+//     on disk (Codex r2 F5; also when nothing there was curated);
 //   * a new file that is a copy of ARCHIVED content (GH #528, the date seam)
 //     keeps the date that content was filed under — Rick's date and the five
 //     inferred fields — never the earlier file's;
@@ -34,25 +50,27 @@
 // An archived earlier record is out of scope (its file changing in place is a
 // fixity failure the preservation pass already reports); it is left as before.
 //
-// Undo ("Undo Carry" in the Inspector, `undoCarry`): the carry's stored marker
-// is the note itself (machine_notes — no schema change). Undo finds the
-// earlier record named by the newest Carry line, and for each curated group
-// whose value on the new record is STILL the value carried from it, puts back
-// the new record's prior value — blank: a fresh probe carries none of Rick's
-// values. A group Rick changed since is left as he set it (said in the log). A
-// date the seam fixes (archived, or a copy of archived content) is never
-// written. The Carry line is rewritten in place to say it was undone, so the
-// Inspector stops offering the undo and the history stays readable. The earlier
-// record is not touched: it still holds the values. One log line. Refused
-// (nothing touched) in a read-only session (`CuratedEditGuard`) and when the
-// earlier record is not in the catalog.
+// Undo ("Undo Carry" in the Inspector, `undoCarry`): reads the newest Carry
+// line's receipt. For each group THE RECEIPT says the carry set — and only
+// while the record still holds exactly the value the receipt says it wrote
+// (never compared with the mutable history row: Codex r2 F2) — it puts back
+// blank (a fresh probe carries none of Rick's values). Left as they are: a
+// group Rick changed since; a group another copy of this file's content holds
+// too (clearing it would clear that copy — Codex r2 F1); a date the seam fixes
+// (archived, or a copy of archived content). The Carry line is rewritten in
+// place to say it was undone, so the Inspector stops offering the undo. The
+// earlier record is not touched: it still holds the values. One log line.
+// Refused (nothing touched) in a read-only session (`CuratedEditGuard`) and
+// when the earlier record is not in the catalog (the values would leave it).
 //
 // Cost: the merge pass is O(records under the root + fresh) with an O(1) test
-// per row, no I/O and no await (it runs inside the merge's atomic section).
-// Memory (worst case): one dictionary entry per fresh record (path → reference,
-// ≈ 100 B) — ≈ 10 MB for a 100k-file rescan, freed when the merge returns —
-// plus the kept-row set (one 8-byte identity per carried row). Undo is O(lines
-// in one record's notes) plus one id lookup.
+// per row, plus one O(records) pass to index the new files' content copies
+// (only when a new file already has a whole-file digest); no I/O and no await
+// (it runs inside the merge's atomic section). Memory (worst case): one
+// dictionary entry per fresh record (path → reference, ≈ 100 B) — ≈ 10 MB for
+// a 100k-file rescan, freed when the merge returns — plus one receipt line per
+// carried record (≈ 200 B + Rick's values; it is stored in `notes`). Undo is
+// O(lines in one record's notes) plus one O(records) pass for the copies.
 //
 // (For Rick: `RescanCarryWithNote` is a small value type holding a reference to
 // the model — ≈ a C++ helper struct with a `Model&` member, like
@@ -64,11 +82,12 @@ import VideoScanCore
 
 // MARK: - Rick's curated values, by group
 
-/// One group of Rick's curated values — the ones the catalog keys by content
-/// (`CatalogCommit.shareCurated`). The carry's trigger is "any group is not
-/// blank"; undo works group by group. (For Rick: an enum whose `switch`es are
-/// the per-field tables — ≈ a C++ enum class with free functions.)
-enum RescanCuratedGroup: CaseIterable {
+/// One group of Rick's curated values — the ones the catalog keys by content.
+/// The carry's trigger is "any group is not blank"; the receipt and undo work
+/// group by group. The raw value is the receipt's key (never rename one).
+/// (For Rick: an enum whose `switch`es are the per-field tables — ≈ a C++ enum
+/// class with free functions.)
+enum RescanCuratedGroup: String, CaseIterable {
     case date, place, disposition, tags, userNotes, people, stars, familyMusic, attestations
 
     /// Blank = what a fresh scan probe carries.
@@ -87,31 +106,27 @@ enum RescanCuratedGroup: CaseIterable {
         }
     }
 
-    /// Same value on both records. People and the music mark compare by what
-    /// Rick sees (names, performer, title), not by their click timestamps: a
-    /// stored row and a held row round-trip those differently.
+    /// The group's value as Rick sees it, in the receipt's form. People, the
+    /// music mark and attestations leave out their click timestamps: a stored
+    /// row and a held row round-trip those differently.
     @MainActor
-    func same(_ a: VideoRecord, _ b: VideoRecord) -> Bool {
+    func value(_ r: VideoRecord) -> [String?] {
         switch self {
-        case .date: return a.userDate == b.userDate && a.userDateConfidence == b.userDateConfidence
-        case .place: return a.userPlace == b.userPlace && a.userPlaceConfidence == b.userPlaceConfidence
-        case .disposition: return a.mediaDisposition == b.mediaDisposition
-        case .tags: return a.tags == b.tags
-        case .userNotes: return a.userNotes == b.userNotes
-        case .people:
-            return a.confirmedByUserPeople.map(\.name) == b.confirmedByUserPeople.map(\.name)
-                && a.rejectedPeople == b.rejectedPeople
-        case .stars: return a.starRating == b.starRating
-        case .familyMusic: return Self.musicKey(a) == Self.musicKey(b)
-        case .attestations: return a.backupAttestations == b.backupAttestations
+        case .date: return [r.userDate, r.userDateConfidence]
+        case .place: return [r.userPlace, r.userPlaceConfidence]
+        case .disposition: return [r.mediaDisposition.rawValue]
+        case .tags: return r.tags
+        case .userNotes: return [r.userNotes]
+        case .people: return r.confirmedByUserPeople.map { "+" + $0.name } + r.rejectedPeople.map { "-" + $0 }
+        case .stars: return [String(r.starRating)]
+        case .familyMusic: return r.familyMusic.map { [$0.performer, $0.title] } ?? []
+        case .attestations: return r.backupAttestations.flatMap { [$0.kind.rawValue, $0.answer.rawValue, $0.label, $0.by] }
         }
     }
 
-    /// The music mark as Rick sees it (performer, title); nil = no mark.
+    /// Same value on both records (as Rick sees it).
     @MainActor
-    private static func musicKey(_ r: VideoRecord) -> [String?]? {
-        r.familyMusic.map { [$0.performer, $0.title] }
-    }
+    func same(_ a: VideoRecord, _ b: VideoRecord) -> Bool { value(a) == value(b) }
 
     /// Put the group back to blank.
     @MainActor
@@ -129,11 +144,27 @@ enum RescanCuratedGroup: CaseIterable {
         }
     }
 
+    /// Give `to` the group exactly as `from` holds it.
+    @MainActor
+    func copy(from: VideoRecord, to: VideoRecord) {
+        switch self {
+        case .date: to.userDate = from.userDate; to.userDateConfidence = from.userDateConfidence
+        case .place: to.userPlace = from.userPlace; to.userPlaceConfidence = from.userPlaceConfidence
+        case .disposition: to.mediaDisposition = from.mediaDisposition
+        case .tags: to.tags = from.tags
+        case .userNotes: to.userNotes = from.userNotes
+        case .people: to.confirmedByUserPeople = from.confirmedByUserPeople; to.rejectedPeople = from.rejectedPeople
+        case .stars: to.starRating = from.starRating
+        case .familyMusic: to.familyMusic = from.familyMusic
+        case .attestations: to.backupAttestations = from.backupAttestations
+        }
+    }
+
     @MainActor
     static func holdsAny(_ r: VideoRecord) -> Bool { allCases.contains { !$0.isBlank(r) } }
 }
 
-// MARK: - The note (the carry's stored marker)
+// MARK: - The note (the carry's stored, immutable receipt)
 
 /// The Carry line: writing it, finding the active one, marking it undone. Pure.
 enum RescanCarryNote {
@@ -141,48 +172,68 @@ enum RescanCarryNote {
     /// The File Journey verb (`UserNotesMigration.journeyStampVerbs`, lock-step).
     static let verb = "Carry"
     static let copiedPhrase = "Copied from the earlier file "
+    static let receiptMarker = " Carry record: "
     static let earlierPrefix = "Earlier record "
+
+    /// What the carry did, exactly: the earlier record, and for each group it
+    /// set, the value it wrote (`RescanCuratedGroup.value`). Written once, in
+    /// the Carry line; never edited (Undo rewrites the whole line as undone).
+    struct Receipt: Codable, Equatable {
+        let earlier: UUID
+        let set: [String: [String?]]
+    }
 
     /// What the Inspector shows and Undo needs from an active Carry line.
     struct Active: Equatable {
-        /// The sentence for a person (no stamp, no record id).
+        /// The sentence for a person (no stamp, no receipt).
         let sentence: String
-        let earlierID: UUID
+        let receipt: Receipt
         /// Index of the line in `notes.split(separator: "\n")`.
         let lineIndex: Int
+        var earlierID: UUID { receipt.earlier }
     }
 
-    /// When the carry happened, formatted ONCE per merge (a formatter per row
-    /// costs seconds at 100k).
+    /// When the carry happened, formatted ONCE per merge, and the receipt's
+    /// encoder, made once per merge (a formatter or encoder per row costs
+    /// seconds at 100k).
     struct Stamp {
         let iso: String
         let day: String
+        let encoder: JSONEncoder
         init(_ now: Date) {
             iso = ISO8601DateFormatter().string(from: now)
             day = RescanCarryNote.dayText(now)
+            encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         }
     }
 
-    static func line(earlierFilename: String, digest: String?, stamp: Stamp) -> (line: String, sentence: String) {
+    static func line(earlierFilename: String, digest: String?, stamp: Stamp, receipt: Receipt) -> (line: String, sentence: String) {
         let sha = digest.map { "SHA-256 \($0.prefix(12))…" } ?? "SHA-256 not computed"
-        let sentence = "\(copiedPhrase)\(earlierFilename) (\(sha)) at this path on \(stamp.day); "
+        let sentence = "\(copiedPhrase)\(printable(earlierFilename)) (\(sha)) at this path on \(stamp.day); "
             + "review if this is not the same footage."
-        return ("\(verb) \(stamp.iso): \(sentence)", sentence)
+        return ("\(verb) \(stamp.iso): \(sentence)\(receiptMarker)\(encode(receipt, with: stamp.encoder))", sentence)
     }
 
-    static func withEarlierID(_ line: String, _ id: UUID) -> String { "\(line) \(earlierPrefix)\(id.uuidString)." }
-
-    /// The newest Carry line, when it is an active carry (not an undone one).
+    /// The newest Carry line, when it is an active carry (not an undone one)
+    /// with a receipt that decodes. The receipt is the FIRST marker whose
+    /// remainder is one whole JSON object, so a name or a value that contains
+    /// the marker text cannot be mistaken for it.
     static func active(in notes: String) -> Active? {
         let lines = notes.split(separator: "\n", omittingEmptySubsequences: false)
         guard let index = lines.lastIndex(where: { isCarryLine($0) }) else { return nil }
         let line = lines[index]
-        guard let copied = line.range(of: copiedPhrase), let earlier = line.range(of: earlierPrefix, options: .backwards),
-              copied.upperBound <= earlier.lowerBound else { return nil }
-        let idText = line[earlier.upperBound...].trimmingCharacters(in: CharacterSet(charactersIn: ". "))
-        guard let id = UUID(uuidString: idText) else { return nil }
-        let sentence = line[copied.lowerBound..<earlier.lowerBound].trimmingCharacters(in: .whitespaces)
-        return Active(sentence: sentence, earlierID: id, lineIndex: index)
+        guard let colon = line.range(of: ": ") else { return nil }
+        let body = line[colon.upperBound...]
+        guard body.hasPrefix(copiedPhrase) else { return nil }
+        var from = body.startIndex
+        while let marker = body.range(of: receiptMarker, range: from..<body.endIndex) {
+            if let receipt = decode(body[marker.upperBound...]) {
+                return Active(sentence: String(body[..<marker.lowerBound]), receipt: receipt, lineIndex: index)
+            }
+            from = marker.upperBound
+        }
+        return nil
     }
 
     /// `notes` with the active line rewritten as undone (same position).
@@ -190,8 +241,8 @@ enum RescanCarryNote {
         var lines = notes.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         guard lines.indices.contains(active.lineIndex) else { return notes }
         lines[active.lineIndex] = "\(verb) \(ISO8601DateFormatter().string(from: now)): Undone — the values copied from "
-            + "the earlier file \(earlierFilename) were taken off this record (\(words)); they stay on the earlier record "
-            + "in the catalog's history. \(earlierPrefix.lowercased())\(active.earlierID.uuidString)."
+            + "the earlier file \(printable(earlierFilename)) were taken off this record (\(words)); they stay on the "
+            + "earlier record in the catalog's history. \(earlierPrefix.lowercased())\(active.earlierID.uuidString)."
         return lines.joined(separator: "\n")
     }
 
@@ -204,6 +255,45 @@ enum RescanCarryNote {
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "yyyy-MM-dd"
         return f.string(from: day)
+    }
+
+    // MARK: One line, whatever it holds (Codex r2 F6)
+
+    /// A character that ends or breaks a line for some reader: a C0/C1 control
+    /// (\n, \r, NEL …) or a Unicode line/paragraph separator.
+    static func breaksALine(_ s: Unicode.Scalar) -> Bool {
+        s.properties.generalCategory == .control || s.value == 0x2028 || s.value == 0x2029
+    }
+
+    /// `name` with every line-breaking character written as an escape
+    /// ("Tape\n01.mov" shows as `Tape\n01.mov`): the line stays one line and
+    /// still says what the name was.
+    static func printable(_ name: String) -> String {
+        guard name.unicodeScalars.contains(where: breaksALine) else { return name }
+        var out = ""
+        for s in name.unicodeScalars {
+            switch s {
+            case "\n": out += "\\n"
+            case "\r": out += "\\r"
+            case "\t": out += "\\t"
+            default: out += breaksALine(s) ? String(format: "\\u{%X}", s.value) : String(s)
+            }
+        }
+        return out
+    }
+
+    /// The receipt as one line of JSON: the encoder escapes C0 controls; the
+    /// rest that can break a line (only ever inside a string) become \uXXXX.
+    static func encode(_ receipt: Receipt, with encoder: JSONEncoder) -> String {
+        guard let data = try? encoder.encode(receipt), let json = String(data: data, encoding: .utf8) else { return "{}" }
+        guard json.unicodeScalars.contains(where: breaksALine) else { return json }
+        var out = ""
+        for s in json.unicodeScalars { out += breaksALine(s) ? String(format: "\\u%04X", s.value) : String(s) }
+        return out
+    }
+
+    static func decode(_ text: Substring) -> Receipt? {
+        try? JSONDecoder().decode(Receipt.self, from: Data(text.utf8))
     }
 }
 
@@ -238,57 +328,150 @@ struct RescanCarryWithNote {
                     oldPartialMD5: old.partialMD5, freshPartialMD5: fresh.partialMD5)
     }
 
+    /// An earlier record the carry may take from: live, or Missing (its file
+    /// left outside the app — Codex r2 F5). History, the Trash and Remove from
+    /// Catalog are not it.
+    static func mayCarryFrom(_ old: VideoRecord) -> Bool {
+        old.removal == nil || old.removal?.state == .missing
+    }
+
+    /// What `carry` decided, for the merge.
+    struct Result {
+        /// Earlier records the merge keeps (stamped history, or left as they
+        /// were because their marker could not be stored first).
+        var kept = Set<ObjectIdentifier>()
+        /// Fresh records the merge must NOT add this time (their earlier
+        /// record could not be kept as history): the next scan finds them.
+        var deferred = Set<ObjectIdentifier>()
+        /// Fresh records carried with a note.
+        var carried = 0
+
+        func keeps(_ rec: VideoRecord) -> Bool { kept.contains(ObjectIdentifier(rec)) }
+
+        /// `fresh` without the deferred records — what the merge adds now.
+        func adding(_ fresh: [VideoRecord]) -> [VideoRecord] {
+            deferred.isEmpty ? fresh : fresh.filter { !deferred.contains(ObjectIdentifier($0)) }
+        }
+    }
+
+    private struct Pair {
+        let old: VideoRecord
+        let new: VideoRecord
+        /// The earlier record's marker as the preservation pass copied it.
+        let inherited: RemovalMarker?
+    }
+
     /// Both merges call this after the live re-read and before their sweep.
-    /// Returns the earlier records to KEEP (stamped `replacedAtPath`) and how
-    /// many fresh records were carried with a note. `alreadyKept` = the
-    /// history rows the merge keeps anyway (never re-judged).
+    /// `alreadyKept` = the history rows the merge keeps anyway (never re-judged).
     func carry(root: String, newPaths: Set<String>, fresh: [VideoRecord],
-               alreadyKept: Set<ObjectIdentifier>, now: Date = Date()) -> (kept: Set<ObjectIdentifier>, carried: Int) {
+               alreadyKept: Set<ObjectIdentifier>, now: Date = Date()) -> Result {
         var freshByPath: [String: VideoRecord] = [:]
         freshByPath.reserveCapacity(fresh.count)
         for rec in fresh where freshByPath[rec.fullPath] == nil { freshByPath[rec.fullPath] = rec }
-        // Pass 1 decides and notes, pass 2 stamps: a marker change moves the
-        // archive-facts generation, so stamping inside pass 1 would rebuild
-        // the archived-content index on every twin lookup (O(n²) at 100k).
-        var pairs: [(old: VideoRecord, new: VideoRecord)] = []
+        // Pass 1 decides, pass 2 stamps, pass 3 notes: a marker change moves
+        // the archive-facts generation, so a stamp between twin lookups would
+        // rebuild the archived-content index on every lookup (O(n²) at 100k).
+        var pairs: [Pair] = []
         for old in model.records where newPaths.contains(old.fullPath) && PathScope.contains(old.fullPath, within: root) {
-            guard old.removal == nil, !alreadyKept.contains(ObjectIdentifier(old)),
+            guard Self.mayCarryFrom(old), !alreadyKept.contains(ObjectIdentifier(old)),
                   let new = freshByPath[old.fullPath], new !== old,
-                  !model.isDateReadOnlyItself(old), RescanCuratedGroup.holdsAny(old),
-                  Self.isDifferentFile(old, new) else { continue }
-            pairs.append((old, new))
+                  !model.isDateReadOnlyItself(old), Self.isDifferentFile(old, new) else { continue }
+            if RescanCuratedGroup.holdsAny(old) {
+                pairs.append(Pair(old: old, new: new, inherited: old.removal))
+            } else {
+                Self.dropInheritedMissing(on: new, from: old.removal)   // replaced as before, but never "Missing"
+            }
         }
-        guard !pairs.isEmpty else { return ([], 0) }
+        guard !pairs.isEmpty else { return Result() }
+        var result = Result()
+        let stamped = stampHistory(pairs, at: now, into: &result)
+        let holders = contentCopies(of: stamped.map(\.new))
         let stamp = RescanCarryNote.Stamp(now)
-        for (old, new) in pairs {
-            keepDateAsFiled(on: new, carriedFrom: old)
-            let (line, _) = RescanCarryNote.line(earlierFilename: old.filename, digest: CatalogCommit.digest(of: old),
-                                                 stamp: stamp)
-            new.notes = MachineNote.append(RescanCarryNote.withEarlierID(line, old.id), to: new.notes)
+        for pair in stamped {
+            let receipt = settle(pair, holders: holders)
+            let (line, _) = RescanCarryNote.line(earlierFilename: pair.old.filename, digest: CatalogCommit.digest(of: pair.old),
+                                                 stamp: stamp, receipt: receipt)
+            pair.new.notes = MachineNote.append(line, to: pair.new.notes)
+            Self.dropInheritedMissing(on: pair.new, from: pair.inherited)
         }
-        var kept = Set<ObjectIdentifier>()
+        result.carried = stamped.count
+        if !stamped.isEmpty { sayCarried(stamped.count, names: stamped.prefix(5).map(\.old.filename), root: root) }
+        return result
+    }
+
+    /// Stamp each earlier record `replacedAtPath`. Refuse rather than guess
+    /// (B2.3, Codex r2 F3): when a marker cannot be stored first, the earlier
+    /// record stays exactly as it is and its new file waits for the next scan
+    /// — never a replacement without its history row.
+    private func stampHistory(_ pairs: [Pair], at now: Date, into result: inout Result) -> [Pair] {
         let marker = RemovalMarker.removedFromCatalog(at: now, reason: .replacedAtPath)
-        for (old, _) in pairs {
-            // Refuse rather than guess (B2.3): when the earlier record's marker
-            // cannot be stored first it is NOT kept beside the new row (two live
-            // rows at one path); it is replaced as before — its values are on
-            // the new record and the note says where they came from.
-            if let why = VideoScanModel.stampRemoval(old, marker, kind: .diskFact) {
-                model.log("  NOT RECORDED: \(old.filename) holds a different file now, but its earlier record could not be kept "
-                          + "as history — \(why). Your values were copied onto the new record with a note.")
+        var stamped: [Pair] = []
+        stamped.reserveCapacity(pairs.count)
+        for pair in pairs {
+            result.kept.insert(ObjectIdentifier(pair.old))
+            if let why = VideoScanModel.stampRemoval(pair.old, marker, kind: .diskFact) {
+                result.deferred.insert(ObjectIdentifier(pair.new))
+                // The preservation pass pointed other records at the new id;
+                // that record is not added, so point them back.
+                model.relinkLifecyclePointersAfterRescan(oldIDs: [pair.new.fullPath: pair.new.id], targetRecords: [pair.old])
+                model.log("  NOT RECORDED: \(pair.old.filename) holds a different file now, but its earlier record could not be "
+                          + "kept as history — \(why). The catalog keeps it as it was; the next scan will copy your values with a note.")
                 continue
             }
-            kept.insert(ObjectIdentifier(old))
+            stamped.append(pair)
         }
-        sayCarried(pairs.count, names: pairs.prefix(5).map(\.old.filename), root: root)
-        return (kept, pairs.count)
+        return stamped
+    }
+
+    /// Every catalog record holding the content of one of `news`, by digest —
+    /// one O(records) pass, only when a new file already has a whole-file hash.
+    private func contentCopies(of news: [VideoRecord]) -> [String: [VideoRecord]] {
+        let digests = Set(news.compactMap { CatalogCommit.digest(of: $0) })
+        guard !digests.isEmpty else { return [:] }
+        var out: [String: [VideoRecord]] = [:]
+        for r in model.records {
+            if let d = CatalogCommit.digest(of: r), digests.contains(d) { out[d, default: []].append(r) }
+        }
+        return out
+    }
+
+    /// Decide, group by group, what the new record holds, and return the
+    /// receipt of what the carry set. A group the new file's content already
+    /// holds (another copy has a value) is that value — never overwritten,
+    /// never claimed. A group not equal to the earlier record's is not the
+    /// carry's either.
+    private func settle(_ pair: Pair, holders: [String: [VideoRecord]]) -> RescanCarryNote.Receipt {
+        let (old, new) = (pair.old, pair.new)
+        let dateFiled = keepDateAsFiled(on: new, carriedFrom: old)
+        let copies = CatalogCommit.digest(of: new).flatMap { holders[$0] }?
+            .filter { $0 !== old && $0 !== new }
+            .sorted { ($0.removal == nil ? 0 : 1) < ($1.removal == nil ? 0 : 1) } ?? []
+        var set: [String: [String?]] = [:]
+        for group in RescanCuratedGroup.allCases where !group.isBlank(new) {
+            if group == .date && dateFiled { continue }
+            if let holder = copies.first(where: { !group.isBlank($0) }) {
+                group.copy(from: holder, to: new)
+                continue
+            }
+            if group.same(new, old) { set[group.rawValue] = group.value(new) }
+        }
+        return RescanCarryNote.Receipt(earlier: old.id, set: set)
+    }
+
+    /// A Missing marker the preservation pass copied onto a new file that is
+    /// on disk describes the EARLIER file, never this one (the preservation
+    /// carrier takes it back — the one place besides the engine that writes it).
+    private static func dropInheritedMissing(on new: VideoRecord, from inherited: RemovalMarker?) {
+        RescanPreservedFields.withdrawCarriedMissing(inherited, from: new)
     }
 
     /// GH #528: a new file that is a copy of ARCHIVED content shows the date
     /// that content was filed under, never the earlier file's (the seam;
     /// the commit refuses it too — this keeps memory honest before then).
-    private func keepDateAsFiled(on new: VideoRecord, carriedFrom old: VideoRecord) {
-        guard let filed = model.archivedCopyFixingDate(of: new), filed !== new else { return }
+    /// True when the date is fixed that way.
+    @discardableResult
+    private func keepDateAsFiled(on new: VideoRecord, carriedFrom old: VideoRecord) -> Bool {
+        guard let filed = model.archivedCopyFixingDate(of: new), filed !== new else { return false }
         let declined = old.userDate
         new.userDate = filed.userDate
         new.userDateConfidence = filed.userDateConfidence
@@ -296,6 +479,7 @@ struct RescanCarryWithNote {
         if let declined {
             model.noteDateLeftAsFiled(new, writer: "Rescan", declined: "\(declined) from the earlier file \(old.filename)")
         }
+        return true
     }
 
     private func sayCarried(_ count: Int, names: [String], root: String) {
@@ -322,8 +506,10 @@ struct RescanCarryWithNote {
         /// Nothing was touched; the words say why.
         case refused(String)
         /// `reset` groups put back to blank; `keptYours` left as Rick set them
-        /// after the carry; `dateFixed` = the date was left as filed (archived).
-        case undone(reset: Int, keptYours: Int, dateFixed: Bool)
+        /// after the carry; `keptShared` left because another copy of this
+        /// file's content holds them too; `dateFixed` = the date is left as
+        /// filed (archived).
+        case undone(reset: Int, keptYours: Int, keptShared: Int, dateFixed: Bool)
     }
 
     /// "Undo Carry" on `rec`: see the header. One log line; the caller's
@@ -337,23 +523,37 @@ struct RescanCarryWithNote {
             return .refused("\(rec.filename) has no carry to undo")
         }
         guard let earlier = model.record(forID: active.earlierID), earlier !== rec else {
-            let words = "the earlier record (\(active.earlierID.uuidString)) is not in the catalog, so what was copied "
-                + "cannot be told apart from your own edits — nothing was changed"
+            let words = "the earlier record (\(active.earlierID.uuidString)) is not in the catalog, so taking the copied "
+                + "values off would lose them — nothing was changed"
             model.log("Undo Carry: \(rec.filename) — \(words).")
             return .refused(words)
         }
         let dateFixed = model.isDateReadOnly(rec)
-        var reset = 0, keptYours = 0
-        for group in RescanCuratedGroup.allCases where !group.isBlank(rec) {
+        let copies = otherCopies(of: rec, besides: earlier)
+        var reset = 0, keptYours = 0, keptShared = 0
+        for group in RescanCuratedGroup.allCases {
+            guard let wrote = active.receipt.set[group.rawValue] else { continue }   // not the carry's
             if group == .date && dateFixed { continue }
-            if group.same(rec, earlier) { group.clear(rec); reset += 1 } else { keptYours += 1 }
+            if group.value(rec) != wrote { keptYours += 1; continue }
+            if copies.contains(where: { !group.isBlank($0) }) { keptShared += 1; continue }
+            group.clear(rec)
+            reset += 1
         }
         let words = "\(reset) put back to blank, \(keptYours) you changed since left as you set them"
+            + (keptShared > 0 ? ", \(keptShared) left because another copy of this file holds them too" : "")
             + (dateFixed ? ", the date left as filed (archived)" : "")
         rec.notes = RescanCarryNote.markingUndone(rec.notes, active, earlierFilename: earlier.filename, words: words, at: now)
         model.log("Undo Carry: \(rec.filename) — \(words). The earlier record \(earlier.filename) keeps its values in the catalog's history.")
         appLog.write("Undo Carry: record \(rec.id.uuidString) — \(words); earlier record \(earlier.id.uuidString) untouched")
         model.saveCatalogDebounced()
-        return .undone(reset: reset, keptYours: keptYours, dateFixed: dateFixed)
+        return .undone(reset: reset, keptYours: keptYours, keptShared: keptShared, dateFixed: dateFixed)
+    }
+
+    /// The other records holding `rec`'s content (same whole-file SHA-256):
+    /// the store keeps one value per content, so a clear on `rec` reaches
+    /// them. Empty while `rec` has no whole-file hash. O(records), once.
+    private func otherCopies(of rec: VideoRecord, besides earlier: VideoRecord) -> [VideoRecord] {
+        guard let digest = CatalogCommit.digest(of: rec) else { return [] }
+        return model.records.filter { $0 !== rec && $0 !== earlier && CatalogCommit.digest(of: $0) == digest }
     }
 }

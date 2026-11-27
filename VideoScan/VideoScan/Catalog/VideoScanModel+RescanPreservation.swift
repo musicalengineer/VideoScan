@@ -583,6 +583,22 @@ struct RescanPreservedFields: Sendable {
         rec.perceptualFingerprint = (perceptualFingerprint?.sizeBytes == rec.sizeBytes) ? perceptualFingerprint : nil
         return carry
     }
+
+    /// GH #478, Codex r2 F5: take back a MISSING marker `apply(to:)` carried
+    /// onto a fresh record whose file is a DIFFERENT file (RescanCarryWithNote
+    /// decides that): the marker described the earlier file, and this one is
+    /// on disk. Only while the fresh record still holds exactly the carried
+    /// marker; it is not in the catalog yet, so this is the carry undone, not
+    /// a marker change (no relay, no bump — its revision returns to a fresh
+    /// probe's 0). Returns whether it withdrew anything.
+    @MainActor
+    @discardableResult
+    static func withdrawCarriedMissing(_ carried: RemovalMarker?, from fresh: VideoRecord) -> Bool {
+        guard let carried, carried.state == .missing, fresh.removal == carried else { return false }
+        fresh.removal = nil
+        fresh.removalRevision = 0
+        return true
+    }
 }
 
 extension VideoScanModel {

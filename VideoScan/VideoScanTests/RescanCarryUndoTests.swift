@@ -55,7 +55,7 @@ struct RescanCarryUndoTests {
     func undoRestoresPriorValues() async throws {
         let s = try await Self.carried("undo"); defer { try? FileManager.default.removeItem(at: s.root) }
         let outcome = RescanCarryWithNote(model: s.model).undoCarry(on: s.fresh)
-        #expect(outcome == .undone(reset: 7, keptYours: 0, dateFixed: false), "\(outcome)")
+        #expect(outcome == .undone(reset: 7, keptYours: 0, keptShared: 0, dateFixed: false), "\(outcome)")
         Self.expectBlank(s.fresh)
         #expect(RescanCarryNote.active(in: s.fresh.notes) == nil, "the Inspector stops offering the undo")
         #expect(s.fresh.notes.contains("Undone — the values copied from the earlier file test_undo.mov were taken off this record"),
@@ -72,7 +72,7 @@ struct RescanCarryUndoTests {
         let s = try await Self.carried("edited"); defer { try? FileManager.default.removeItem(at: s.root) }
         s.fresh.starRating = 1
         let outcome = RescanCarryWithNote(model: s.model).undoCarry(on: s.fresh)
-        #expect(outcome == .undone(reset: 6, keptYours: 1, dateFixed: false))
+        #expect(outcome == .undone(reset: 6, keptYours: 1, keptShared: 0, dateFixed: false))
         #expect(s.fresh.starRating == 1, "Rick's later edit")
         Self.expectBlank(s.fresh, except: ["stars"])
     }
@@ -114,7 +114,7 @@ struct RescanCarryUndoTests {
         await C.rescan(model, root: root, fresh: [fresh])
         try #require(fresh.userDate == "1990")
         let outcome = RescanCarryWithNote(model: model).undoCarry(on: fresh)
-        #expect(outcome == .undone(reset: 6, keptYours: 0, dateFixed: true), "\(outcome)")
+        #expect(outcome == .undone(reset: 6, keptYours: 0, keptShared: 0, dateFixed: true), "\(outcome)")
         #expect(fresh.userDate == "1990", "the filed date is not undone — archived means fixed")
         #expect(archived.userDate == "1990")
         Self.expectBlank(fresh, except: ["date"])
@@ -122,14 +122,14 @@ struct RescanCarryUndoTests {
 
     @Test("the Carry line is machine text (author scan), never a probe diagnostic, so it survives a rescan; a person's 'Carry …' note is not a carry")
     func noteGrammar() {
-        let id = UUID()
-        let (line, sentence) = RescanCarryNote.line(earlierFilename: "a.mov", digest: nil, stamp: RescanCarryNote.Stamp(Date()))
-        let full = RescanCarryNote.withEarlierID(line, id)
+        let receipt = RescanCarryNote.Receipt(earlier: UUID(), set: ["stars": ["3"], "date": ["1984-07", nil]])
+        let (full, sentence) = RescanCarryNote.line(earlierFilename: "a.mov", digest: nil, stamp: RescanCarryNote.Stamp(Date()),
+                                                    receipt: receipt)
         #expect(MachineNote.author(of: full) == MachineNote.Author.scan.rawValue)
         #expect(!MachineNote.isProbeDiagnostic(Substring(full)))
         #expect(MachineNote.rescanMerged(kept: full, fresh: "ffprobe: x").contains(full))
         let active = RescanCarryNote.active(in: "ffprobe: x\n" + full)
-        #expect(active == RescanCarryNote.Active(sentence: sentence, earlierID: id, lineIndex: 1))
+        #expect(active == RescanCarryNote.Active(sentence: sentence, receipt: receipt, lineIndex: 1))
         #expect(RescanCarryNote.active(in: "Carry the tapes to Tim's on Sunday") == nil)
         #expect(MachineNote.author(of: "Carry the tapes to Tim's on Sunday") == nil, "a human line stays human")
     }
@@ -165,7 +165,7 @@ struct RescanCarryUndoTests {
         #expect(await model.catalogStore.holdWrites(reason: "a test job", owner: CatalogWriteHoldOwner()) == .taken)
         fresh.starRating = 2                         // Rick's edit after the carry
         model.saveCatalogDebounced()
-        #expect(RescanCarryWithNote(model: model).undoCarry(on: fresh) == .undone(reset: 6, keptYours: 1, dateFixed: false))
+        #expect(RescanCarryWithNote(model: model).undoCarry(on: fresh) == .undone(reset: 6, keptYours: 1, keptShared: 0, dateFixed: false))
         model.catalogStore.releaseWriteHold()
         #expect(model.saveCatalogNow())
 

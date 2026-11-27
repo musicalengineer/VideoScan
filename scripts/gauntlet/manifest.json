@@ -39811,6 +39811,26 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/RescanCarryRound2Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "RescanCarryRound2Tests"
+      ],
+      "tests": [
+        "completeScanKeepsTheHistoryRow",
+        "contentHeldValueIsNeverClaimed",
+        "missingEarlierRecordTakesTheCarryPath",
+        "missingNothingCuratedDropsTheMarker",
+        "newlineInTheFilename",
+        "noReceiptNoUndo",
+        "receiptSurvivesAnyNameAndValue",
+        "refusedHistoryMarkerDefersTheReplacement",
+        "undoComparesAgainstTheReceiptNotTheHistoryRow",
+        "undoKeepsAnotherCopysIndependentValue"
+      ]
+    },
+    {
       "blocked_reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ProductionShapeRescanCarryTests.swift",
@@ -43897,7 +43917,7 @@
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 1210,
+      "expected_floor": 1220,
       "name": "regression",
       "package_expected_floor": 396,
       "package_selectors": [
@@ -44191,7 +44211,8 @@
         "VideoScanTests/ArchivedTwinDateWritersTests",
         "VideoScanTests/WholeFileIdentityTests",
         "VideoScanTests/RescanCarryWithNoteTests",
-        "VideoScanTests/RescanCarryUndoTests"
+        "VideoScanTests/RescanCarryUndoTests",
+        "VideoScanTests/RescanCarryRound2Tests"
       ]
     },
     {
