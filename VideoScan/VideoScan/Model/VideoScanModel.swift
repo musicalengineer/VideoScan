@@ -1818,6 +1818,18 @@ final class VideoScanModel: ObservableObject {
     /// authority; unattached it shows nothing and refuses.
     let provenanceEstimates = ProvenanceEstimateStore()
 
+    /// The provenance fields Rick types — digitization date, tape, source
+    /// (DECISIONS 2026-11-27; ProvenanceFieldsStore.swift; rule 12: state
+    /// behind a seam, no model extension). Rows of `provenance_assertions`;
+    /// attached when catalog.sqlite becomes the authority; unattached it
+    /// shows unknown and refuses.
+    let provenanceFields = ProvenanceFieldsStore()
+
+    /// New media waiting for their provenance to be offered: files a scan or
+    /// a manual add brought in, until Fill In Full Hashes shows which are
+    /// content the catalog never saw (NewMediaProvenanceStore.swift; rule 12).
+    let newMediaProvenance = NewMediaProvenanceStore()
+
     /// Held back at import (GH #339, DECISIONS 2026-11-25 evening): the rows
     /// the October import kept in `quarantine` — Catalog Status's count, the
     /// read-only list, Find Moved Copies' offers and Rick's confirmed carry

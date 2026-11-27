@@ -149,6 +149,11 @@ final class CatalogCommitter {
     static let unpurgedLinesPerCommit = 10
 
     let repository: any CatalogRepository
+    /// The one "this content's provenance_assertions rows changed" signal of
+    /// this session: every provenance store that writes those rows posts its
+    /// read-back here, and every store that shows them hears it (Codex round
+    /// 2, 2026-11-27 — a carrier write refreshes every reader).
+    let provenanceAssertions = ProvenanceAssertionsFeed()
     private let input: () -> Input
     private let sink: (String) -> Void
     /// After curated fields were copied onto other copies of a content.
@@ -490,6 +495,10 @@ final class CatalogCommitter {
         /// rows from Estimate Provenance and Rick's "Not Right" — rows of
         /// `provenance_assertions` (v1.13), through ProvenanceEstimateStore.
         case provenanceEstimates = "provenance estimates"
+        /// The three provenance fields Rick types (DECISIONS 2026-11-27):
+        /// digitization date, tape, source — rows of `provenance_assertions`
+        /// by 'rick', through ProvenanceFieldsStore.
+        case provenanceFields = "provenance fields"
         /// The background helper's observations (schema v1.13), from its
         /// journal through JournalApplier — the only road in (design §3.4).
         case observations = "background observations"

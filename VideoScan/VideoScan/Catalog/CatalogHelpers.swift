@@ -716,6 +716,8 @@ struct CatalogContent: View {
             provenanceRoles: model.provenanceRoles,
             contentDigest: selectedRecord.flatMap(CatalogCommit.digest(of:)),
             provenanceEstimates: model.provenanceEstimates,
+            provenanceFields: model.provenanceFields,
+            provenanceDateLocked: selectedRecord.map { model.isDateReadOnly($0) } ?? false,
             fileDossiers: FileDossierLoader.production(model: model)
         )
         .frame(minWidth: 260, idealWidth: 300, maxWidth: 400)

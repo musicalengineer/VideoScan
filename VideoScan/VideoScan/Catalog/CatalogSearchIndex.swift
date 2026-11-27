@@ -153,6 +153,17 @@ final class CatalogSearchIndex {
             self.years = years
         }
 
+        /// One path's terms from two layers: both texts (each line its own,
+        /// so a phrase never spans layers), both word sets, and the years of
+        /// the layer that has them (only the era layer carries years; the
+        /// provenance layer's are always nil — a digitization year is a
+        /// word, never a filming year).
+        init(merging a: ObservationTerms, _ b: ObservationTerms) {
+            text = a.text + "\n" + b.text
+            words = a.words.union(b.words)
+            years = a.years ?? b.years
+        }
+
         /// The reference semantics of the layer (pure).
         func matches(_ token: SearchToken) -> Bool {
             switch token {
@@ -166,16 +177,28 @@ final class CatalogSearchIndex {
         }
     }
 
-    /// fullPath → its observation terms (MachineEraStore).
+    /// fullPath → its observation terms — every source's layer combined.
     private var observations: [String: ObservationTerms] = [:]
     /// word → fullPaths whose observation text holds it.
     private var observationWordIndex: [String: Set<String>] = [:]
 
+    /// Who feeds a layer (2026-11-27): the era job's words (MachineEraStore)
+    /// and the provenance fields Rick typed (ProvenanceFieldsStore). Each
+    /// source replaces only its own layer; the two are combined per path.
+    enum ObservationSource: Hashable, Sendable {
+        case machineEra
+        case provenance
+    }
+
+    /// Each source's last layer.
+    private var layers: [ObservationSource: ObservationLayer] = [:]
+
     /// The whole layer, built off the main actor (`ObservationLayer.init`
-    /// is pure) and swapped in by `setObservations` in O(1).
+    /// is pure) and swapped in by `setObservations` in O(1) when it is the
+    /// only non-empty one; with two, combined per path (O(paths + words)).
     struct ObservationLayer: Sendable {
-        let byPath: [String: ObservationTerms]
-        let wordIndex: [String: Set<String>]
+        private(set) var byPath: [String: ObservationTerms]
+        private(set) var wordIndex: [String: Set<String>]
 
         init(_ byPath: [String: ObservationTerms]) {
             self.byPath = byPath
@@ -185,23 +208,53 @@ final class CatalogSearchIndex {
             }
             wordIndex = index
         }
+
+        /// Drop one path (a purge / rescan removal).
+        mutating func remove(_ path: String) {
+            guard let terms = byPath.removeValue(forKey: path) else { return }
+            CatalogSearchIndex.retract(path, keys: terms.words, from: &wordIndex)
+        }
     }
 
-    /// Replace the whole layer (one call per MachineEraStore refresh).
-    func setObservations(_ layer: ObservationLayer) {
-        observations = layer.byPath
-        observationWordIndex = layer.wordIndex
-        fastPathEligibility.removeAll(keepingCapacity: false)
+    /// Replace one source's layer (one call per that store's refresh).
+    func setObservations(_ layer: ObservationLayer, source: ObservationSource = .machineEra) {
+        layers[source] = layer
+        recombineObservations()
     }
 
     /// Convenience for a small layer (tests): builds on the calling actor.
-    func setObservations(_ byPath: [String: ObservationTerms]) { setObservations(ObservationLayer(byPath)) }
+    func setObservations(_ byPath: [String: ObservationTerms], source: ObservationSource = .machineEra) {
+        setObservations(ObservationLayer(byPath), source: source)
+    }
+
+    /// The combined view the matcher reads. One non-empty layer is used as it
+    /// is (the era-only path is unchanged); two are merged per path.
+    private func recombineObservations() {
+        let present = layers.values.filter { !$0.byPath.isEmpty }
+        if present.count <= 1 {
+            observations = present.first?.byPath ?? [:]
+            observationWordIndex = present.first?.wordIndex ?? [:]
+        } else {
+            var merged: [String: ObservationTerms] = [:]
+            var index: [String: Set<String>] = [:]
+            for layer in present {
+                for (path, terms) in layer.byPath {
+                    merged[path] = merged[path].map { ObservationTerms(merging: $0, terms) } ?? terms
+                }
+                for (word, paths) in layer.wordIndex { index[word, default: []].formUnion(paths) }
+            }
+            observations = merged
+            observationWordIndex = index
+        }
+        fastPathEligibility.removeAll(keepingCapacity: false)
+    }
 
     /// The path's observation terms (tests; the "what does the index hold" truth).
     func observationTerms(forPath path: String) -> ObservationTerms? { observations[path] }
 
     /// Discard the entire cache. Called on catalog reset / full reload.
     func clear() {
+        layers.removeAll(keepingCapacity: false)
         observations.removeAll(keepingCapacity: false)
         observationWordIndex.removeAll(keepingCapacity: false)
         haystacks.removeAll(keepingCapacity: false)
@@ -302,6 +355,7 @@ final class CatalogSearchIndex {
         haystacks.removeValue(forKey: fullPath)
         yearSets.removeValue(forKey: fullPath)
         if let terms = observations.removeValue(forKey: fullPath) { Self.retract(fullPath, keys: terms.words, from: &observationWordIndex) }
+        for source in Array(layers.keys) { layers[source]?.remove(fullPath) }
         if let people = personsByPath.removeValue(forKey: fullPath) { Self.retract(fullPath, keys: people, from: &personIndex) }
         // Removing the last reference to a word drops it from the key set,
         // which could make a previously-ineligible needle eligible. Drop the
@@ -311,7 +365,7 @@ final class CatalogSearchIndex {
 
     /// Take `path` out of each key's bucket in an inverted index; a bucket
     /// left empty drops its key (so the key set stays the live vocabulary).
-    private static func retract(_ path: String, keys: Set<String>, from index: inout [String: Set<String>]) {
+    nonisolated static func retract(_ path: String, keys: Set<String>, from index: inout [String: Set<String>]) {
         for key in keys {
             index[key]?.remove(path)
             if index[key]?.isEmpty == true { index.removeValue(forKey: key) }

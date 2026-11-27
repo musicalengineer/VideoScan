@@ -50,6 +50,7 @@ struct AppSupportSideStoreInventoryTests {
         "metadata_cache.sqlite": .derived,                    // ffprobe cache
         "personfinder_cache.sqlite": .derived,
         "fullhash-backfill.json": .derived,                   // resume state of Fill In Full Hashes
+        "new-media-provenance.json": .derived,                // new media waiting for Full Hashes + digests already offered (NewMediaProvenanceStore; a notice's bookkeeping, never a fact shown)
         "sync-sources.json": .derived,                        // CatalogSync: written beside the manifest
         "sets.json": .derived,                                // Footage Spectrum helper input
         "current.json": .derived,                             // compiled family graph / sync pointer

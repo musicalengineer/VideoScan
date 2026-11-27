@@ -72,6 +72,9 @@ struct ContentView: View {
             if catalogSync.mode == .viewer {
                 CatalogSyncBanner(sync: catalogSync)
             }
+            // New media (DECISIONS 2026-11-27): one non-modal notice after
+            // Fill In Full Hashes finds content the catalog never saw.
+            NewMediaProvenanceBanner(store: model.newMediaProvenance, fields: model.provenanceFields, model: model)
             // Custom tab bar — a floating Liquid Glass capsule, centered with
             // traffic-light inset (Rick 2026-10-04, macOS 27 refresh). A glass
             // lens flows to the selected tab and a glass bubble follows the

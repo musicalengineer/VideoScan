@@ -46,7 +46,9 @@
 //
 // WHAT STANDS (reading the rows back): per field, Rick's newest decision if
 // it is `confirmed` / `corrected`; otherwise ONLY the newest machine row —
-// and nothing if he rejected that value. An older machine value the rule
+// and nothing if he rejected that value. For `carrier` (the field Rick also
+// types as his tape) a clear rejects the whole field: nothing stands after it
+// (ProvenanceFields.rickDecision, the one reading both use). An older machine value the rule
 // itself replaced never comes back. A run that stops proposing a content
 // WITHDRAWS its estimate with a new inferred `role` = `unknown` row (the
 // table is append-only), which then is that newest row: nothing is shown.
@@ -483,11 +485,24 @@ public enum ProvenanceResolver {
     /// `corrected`. Otherwise ONLY the newest machine row can stand, and it
     /// does not if Rick rejected its value: an older value the machine itself
     /// replaced is never brought back (review 2026-11-10).
+    ///
+    /// A field Rick also TYPES (`carrier`, his tape — ProvenanceField) follows
+    /// the one reading of his word (`ProvenanceFields.rickDecision`): his clear
+    /// rejects the field, so no machine value stands after it, older or newer
+    /// (Codex round 2, 2026-11-27, P1). Other fields (role, capture setup)
+    /// keep the rule above: Not Right rejects the VALUE it names.
     static func standing(_ rows: [CatalogRow.ProvenanceAssertionReading], field: String) -> FieldStanding? {
         let mine = rows.filter { $0.field == field }
-        if let decided = mine.filter({ $0.by == ProvenanceEstimateRule.owner }).max(by: { $0.seq < $1.seq }),
-           decided.state == "confirmed" || decided.state == "corrected" {
-            return FieldStanding(value: decided.value, confirmed: true, row: decided)
+        switch ProvenanceFields.rickDecision(mine, field: field) {
+        case .value?:
+            if let decided = mine.filter({ $0.by == ProvenanceEstimateRule.owner && ($0.state == "confirmed" || $0.state == "corrected") })
+                .max(by: { $0.seq < $1.seq }) {
+                return FieldStanding(value: decided.value, confirmed: true, row: decided)
+            }
+        case .cleared? where ProvenanceField(rawValue: field) != nil:
+            return nil
+        default:
+            break
         }
         guard let newest = newestMachineRow(mine, field: field), !MachineEraResolver.isRejected(newest, among: mine) else { return nil }
         return FieldStanding(value: newest.value, confirmed: false, row: newest)
