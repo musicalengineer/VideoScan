@@ -53,15 +53,20 @@
 // Undo ("Undo Carry" in the Inspector, `undoCarry`): reads the newest Carry
 // line's receipt. For each group THE RECEIPT says the carry set — and only
 // while the record still holds exactly the value the receipt says it wrote
-// (never compared with the mutable history row: Codex r2 F2) — it puts back
+// (never compared with the mutable history row: Codex r2 F2; tags, people and
+// backup answers compared as sets, since the store returns them sorted —
+// Codex r3) — it puts back
 // blank (a fresh probe carries none of Rick's values). Left as they are: a
 // group Rick changed since; a group another copy of this file's content holds
 // too (clearing it would clear that copy — Codex r2 F1); a date the seam fixes
 // (archived, or a copy of archived content). The Carry line is rewritten in
 // place to say it was undone, so the Inspector stops offering the undo. The
 // earlier record is not touched: it still holds the values. One log line.
-// Refused (nothing touched) in a read-only session (`CuratedEditGuard`) and
-// when the earlier record is not in the catalog (the values would leave it).
+// Every receipt group is accounted for in the outcome and the words (put back,
+// or left and why); the line is marked undone only then. Refused (nothing
+// touched) in a read-only session (`CuratedEditGuard`), when the earlier record
+// is not in the catalog (the values would leave it), and when the receipt
+// names a group this build does not know.
 //
 // Cost: the merge pass is O(records under the root + fresh) with an O(1) test
 // per row, plus one O(records) pass to index the new files' content copies
@@ -124,9 +129,47 @@ enum RescanCuratedGroup: String, CaseIterable {
         }
     }
 
+    /// `v` in a form that compares by meaning (Codex r3): tags, people and
+    /// attestations are SETS — the catalog.sqlite loader returns them sorted
+    /// (ORDER BY tag / kind, name / attested_at), so the order Rick typed them
+    /// in is not part of the value. Fixed-position groups are unchanged.
+    func comparable(_ v: [String?]) -> [String?] {
+        let key: (String?) -> String = { $0 ?? "\u{0}" }
+        switch self {
+        case .tags, .people:
+            return v.sorted { key($0) < key($1) }
+        case .attestations:
+            let width = 4                                // kind, answer, label, by (see `value`)
+            let rows = stride(from: 0, to: v.count, by: width).map { Array(v[$0..<min($0 + width, v.count)]) }
+            return rows.sorted { $0.map(key).joined(separator: "\u{1}") < $1.map(key).joined(separator: "\u{1}") }
+                .flatMap { $0 }
+        case .date, .place, .disposition, .userNotes, .stars, .familyMusic:
+            return v
+        }
+    }
+
+    /// `r` holds exactly `v` for this group (as Rick sees it, order-free for sets).
+    @MainActor
+    func holds(_ r: VideoRecord, _ v: [String?]) -> Bool { comparable(value(r)) == comparable(v) }
+
     /// Same value on both records (as Rick sees it).
     @MainActor
-    func same(_ a: VideoRecord, _ b: VideoRecord) -> Bool { value(a) == value(b) }
+    func same(_ a: VideoRecord, _ b: VideoRecord) -> Bool { holds(a, value(b)) }
+
+    /// The group's name in Undo's words.
+    var label: String {
+        switch self {
+        case .date: return "date"
+        case .place: return "place"
+        case .disposition: return "disposition"
+        case .tags: return "tags"
+        case .userNotes: return "notes"
+        case .people: return "people"
+        case .stars: return "stars"
+        case .familyMusic: return "music mark"
+        case .attestations: return "backup answers"
+        }
+    }
 
     /// Put the group back to blank.
     @MainActor
@@ -505,11 +548,33 @@ struct RescanCarryWithNote {
     enum UndoOutcome: Equatable {
         /// Nothing was touched; the words say why.
         case refused(String)
-        /// `reset` groups put back to blank; `keptYours` left as Rick set them
-        /// after the carry; `keptShared` left because another copy of this
-        /// file's content holds them too; `dateFixed` = the date is left as
-        /// filed (archived).
-        case undone(reset: Int, keptYours: Int, keptShared: Int, dateFixed: Bool)
+        /// Every group the receipt names, accounted for (Codex r3): put back
+        /// to blank, or left — as Rick set it since, because another copy of
+        /// this file's content holds it too, or as filed (archived date).
+        case undone(UndoReport)
+    }
+
+    /// Which receipt groups Undo put back and which it left, and why. The
+    /// lists together are exactly the receipt's groups; anything less is
+    /// refused before a value is touched.
+    struct UndoReport: Equatable {
+        var reset: [RescanCuratedGroup] = []
+        var keptYours: [RescanCuratedGroup] = []
+        var keptShared: [RescanCuratedGroup] = []
+        var keptFiled: [RescanCuratedGroup] = []
+
+        var accounted: Int { reset.count + keptYours.count + keptShared.count + keptFiled.count }
+
+        /// "put back to blank: tags, place; left as you set them since: stars".
+        var words: String {
+            func part(_ g: [RescanCuratedGroup], _ what: String) -> String? {
+                g.isEmpty ? nil : "\(what): \(g.map(\.label).joined(separator: ", "))"
+            }
+            let parts = [part(reset, "put back to blank"), part(keptYours, "left as you set them since"),
+                         part(keptShared, "left because another copy of this file holds them too"),
+                         part(keptFiled, "left as filed (archived)")].compactMap { $0 }
+            return parts.isEmpty ? "nothing was copied onto it" : parts.joined(separator: "; ")
+        }
     }
 
     /// "Undo Carry" on `rec`: see the header. One log line; the caller's
@@ -523,30 +588,48 @@ struct RescanCarryWithNote {
             return .refused("\(rec.filename) has no carry to undo")
         }
         guard let earlier = model.record(forID: active.earlierID), earlier !== rec else {
-            let words = "the earlier record (\(active.earlierID.uuidString)) is not in the catalog, so taking the copied "
-                + "values off would lose them — nothing was changed"
-            model.log("Undo Carry: \(rec.filename) — \(words).")
-            return .refused(words)
+            return refuse(rec, "the earlier record (\(active.earlierID.uuidString)) is not in the catalog, so taking the "
+                          + "copied values off would lose them — nothing was changed")
         }
-        let dateFixed = model.isDateReadOnly(rec)
-        let copies = otherCopies(of: rec, besides: earlier)
-        var reset = 0, keptYours = 0, keptShared = 0
-        for group in RescanCuratedGroup.allCases {
-            guard let wrote = active.receipt.set[group.rawValue] else { continue }   // not the carry's
-            if group == .date && dateFixed { continue }
-            if group.value(rec) != wrote { keptYours += 1; continue }
-            if copies.contains(where: { !group.isBlank($0) }) { keptShared += 1; continue }
-            group.clear(rec)
-            reset += 1
+        let report = decide(rec, active.receipt, copies: otherCopies(of: rec, besides: earlier))
+        guard report.accounted == active.receipt.set.count else {
+            let known = Set(RescanCuratedGroup.allCases.map(\.rawValue))
+            let unknown = active.receipt.set.keys.filter { !known.contains($0) }.sorted().joined(separator: ", ")
+            return refuse(rec, "the carry's record names values this version does not know (\(unknown)), so it cannot "
+                          + "say what Undo would leave — nothing was changed")
         }
-        let words = "\(reset) put back to blank, \(keptYours) you changed since left as you set them"
-            + (keptShared > 0 ? ", \(keptShared) left because another copy of this file holds them too" : "")
-            + (dateFixed ? ", the date left as filed (archived)" : "")
+        for group in report.reset { group.clear(rec) }
+        let words = report.words
         rec.notes = RescanCarryNote.markingUndone(rec.notes, active, earlierFilename: earlier.filename, words: words, at: now)
         model.log("Undo Carry: \(rec.filename) — \(words). The earlier record \(earlier.filename) keeps its values in the catalog's history.")
         appLog.write("Undo Carry: record \(rec.id.uuidString) — \(words); earlier record \(earlier.id.uuidString) untouched")
         model.saveCatalogDebounced()
-        return .undone(reset: reset, keptYours: keptYours, keptShared: keptShared, dateFixed: dateFixed)
+        return .undone(report)
+    }
+
+    /// What Undo would do with each receipt group — decided before anything
+    /// is touched. Pure over the records.
+    private func decide(_ rec: VideoRecord, _ receipt: RescanCarryNote.Receipt, copies: [VideoRecord]) -> UndoReport {
+        let dateFixed = model.isDateReadOnly(rec)
+        var report = UndoReport()
+        for group in RescanCuratedGroup.allCases {
+            guard let wrote = receipt.set[group.rawValue] else { continue }   // not the carry's
+            if group == .date && dateFixed {
+                report.keptFiled.append(group)
+            } else if !group.holds(rec, wrote) {
+                report.keptYours.append(group)
+            } else if copies.contains(where: { !group.isBlank($0) }) {
+                report.keptShared.append(group)
+            } else {
+                report.reset.append(group)
+            }
+        }
+        return report
+    }
+
+    private func refuse(_ rec: VideoRecord, _ words: String) -> UndoOutcome {
+        model.log("Undo Carry: \(rec.filename) — \(words).")
+        return .refused(words)
     }
 
     /// The other records holding `rec`'s content (same whole-file SHA-256):

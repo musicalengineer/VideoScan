@@ -116,11 +116,71 @@ struct RescanCarryRound2Tests {
         let receipt = try #require(RescanCarryNote.active(in: fresh.notes)?.receipt)
         #expect(receipt.set["stars"] == nil && receipt.set["date"] == nil, "not the carry's: \(receipt.set)")
         #expect(receipt.set["place"] == ["Cape Cod", "estimated"] as [String?], "the rest is the carry's, with the exact value")
-        guard case .undone(let reset, _, _, _) = RescanCarryWithNote(model: model).undoCarry(on: fresh) else {
+        guard case .undone(let report) = RescanCarryWithNote(model: model).undoCarry(on: fresh) else {
             Issue.record("undo refused"); return
         }
-        #expect(reset == 5, "place, disposition, tags, notes, people")
+        #expect(report == .init(reset: [.place, .disposition, .tags, .userNotes, .people]), "\(report)")
         #expect(fresh.starRating == 1 && fresh.userDate == "1990", "Undo never touches what the carry did not set")
+    }
+
+    // MARK: Round 3 (Codex P2): the loader sorts set-valued groups
+
+    @Test("RED before round 3 (Codex P2): tags [\"Reunion\",\"Gold\"] and people [Tim, Donna] carried, hashed, saved, relaunched (the loader sorts them) — Undo takes them off and only then says undone, through a second relaunch")
+    func setValuedGroupsCompareOrderInsensitively() async throws {
+        let scene = try CutoverScene.make("carry_r3_order"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        let model = scene.model
+        let a = try scene.record(.healthy)
+        C.curated(a)
+        #expect(model.saveCatalogNow())
+        // Typed in this order just before the scan (not yet read back sorted by
+        // a commit): the carry's receipt records them as Rick typed them.
+        a.tags = ["Reunion", "Gold"]
+        a.confirmedByUserPeople = [ConfirmedTag(name: "Tim", confirmedAt: Date(timeIntervalSince1970: 1_700_000_000)),
+                                   ConfirmedTag(name: "Donna", confirmedAt: Date(timeIntervalSince1970: 1_700_000_000))]
+        let fresh = try C.reEncodedProbe(scene, of: a)
+        await Self.rescan(model, at: a, fresh: [fresh])
+        #expect(model.saveCatalogNow())
+        fresh.contentFixity = ContentFixity(digest: String(repeating: "f", count: 64), byteCount: fresh.sizeBytes,
+                                            stamp: FileIdentityStamp(device: 1, inode: 77, size: fresh.sizeBytes, mtimeNs: 5),
+                                            computedAt: Date())
+        #expect(model.saveCatalogNow())
+
+        let back = try await Self.relaunch(scene, from: model)
+        let b = try #require(back.records.first { $0.id == fresh.id })
+        try #require(Set(b.tags) == ["Reunion", "Gold"], "precondition: the tags are stored")
+        try #require(RescanCarryNote.active(in: b.notes)?.receipt.set["tags"] == ["Reunion", "Gold"] as [String?],
+                     "precondition: the receipt holds them in the typed order, the loader in another")
+        let outcome = RescanCarryWithNote(model: back).undoCarry(on: b)
+        guard case .undone(let report) = outcome else { Issue.record("refused: \(outcome)"); return }
+        #expect(report.reset.contains(.tags) && report.reset.contains(.people), "\(report)")
+        #expect(report.accounted == RescanCarryUndoTests.all7.count, "every receipt group accounted for: \(report)")
+        #expect(b.tags.isEmpty, "the carried tags are taken off whatever order the loader gave them: \(b.tags)")
+        #expect(b.confirmedByUserPeople.isEmpty, "the carried people too: \(b.confirmedByUserPeople.map(\.name))")
+        #expect(RescanCarryNote.active(in: b.notes) == nil, "the line is undone only once the values are off")
+        #expect(back.saveCatalogNow())
+        let again = try await Self.relaunch(scene, from: back)
+        let b2 = try #require(again.records.first { $0.id == fresh.id })
+        #expect(b2.tags.isEmpty && b2.confirmedByUserPeople.isEmpty, "relaunch: still off")
+        #expect(b2.notes.contains("Undone"))
+        await Self.close(again)
+    }
+
+    @Test("LOGIC (Codex r3): a receipt naming a group this build does not know is refused whole — nothing cleared, the line not marked undone")
+    func unknownReceiptGroupRefusesUndo() async throws {
+        let s = try await RescanCarryUndoTests.carried("unknowngroup"); defer { try? FileManager.default.removeItem(at: s.root) }
+        let active = try #require(RescanCarryNote.active(in: s.fresh.notes))
+        var set = active.receipt.set
+        set["moodBoard"] = ["x"]                                     // written by a newer build
+        let (line, _) = RescanCarryNote.line(earlierFilename: s.old.filename, digest: nil, stamp: RescanCarryNote.Stamp(Date()),
+                                             receipt: RescanCarryNote.Receipt(earlier: s.old.id, set: set))
+        s.fresh.notes = line
+        guard case .refused(let words) = RescanCarryWithNote(model: s.model).undoCarry(on: s.fresh) else {
+            Issue.record("an unaccountable receipt must refuse"); return
+        }
+        #expect(words.contains("moodBoard"), "\(words)")
+        C.expectCurated(s.fresh, "nothing taken off")
+        #expect(s.fresh.notes == line, "the line is not marked undone")
     }
 
     // MARK: F1

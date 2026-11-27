@@ -41,6 +41,10 @@ struct RescanCarryUndoTests {
         return (model, old, fresh, root)
     }
 
+    typealias G = RescanCuratedGroup
+    static let all7: [G] = [.date, .place, .disposition, .tags, .userNotes, .people, .stars]
+    static let but6: [G] = [.date, .place, .disposition, .tags, .userNotes, .people]
+
     static func expectBlank(_ r: VideoRecord, except: Set<String> = []) {
         if !except.contains("date") { #expect(r.userDate == nil && r.userDateConfidence == nil) }
         #expect(r.userPlace == nil && r.userPlaceConfidence == nil)
@@ -55,7 +59,7 @@ struct RescanCarryUndoTests {
     func undoRestoresPriorValues() async throws {
         let s = try await Self.carried("undo"); defer { try? FileManager.default.removeItem(at: s.root) }
         let outcome = RescanCarryWithNote(model: s.model).undoCarry(on: s.fresh)
-        #expect(outcome == .undone(reset: 7, keptYours: 0, keptShared: 0, dateFixed: false), "\(outcome)")
+        #expect(outcome == .undone(.init(reset: Self.all7)), "\(outcome)")
         Self.expectBlank(s.fresh)
         #expect(RescanCarryNote.active(in: s.fresh.notes) == nil, "the Inspector stops offering the undo")
         #expect(s.fresh.notes.contains("Undone — the values copied from the earlier file test_undo.mov were taken off this record"),
@@ -64,7 +68,7 @@ struct RescanCarryUndoTests {
         #expect(s.old.removal?.reason == .replacedAtPath)
         C.expectCurated(s.old, "the earlier record keeps its values")
         let said = await C.console(s.model)
-        #expect(said.contains("Undo Carry: test_undo.mov — 7 put back to blank, 0 you changed since left as you set them"), "\(said)")
+        #expect(said.contains("Undo Carry: test_undo.mov — put back to blank: date, place, disposition, tags, notes, people, stars."), "\(said)")
     }
 
     @Test("a value Rick changed after the carry stays as he set it; the rest is taken off")
@@ -72,7 +76,7 @@ struct RescanCarryUndoTests {
         let s = try await Self.carried("edited"); defer { try? FileManager.default.removeItem(at: s.root) }
         s.fresh.starRating = 1
         let outcome = RescanCarryWithNote(model: s.model).undoCarry(on: s.fresh)
-        #expect(outcome == .undone(reset: 6, keptYours: 1, keptShared: 0, dateFixed: false))
+        #expect(outcome == .undone(.init(reset: Self.but6, keptYours: [.stars])))
         #expect(s.fresh.starRating == 1, "Rick's later edit")
         Self.expectBlank(s.fresh, except: ["stars"])
     }
@@ -114,7 +118,7 @@ struct RescanCarryUndoTests {
         await C.rescan(model, root: root, fresh: [fresh])
         try #require(fresh.userDate == "1990")
         let outcome = RescanCarryWithNote(model: model).undoCarry(on: fresh)
-        #expect(outcome == .undone(reset: 6, keptYours: 0, keptShared: 0, dateFixed: true), "\(outcome)")
+        #expect(outcome == .undone(.init(reset: [.place, .disposition, .tags, .userNotes, .people, .stars])), "\(outcome)")
         #expect(fresh.userDate == "1990", "the filed date is not undone — archived means fixed")
         #expect(archived.userDate == "1990")
         Self.expectBlank(fresh, except: ["date"])
@@ -165,7 +169,7 @@ struct RescanCarryUndoTests {
         #expect(await model.catalogStore.holdWrites(reason: "a test job", owner: CatalogWriteHoldOwner()) == .taken)
         fresh.starRating = 2                         // Rick's edit after the carry
         model.saveCatalogDebounced()
-        #expect(RescanCarryWithNote(model: model).undoCarry(on: fresh) == .undone(reset: 6, keptYours: 1, keptShared: 0, dateFixed: false))
+        #expect(RescanCarryWithNote(model: model).undoCarry(on: fresh) == .undone(.init(reset: Self.but6, keptYours: [.stars])))
         model.catalogStore.releaseWriteHold()
         #expect(model.saveCatalogNow())
 
