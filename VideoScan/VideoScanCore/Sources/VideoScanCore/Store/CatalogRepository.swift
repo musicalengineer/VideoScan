@@ -209,6 +209,10 @@ public protocol CatalogLiveReading {
     // Cutover B2.1 (v1.8)
     /// Every `pending_rows` row (new records waiting for a whole-file digest), by id.
     func pendingRows(_ visit: (CatalogRow.PendingRow) throws -> Void) throws
+    /// GH #520: the `pending_rows` payload of ONE id, verbatim, and whether
+    /// it is tombstoned in `pending_purges` (nil when the id holds none).
+    /// Unlike `pendingRows`, a tombstoned payload is returned (flagged).
+    func pendingRow(id: String) throws -> CatalogRow.HeldPayload?
     /// The revisions of `fileID`'s tombstones, ascending.
     func tombstoneRevisions(fileID: String) throws -> [Int]
 }

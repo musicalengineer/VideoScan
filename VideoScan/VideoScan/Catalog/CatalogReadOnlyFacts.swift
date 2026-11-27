@@ -47,6 +47,16 @@ struct CatalogReadOnlyFacts: Equatable, Sendable {
     /// be in neither the safety copy nor the restored catalog.
     var restoringFromBackup = false
 
+    /// GH #520 (Codex round 2, P1-5): Apply… of a quit rescue copy is
+    /// running — from before its backup starts until it finishes or
+    /// refuses. Transient. Pauses EDITING only (the UI via `isReadOnly`, the
+    /// curated edit guard), NOT the committer: Apply's own backup commits
+    /// what is in memory first and then commits the applied records, so this
+    /// fact stays out of `readOnlyWords` (what the committer and the quit
+    /// read). Anything else that commits meanwhile moves the generation, and
+    /// Apply then refuses (the backup no longer undoes exactly what it does).
+    var applyingRescueCopy = false
+
     /// The launch opened no catalog (no latch, GH #354; or catalog.sqlite
     /// refused): its words, for the doors that need a catalog (QA r1 F5).
     var launchRefusalWords: String?
@@ -55,7 +65,9 @@ struct CatalogReadOnlyFacts: Equatable, Sendable {
     var storeReadOnly: Bool { jsonFrozenByLaunch || viewerRole }
 
     /// VideoScanModel.isReadOnly — may the session edit (the UI half)?
-    var modelReadOnly: Bool { sessionReadOnlyByLaunch || viewerRole || restoredFromBackup || restoringFromBackup }
+    var modelReadOnly: Bool {
+        sessionReadOnlyByLaunch || viewerRole || restoredFromBackup || restoringFromBackup || applyingRescueCopy
+    }
 
     /// Why the session may not write, in the person's words — nil when it
     /// may. The SQLite committer refuses every commit while this is non-nil
@@ -67,6 +79,15 @@ struct CatalogReadOnlyFacts: Equatable, Sendable {
         if sessionReadOnlyByLaunch { return "the catalog opened read-only at launch" }
         return nil
     }
+
+    /// Why an EDIT is refused now, in the person's words: `readOnlyWords`,
+    /// or the transient pause while a rescue copy is applied. nil = editable.
+    var editRefusalWords: String? {
+        readOnlyWords ?? (applyingRescueCopy ? Self.applyingRescueWords : nil)
+    }
+
+    /// While Apply… of a quit rescue copy runs (GH #520, Codex round 2 P1-5).
+    static let applyingRescueWords = "applying the rescue copy — editing is paused until it finishes"
 
     /// The read-only words after Restore from Backup… (GH #343).
     static let restoredWords = "the catalog was restored from a backup in this session — quit VideoScan and open it again to see it"

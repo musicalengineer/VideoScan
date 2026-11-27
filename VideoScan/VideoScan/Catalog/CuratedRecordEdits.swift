@@ -57,7 +57,7 @@ enum CuratedEditGuard {
             if loggedModel === model { loggedModel = nil; loggedReason = nil }
             return false
         }
-        let reason = model.readOnlyFacts.readOnlyWords ?? fallbackWords
+        let reason = model.readOnlyFacts.editRefusalWords ?? fallbackWords
         if loggedModel !== model || loggedReason != reason {
             loggedModel = model
             loggedReason = reason

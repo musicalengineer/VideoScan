@@ -12,22 +12,34 @@
 //      VideoScan's whole-catalog dump, not a delta).
 //   3. CONFIRM, saying the backup comes first and that File ▸ Restore from
 //      Backup… with it undoes the apply (Cancel is the default).
-//   4. BACK UP through the one Back Up Catalog engine (`backUpCatalog(to:)`,
-//      which commits what is in memory first). A refused backup applies
-//      NOTHING.
+//   4. PAUSE EDITING (the transient read-only fact "applying the rescue
+//      copy — editing is paused", until Apply returns), then BACK UP
+//      through the one Back Up Catalog engine (`backUpCatalog(to:)`, which
+//      commits what is in memory first). A refused backup applies NOTHING.
+//      The backup's sealed generation must be the generation the check
+//      reads and the committer knows; anything that committed after the
+//      seal (a background writer) refuses the whole Apply — Restore with
+//      that backup would otherwise also take that later change away
+//      (Codex round 2 P1-5).
 //   5. CHECK each rescued record against what catalog.sqlite holds NOW —
 //      one read snapshot, compared with the copy's `rescueBasis`
-//      (CatalogRescueBasis: the stored row's digest when the copy was
-//      written). Unchanged since → applied; changed, gone, newly there,
-//      unreadable, edited in this session and not saved, its path now held
-//      by another record, or no basis at all → NOT applied, listed with why,
-//      the catalog's record left as it is.
+//      (CatalogRescueBasis: the stored row's digest — conflicts included —
+//      or the held `pending_rows` payload's, when the copy was written).
+//      Applied ONLY when nothing newer can be touched: unchanged since, not
+//      edited in this session, no conflict among its copies (P1-4), no
+//      other record holding the same content (whole-file digest — notes,
+//      dates, tags… are shared by every copy, so applying one would change
+//      the others; P1-2), and a pairing that changed is applied only when
+//      BOTH files of the pair are (P1-3). Changed, gone, newly there,
+//      still held and changed (P1-1), unreadable, its path now held by
+//      another record, or no basis at all → NOT applied, listed with why,
+//      the catalog's record left as it is. (Rick: a rare corner — applying
+//      less is fine, overwriting never is.)
 //   6. APPLY in ONE main-actor turn after the read (no await between the
-//      check and the commit; a commit that landed during the read makes the
-//      check run again): each record to apply takes the live record's place
-//      in memory (same id), then ONE commit of exactly those ids through the
-//      commit door under the `rescue apply` writer. A row the store did not
-//      take is put back as it was (its words listed).
+//      check and the commit): each record to apply takes the live record's
+//      place in memory (same id), then ONE commit of exactly those ids
+//      through the commit door under the `rescue apply` writer. A row the
+//      store did not take is put back as it was (its words listed).
 //   7. KEEP the copy, renamed `catalog.applied-recovery-….json` (no-clobber
 //      rename) so the launch notice stops; the outcome sheet offers Move
 //      Rescue Copy to Trash….
@@ -39,10 +51,12 @@
 // Not an MFO job, like its twins Back Up Catalog and Restore from Backup:
 // the backup is that engine's own work, then one indexed read and one commit
 // of the delta (a handful of records). Nothing is O(catalog) but the
-// in-memory path check for new records (one pass) and the swap.
+// in-memory path check for new records, the content-copy check (one pass
+// each) and the swap.
 //
 // Memory: the copy's bytes and its records (the unsaved delta, ~2 KB a
-// record, ≤ 64 MB by the cap), one digest per record; the backup's own.
+// record, ≤ 64 MB by the cap), one state per record, the records sharing a
+// rescued record's content (references); the backup's own.
 //
 // (For Rick: a three-way merge where the "base" is a checksum of each row at
 // dump time — a row whose checksum still matches takes the rescued values; any
@@ -164,20 +178,40 @@ enum CatalogRescueApply {
         static let appeared = "the catalog saved a record for this file after the rescue copy was made"
         static let unreadable = "the catalog's record for this file could not be read"
         static let unsavedHere = "it has changes in this session that are not saved yet"
+        static let pendingChanged = "it is still waiting to be saved (no full hash yet), and what the catalog holds for it "
+            + "changed after the rescue copy was made"
+        static let conflict = "the copies of this file disagree in the catalog now (a conflict), and applying would "
+            + "overwrite that without you choosing"
+        static func sharedContent(_ other: String) -> String {
+            "another copy of this file (\(other)) holds its own values — notes, dates, tags and the like are shared by "
+                + "every copy, so applying this one would change that copy too"
+        }
+        static func pairNotBoth(_ other: String) -> String {
+            "its pairing with \(other) changed in the rescue copy, and \(other) can't be applied with it — a pairing is "
+                + "applied on both files or on neither"
+        }
         static func pathTaken(_ other: String) -> String { "another record (\(other)) holds this file's place in the catalog now" }
         static func notTaken(_ words: String) -> String { "the catalog would not take it (\(words))" }
     }
 
     /// What the catalog and memory say NOW, for the check.
     struct Now {
-        /// File id → the stored row's digest now (`absent`; nil = unreadable).
-        let stored: [String: String?]
+        /// File id → what catalog.sqlite holds for it now (a missing entry = unreadable).
+        let stored: [String: CatalogRescueBasis.Stored]
         /// The live record with this id.
         let memory: (UUID) -> VideoRecord?
         /// Of the rescued ids, those whose live record is not saved as it is.
         let unsaved: Set<UUID>
         /// The live (not removed) record at a path, for new records.
         let pathHolder: (String) -> VideoRecord?
+        /// Another record — in memory, removed or not, or in this rescue
+        /// copy — with the same whole-file digest as this one (or as its
+        /// live record): its name. nil = no other copy.
+        var sharesContent: (VideoRecord) -> String? = { _ in nil }
+        /// The id the live record with this id is paired with (nil = unpaired or not live).
+        var livePartner: (UUID) -> UUID? = { _ in nil }
+        /// A name for an id, for the words.
+        var name: (UUID) -> String = { $0.uuidString }
     }
 
     struct Plan {
@@ -196,6 +230,7 @@ enum CatalogRescueApply {
                 plan.apply.append(record)
             }
         }
+        holdPairsTogether(&plan, now: now)
         return plan
     }
 
@@ -204,17 +239,65 @@ enum CatalogRescueApply {
         if let unknown = basis.unknown { return Why.noBasis(unknown) }
         let key = record.id.uuidString
         guard let base = basis.rows[key] else { return Why.noBasis("it was not in the list") }
-        guard let entry = now.stored[key], let current = entry else { return Why.unreadable }
+        guard let entry = now.stored[key], let current = entry.state else { return Why.unreadable }
+        if let why = changedSince(base: base, current: current, record: record, now: now) { return why }
+        // Content-level: nothing newer may be touched through the content's shared values.
+        if entry.conflicted { return Why.conflict }
+        return now.sharesContent(record).map(Why.sharedContent)
+    }
+
+    /// Does the catalog still hold, for `record`, what the basis recorded —
+    /// judged by the kind of state it was: never stored (`absent`), held in
+    /// pending_rows (its payload and purge state, P1-1), or a files row
+    /// (its digest)? And is the live record saved as it is? nil = unchanged.
+    private static func changedSince(base: String, current: String, record: VideoRecord, now: Now) -> String? {
         if base == CatalogRescueBasis.absent {
             guard current == CatalogRescueBasis.absent else { return Why.appeared }
+            // A live record with this id that the catalog never stored: this session's, unsaved.
+            if now.memory(record.id) != nil { return Why.unsavedHere }
             if let holder = now.pathHolder(record.fullPath), holder.id != record.id { return Why.pathTaken(Item(holder).name) }
             return nil
         }
-        if current == CatalogRescueBasis.absent { return Why.gone }
-        guard current == base else { return Why.changed }
+        if CatalogRescueBasis.isHeld(base) {
+            guard current == base else { return Why.pendingChanged }
+        } else {
+            if current == CatalogRescueBasis.absent { return Why.gone }
+            guard current == base else { return Why.changed }
+        }
         guard now.memory(record.id) != nil else { return Why.gone }
-        if now.unsaved.contains(record.id) { return Why.unsavedHere }
-        return nil
+        return now.unsaved.contains(record.id) ? Why.unsavedHere : nil
+    }
+
+    /// Codex round 2 P1-3: a pairing is applied on both files or on
+    /// neither. A record whose rescued pair link differs from its live one
+    /// stays in the plan only if, after the apply, the link is mutual: its
+    /// new partner is applied too and points back, and its old partner no
+    /// longer points at it. Leaving one record can break another's pair, so
+    /// this runs until nothing more leaves (each pass removes at least one,
+    /// so at most `apply.count` passes; O(apply²) worst case on a delta).
+    static func holdPairsTogether(_ plan: inout Plan, now: Now) {
+        var applying = Dictionary(plan.apply.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        func rescued(_ record: VideoRecord) -> UUID? { record.pendingPairedWithID ?? record.pairedWith?.id }
+        func final(_ id: UUID) -> UUID? {
+            if let record = applying[id] { return rescued(record) }
+            return now.livePartner(id)
+        }
+        var removed = true
+        while removed {
+            removed = false
+            for record in plan.apply where applying[record.id] != nil {
+                let to = rescued(record), was = now.livePartner(record.id)
+                guard to != was else { continue }
+                var blocker: UUID?
+                if let to, final(to) != record.id { blocker = to }
+                if blocker == nil, let was, final(was) == record.id { blocker = was }
+                guard let blocker else { continue }
+                applying[record.id] = nil
+                plan.leave.append(Item(record, why: Why.pairNotBoth(now.name(blocker))))
+                removed = true
+            }
+        }
+        plan.apply.removeAll { applying[$0.id] == nil }
     }
 
     // MARK: - The door
@@ -232,6 +315,9 @@ enum CatalogRescueApply {
         let place: ([VideoRecord]) -> [UUID: VideoRecord?]
         /// Puts back what `place` replaced (or removes what it appended).
         let unplace: ([VideoRecord], [UUID: VideoRecord?]) -> Void
+        /// Editing paused (true) or given back (false) — the transient
+        /// read-only fact `applyingRescueCopy` (Codex round 2 P1-5).
+        let pauseEditing: (Bool) -> Void
         /// Step 3. Production: the alert.
         var confirm: @MainActor (RescueFile) -> Bool = CatalogRescueApply.confirmWithAlert
         /// Where the backup goes. Production: Back Up Catalog's save panel.
@@ -256,6 +342,7 @@ enum CatalogRescueApply {
                            unplace: { [weak model] records, previous in
                                if let model { CatalogRescueApply.unplace(records, previous, in: model) }
                            },
+                           pauseEditing: { [weak model] on in model?.updateReadOnlyFacts { $0.applyingRescueCopy = on } },
                            chooseBackup: { [weak model] in model?.askWhereToSaveBackup() },
                            backUp: { [weak model] url in
                                await model?.backUpCatalog(to: url) ?? .refused("VideoScan is closing")
@@ -306,41 +393,60 @@ enum CatalogRescueApply {
         case .failure(let refusal): return refuse(context, url, refusal.words)
         case .success(let read): file = read
         }
-        // 3. Confirm. 4. Back up (Back Up Catalog commits memory first).
+        // 3. Confirm.
         guard context.confirm(file), let backupURL = context.chooseBackup() else {
             context.note("OUTCOME Apply \(file.name) cancelled — nothing changed")
             return .cancelled
         }
+        // 4. Pause editing from before the backup until Apply returns, then
+        // back up (Back Up Catalog commits memory first).
+        context.pauseEditing(true)
+        context.note("Apply \(file.name): \(CatalogReadOnlyFacts.applyingRescueWords)")
+        defer { context.pauseEditing(false) }
         let backup: URL
+        let sealed: Int
         switch await context.backUp(backupURL) {
         case .refused(let words):
             return refuse(context, url, "the catalog backup could not be made (\(words)), so nothing was applied")
         case .backedUp(let summary):
             backup = summary.path
+            guard let generation = summary.manifest.catalogDatabase?.generation else {
+                return refuse(context, url, "the backup at \(summary.path.path) does not say which catalog generation it holds, "
+                    + "so it can't be shown to undo the apply — nothing was applied")
+            }
+            sealed = generation
         }
-        context.note("Apply \(file.name): the catalog is backed up at \(backup.path) — File ▸ Restore from Backup… with it undoes what follows")
+        context.note("Apply \(file.name): the catalog is backed up at \(backup.path) (generation \(sealed)) — "
+            + "File ▸ Restore from Backup… with it undoes what follows")
 
         // 5–6. Check against catalog.sqlite now, then apply in the same turn.
-        let ids = file.records.map(\.id)
-        for _ in 0..<3 {
-            if let why = writeRefusal(context) {
-                return refuse(context, url, "\(why); the backup at \(backup.path) was made, nothing was applied")
-            }
-            let repository = context.committer.repository
-            let read: (generation: Int, stored: [String: String?])
-            do {
-                read = try await repository.read { reader in (reader.generation, try CatalogRescueBasis.digests(ids, in: reader)) }
-            } catch {
-                return refuse(context, url, "catalog.sqlite could not be read to check the rescued records (\(error)); "
-                    + "the backup at \(backup.path) was made, nothing was applied")
-            }
-            // A commit landed during the read: the snapshot is stale — read again.
-            guard read.generation == context.committer.knownGeneration else { continue }
-            // ONE main-actor turn from here: no await between the check and the commit.
-            return .applied(finish(file, stored: read.stored, backup: backup, context: context))
+        if let why = writeRefusal(context) {
+            return refuse(context, url, "\(why); the backup at \(backup.path) was made, nothing was applied")
         }
-        return refuse(context, url, "the catalog kept saving while the rescue copy was checked; the backup at \(backup.path) "
-            + "was made, nothing was applied — try again")
+        let ids = file.records.map(\.id)
+        let read: (generation: Int, stored: [String: CatalogRescueBasis.Stored])
+        do {
+            read = try await context.committer.repository.read { reader in
+                (reader.generation, try CatalogRescueBasis.stored(ids, in: reader))
+            }
+        } catch {
+            return refuse(context, url, "catalog.sqlite could not be read to check the rescued records (\(error)); "
+                + "the backup at \(backup.path) was made, nothing was applied")
+        }
+        // The backup must hold exactly the catalog this Apply changes:
+        // anything committed after its seal would be undone by a Restore too.
+        let known = context.committer.knownGeneration
+        guard read.generation == sealed, known == sealed else {
+            return refuse(context, url, backupMovedWords(sealed: sealed, now: max(read.generation, known), backup: backup))
+        }
+        // ONE main-actor turn from here: no await between the check and the commit.
+        return .applied(finish(file, stored: read.stored, backup: backup, context: context))
+    }
+
+    /// Codex round 2 P1-5: the catalog moved on between the backup's seal and the check.
+    static func backupMovedWords(sealed: Int, now: Int, backup: URL) -> String {
+        "the catalog changed during the backup (the backup holds generation \(sealed), the catalog is now at \(now)) — "
+            + "nothing applied; try again. The backup at \(backup.path) was made"
     }
 
     private static func writeRefusal(_ context: Context) -> String? {
@@ -354,15 +460,19 @@ enum CatalogRescueApply {
     }
 
     /// Steps 5–7, synchronous on the main actor.
-    private static func finish(_ file: RescueFile, stored: [String: String?], backup: URL, context: Context) -> Report {
+    private static func finish(_ file: RescueFile, stored: [String: CatalogRescueBasis.Stored], backup: URL, context: Context) -> Report {
         let committer = context.committer
         let live = context.records()
         let byID = Dictionary(live.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let newPaths = Set(file.records.filter { byID[$0.id] == nil }.map(\.fullPath))
         var holders: [String: VideoRecord] = [:]
         for record in live where record.removal == nil && newPaths.contains(record.fullPath) { holders[record.fullPath] = record }
-        let now = Now(stored: stored, memory: { byID[$0] }, unsaved: committer.notDurable(Set(file.records.map(\.id))).intersection(byID.keys),
+        var now = Now(stored: stored, memory: { byID[$0] }, unsaved: committer.notDurable(Set(file.records.map(\.id))).intersection(byID.keys),
                       pathHolder: { holders[$0] })
+        now.sharesContent = contentCopies(file, live: live, byID: byID)
+        now.livePartner = { id in byID[id].flatMap { $0.pairedWith?.id ?? $0.pendingPairedWithID } }
+        let rescuedByID = Dictionary(file.records.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        now.name = { id in (rescuedByID[id] ?? byID[id]).map { Item($0).name } ?? id.uuidString }
         var plan = plan(file, now: now)
 
         var applied: [Item] = []
@@ -388,6 +498,31 @@ enum CatalogRescueApply {
             + "backup \(backup.path) (File ▸ Restore from Backup… undoes it); the rescue copy is kept as "
             + (keepWords.map { "\(file.name) — it could not be marked applied (\($0)), so the next launch offers it again" } ?? keptAs.path))
         return Report(applied: applied, notApplied: plan.leave, backup: backup, keptAs: keptAs, keepWords: keepWords)
+    }
+
+    /// Codex round 2 P1-2: who else holds each rescued record's content
+    /// (the commit's own whole-file digest, `CatalogCommit.digest(of:)`) —
+    /// every live record, removed or not, and the other records in the copy.
+    /// One pass over memory (O(records), digests only for records with a
+    /// fixity), on the main actor once per Apply; the map holds only the
+    /// rescued digests' records.
+    private static func contentCopies(_ file: RescueFile, live: [VideoRecord], byID: [UUID: VideoRecord]) -> (VideoRecord) -> String? {
+        func digests(_ record: VideoRecord) -> Set<String> {
+            Set([CatalogCommit.digest(of: record), byID[record.id].flatMap(CatalogCommit.digest(of:))].compactMap { $0 })
+        }
+        let wanted = file.records.reduce(into: Set<String>()) { $0.formUnion(digests($1)) }
+        guard !wanted.isEmpty else { return { _ in nil } }
+        var holders: [String: [VideoRecord]] = [:]
+        for record in live + file.records where record.contentFixity != nil || record.archiveFixity != nil {
+            guard let digest = CatalogCommit.digest(of: record), wanted.contains(digest) else { continue }
+            holders[digest, default: []].append(record)
+        }
+        return { record in
+            for digest in digests(record).sorted() {
+                if let other = holders[digest]?.first(where: { $0.id != record.id }) { return Item(other).name }
+            }
+            return nil
+        }
     }
 
     /// The model side of `place`: one array assignment for the batch (one

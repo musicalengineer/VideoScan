@@ -10,24 +10,34 @@
 //     snapshot, and only when it equals the copy's base generation (the
 //     session's last commit): a store another writer moved since is not the
 //     base the changes were made on, so the basis is "unknown".
-//   * `rows` — file id → `sha256:<hex>` of the stored row (below), or
-//     `absent` (no `files` row: a record the catalog never took, or one
-//     still held in `pending_rows`).
+//   * `rows` — file id → one state string:
+//       `sha256:<hex>`            a `files` row (the digest below, which
+//                                 covers its conflict state too);
+//       `held:sha256:<hex>`       a record still held in `pending_rows` (no
+//                                 whole-file hash yet): SHA-256 of its stored
+//                                 payload, verbatim;
+//       `held-removed:sha256:<hex>` the same payload, tombstoned by a purge;
+//       `absent`                  nothing stored for the id.
+//     (Codex round 2 P1-1: a held record used to read as `absent`, so an
+//     edit saved to its held payload after the quit went unseen.)
 //   * `unknown` — why there is no basis (unreadable, another writer, did not
 //     finish in time). Apply then lists every record as not applied.
 //
 // The digest: the stored row (`CatalogLiveReading.storedRow`, the load's own
 // per-row read) → `VideoRecord(loaded:)` → `VideoRecordDTO` → JSONEncoder
-// with sorted keys and full-precision dates → SHA-256. The same function at
+// with sorted keys and full-precision dates, then the row's conflict fields
+// (`shown.conflicts`, sorted — the record drops them, Codex round 2 P1-4)
+// → SHA-256. The same function at
 // quit and at Apply, on rows read the same way, so equal digests mean the
 // catalog holds what it held. `CatalogChangeDetector`'s fingerprints cannot
 // do this: `Hasher` is seeded per process (never compared across launches).
 // A digest that differs for any other reason (a newer VideoScan maps a field
 // differently) only lists a record as not applied — the safe side.
 //
-// Memory: one stored row and its record at a time, plus one id → 71-byte
-// string per rescued record (the delta only, GH #356). Time: one indexed
-// row read + one encode per rescued record (~0.1–1 ms each).
+// Memory: one stored row (or one held payload, ~2 KB) and its record at a
+// time, plus one id → ≤ 84-byte string per rescued record (the delta only,
+// GH #356). Time: one or two indexed reads + one encode per rescued record
+// (~0.1–1 ms each).
 //
 // (For Rick: a per-row checksum taken at the moment of the dump, compared
 // with the same checksum of the row at merge time — optimistic concurrency
@@ -47,6 +57,9 @@ struct CatalogRescueBasis: Codable, Sendable, Equatable {
     var unknown: String?
 
     nonisolated static let absent = "absent"
+    /// Prefixes of a held (`pending_rows`) record's state.
+    nonisolated static let heldPrefix = "held:"
+    nonisolated static let heldRemovedPrefix = "held-removed:"
 
     /// How long the quit may spend reading the basis before it writes the
     /// copy without one (the copy matters more than the basis).
@@ -54,10 +67,24 @@ struct CatalogRescueBasis: Codable, Sendable, Equatable {
 
     static func missing(_ why: String) -> CatalogRescueBasis { CatalogRescueBasis(generation: nil, rows: [:], unknown: why) }
 
+    /// What catalog.sqlite holds for one id, as the basis and Apply's check read it.
+    struct Stored: Sendable, Equatable {
+        /// The state string (see the header); nil = a stored row that no
+        /// longer reads back as a record (never equal to anything).
+        var state: String?
+        /// The `files` row shows a conflict — copies of its content disagree.
+        var conflicted = false
+    }
+
+    nonisolated static func isHeld(_ state: String) -> Bool {
+        state.hasPrefix(heldPrefix) || state.hasPrefix(heldRemovedPrefix)
+    }
+
     // MARK: - The digest
 
-    /// `sha256:<hex>` of what `row` loads as; nil when the row no longer
-    /// becomes a record (a stored value that does not decode).
+    /// `sha256:<hex>` of what `row` loads as, with its conflict fields; nil
+    /// when the row no longer becomes a record (a stored value that does
+    /// not decode).
     nonisolated static func digest(_ row: CatalogLoadedRow) -> String? {
         guard let record = try? VideoRecord(loaded: row) else { return nil }
         // The load leaves the pair link pending; the DTO reads `pairedWith`.
@@ -66,18 +93,38 @@ struct CatalogRescueBasis: Codable, Sendable, Equatable {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         encoder.dateEncodingStrategy = .deferredToDate          // full precision, not ISO seconds
-        guard let data = try? encoder.encode(VideoRecordDTO(record)) else { return nil }
-        return "sha256:" + SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        guard var data = try? encoder.encode(VideoRecordDTO(record)) else { return nil }
+        // `VideoRecord(loaded:)` drops the conflicts; a conflict appearing
+        // (or clearing) after the quit must change the digest.
+        let conflicts = row.shown.conflicts.map(\.rawValue).sorted().joined(separator: ",")
+        data.append(contentsOf: Array("\nconflicts:\(conflicts)".utf8))
+        return sha256(data)
     }
 
-    /// The stored digest of each id, in one read snapshot. A row that no
-    /// longer becomes a record maps to nil (never equal to anything).
-    nonisolated static func digests(_ ids: [UUID], in reader: any CatalogLiveReading) throws -> [String: String?] {
-        var out: [String: String?] = [:]
+    /// The state of a held payload: its stored JSON, verbatim, and whether a
+    /// purge tombstoned it.
+    nonisolated static func heldState(_ held: CatalogRow.HeldPayload) -> String {
+        (held.purged ? heldRemovedPrefix : heldPrefix) + sha256(Data(held.json.utf8))
+    }
+
+    private nonisolated static func sha256(_ data: Data) -> String {
+        "sha256:" + SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// What is stored for each id, in one read snapshot: a `files` row's
+    /// digest (and whether it shows a conflict), else a held payload's
+    /// state, else `absent`.
+    nonisolated static func stored(_ ids: [UUID], in reader: any CatalogLiveReading) throws -> [String: Stored] {
+        var out: [String: Stored] = [:]
         for id in ids {
             let key = id.uuidString
-            guard let row = try reader.storedRow(id: key) else { out[key] = .some(absent); continue }
-            out[key] = .some(digest(row))
+            if let row = try reader.storedRow(id: key) {
+                out[key] = Stored(state: digest(row), conflicted: !row.shown.conflicts.isEmpty)
+            } else if let held = try reader.pendingRow(id: key) {
+                out[key] = Stored(state: heldState(held))
+            } else {
+                out[key] = Stored(state: absent)
+            }
         }
         return out
     }
@@ -90,16 +137,16 @@ struct CatalogRescueBasis: Codable, Sendable, Equatable {
     nonisolated static func read(_ ids: [UUID], expecting generation: Int,
                                  from repository: any CatalogRepository) async -> CatalogRescueBasis {
         do {
-            let read: (Int, [String: String?]) = try await repository.read { reader in
-                (reader.generation, try digests(ids, in: reader))
+            let read: (Int, [String: Stored]) = try await repository.read { reader in
+                (reader.generation, try stored(ids, in: reader))
             }
             guard read.0 == generation else {
                 return .missing("catalog.sqlite is at generation \(read.0), not the \(generation) the changes were based on")
             }
             var rows: [String: String] = [:]
-            for (key, digest) in read.1 {
-                guard let digest else { return .missing("the stored record \(key) could not be read back as a record") }
-                rows[key] = digest
+            for (key, stored) in read.1 {
+                guard let state = stored.state else { return .missing("the stored record \(key) could not be read back as a record") }
+                rows[key] = state
             }
             return CatalogRescueBasis(generation: generation, rows: rows, unknown: nil)
         } catch {

@@ -46,6 +46,13 @@ extension GRDBRecordHandle {
         }
     }
 
+    func pendingRow(id: String) throws -> CatalogRow.HeldPayload? {
+        guard let row = try Row.fetchOne(db, sql: """
+            SELECT p.json, EXISTS (SELECT 1 FROM pending_purges q WHERE q.id = p.id) FROM pending_rows p WHERE p.id = ?
+            """, arguments: [id]) else { return nil }
+        return CatalogRow.HeldPayload(json: row[0], purged: row[1])
+    }
+
     func tombstoneRevisions(fileID: String) throws -> [Int] {
         try Int.fetchAll(db, sql: "SELECT revision FROM tombstones WHERE file_id = ? ORDER BY revision", arguments: [fileID])
     }
