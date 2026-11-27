@@ -96,7 +96,7 @@ enum CatalogTidyCalculator {
         var out = CatalogTidyProjection()
         for r in records {
             if NonVideoMediaPurge.isOffered(r) { out.nonVideoRows += 1 }
-            if let card = r.mediaReportCard, SoundLevelsRemeasureRules.need(card, live: r.removal == nil) != nil {
+            if let card = r.mediaReportCard, SoundLevelsRemeasureRules.need(card, live: r.removal == nil, audioStatus: r.audioVerifyStatus) != nil {
                 out.soundLevelsToRemeasure += 1
                 if SoundLevelsRemeasureRules.isWaitingForDrive(card), !isOnline(r.fullPath) {
                     out.soundLevelsWaiting.cards += 1

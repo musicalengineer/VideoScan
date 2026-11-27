@@ -50,6 +50,13 @@ enum SoundLevelsRemeasureRules {
         case prefix
         /// Its levels were withdrawn by an earlier run; waiting to be measured.
         case withdrawn
+        /// GH #518 (Codex round 2 P1-3): today's pass already wrote this card
+        /// — its Sound row says the sound changes partway — but the record
+        /// still holds the sound verdict "ok" that only pre-#368 code could
+        /// have stored (a v16 Re-measure or v16 Check Media rewrote the card
+        /// and left the verdict). Measured again so the withdrawal runs on
+        /// fresh evidence.
+        case staleVerdict
     }
 
     /// The not-run reason's first words on a withdrawn Sound row — how a later
@@ -101,6 +108,26 @@ enum SoundLevelsRemeasureRules {
         guard card.soundLevels?.isCurrentMeasurement != true,
               row.evidence.contains(where: isChannelLevel) else { return nil }
         return .prefix
+    }
+
+    /// The plan's and Tidy's predicate: `need(card, live:)`, else a stale
+    /// verdict — a live record holding "ok" whose full card's Sound row
+    /// says the sound changes partway (`isReconfiguredRow`). Pure.
+    /// (The two-argument form reads the card alone; every caller that has
+    /// the record uses this one.)
+    static func need(_ card: MediaReportCard?, live: Bool, audioStatus: String) -> Need? {
+        if let n = need(card, live: live) { return n }
+        guard live, let card, card.tier == .full, let row = card.check(.sound),
+              StoredAudioStatus(audioStatus) == .ok, isReconfiguredRow(row) else { return nil }
+        return .staleVerdict
+    }
+
+    /// A Sound row today's pass wrote for a sound whose rate, format or
+    /// layout changes partway: "not checked" for exactly that reason
+    /// (`AudioShortDecode.reconfiguredWords`, persisted on cards).
+    static func isReconfiguredRow(_ row: MediaCheck) -> Bool {
+        guard row.kind == .sound, case .notRun(let reason) = row.verdict else { return false }
+        return reason.hasPrefix(AudioShortDecode.reconfiguredWords)
     }
 
     /// Two copies' cards are the same card (a stored card's date is whole

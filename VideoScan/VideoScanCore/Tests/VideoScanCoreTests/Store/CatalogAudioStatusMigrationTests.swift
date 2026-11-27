@@ -364,6 +364,18 @@ struct CatalogAudioStatusMigrationTests {
         #expect(loaded.records[Self.importedRowID]?.audioVerifyStatus == "attention")
     }
 
+    @Test("storedAudioCheck (#518 round 2): the content's BOUND audio row is read back as written (status, note, whole-second date); an imported value alone is no bound row (nil)")
+    func storedAudioCheckReadsTheBoundRow() async throws {
+        let scene = try await Self.importedOK(); defer { scene.remove() }
+        let before = try await scene.read { try $0.storedAudioCheck(digest: Self.importedDigest) }
+        #expect(before == nil, "only the imported (unverified) value exists: \(String(describing: before))")
+        let outcome = try await Self.writeAudioCheck(scene, status: CatalogDDL.AudioCheckStatus.damaged.rawValue)
+        guard case .committed = outcome else { Issue.record("\(outcome)"); return }
+        let after = try await scene.read { try $0.storedAudioCheck(digest: Self.importedDigest.uppercased()) }
+        #expect(after == StoredAudioCheck(status: "damaged", note: "withdrawn by a re-measure",
+                                          checkedAt: Date(timeIntervalSince1970: 1_795_000_000)))
+    }
+
     // MARK: - Scale
 
     @Test("SCALE: 100k contents × 3 media_checks rows (300k) migrate 16 → 17 inside 30 s, the count proven, a sample of rows identical",

@@ -24,6 +24,16 @@
 //              changes nothing; relaunch on catalog.sqlite: an "ok" IMPORTED
 //              from catalog.json, withdrawn, stays withdrawn across two
 //              relaunches (the imported value never comes back).
+//   round 2   (Codex 2026-11-27, three P1s — the verdict is stored per
+//              CONTENT, the withdrawal acted per copy), each through the
+//              production SQL path and a relaunch, RED against ab7d46f54:
+//              P1-1 re-measure on [A damaged, B ok] (store damaged) keeps the
+//              damage on both; P1-2 Verify Audio / Check Media on A withdraw
+//              B too, so B's star-rating save cannot write "ok" back; P1-3 a
+//              card v16 already re-measured ("changes partway", stamped) with
+//              its "ok" left is planned, counted by Tidy, and withdrawn.
+//              The content step itself (AudioVerdictWithdrawal.decide): unit
+//              cases below (new API — feature tests, no red).
 // Gates and readers of the two new words: AudioStatusAttentionGateTests.swift.
 
 import Foundation
@@ -34,6 +44,13 @@ import Testing
 @MainActor
 @Suite("GH #518 — a pre-fix 'ok' is withdrawn when a re-measure or a new Verify finds the sound pass reconfigured", .serialized)
 struct AudioVerdictWithdrawal518Tests {
+
+    /// A whole-file fixity for `digest` at `size` (no file needed — the
+    /// `captured` form stats the path and is nil for a file that is not there).
+    private static func fixity(_ digest: String, size: Int64) -> ContentFixity {
+        ContentFixity(digest: digest, byteCount: size,
+                      stamp: FileIdentityStamp(device: 1, inode: 9, size: size, mtimeNs: 3, ctimeNs: 4, volumeUUID: nil))
+    }
 
     private static func okRecord(_ path: String, size: Int64 = 4_000) -> VideoRecord {
         let r = RemeasureFixture.record(path, size: size, card: RemeasureFixture.preFixReconfiguredCard(size: size))
@@ -66,9 +83,11 @@ struct AudioVerdictWithdrawal518Tests {
         let digest = String(repeating: "5a", count: 32)
         let copies = ["/Volumes/A/t.mov", "/Volumes/B/t.mov"].map { path -> VideoRecord in
             let r = Self.okRecord(path)
-            r.contentFixity = ContentFixity.captured(path: path, digest: digest, byteCount: 4_000)
+            r.contentFixity = Self.fixity(digest, size: 4_000)
             return r
         }
+        try #require(CatalogCommit.digest(of: copies[0]) == digest && CatalogCommit.digest(of: copies[1]) == digest,
+                     "one content, two copies")
         m.records = copies
         await RemeasureFixture.run(RemeasureFixture.job(m) { _, _ in .measured(RemeasureFixture.reconfigured()) })
         #expect(copies.map(\.audioVerifyStatus) == ["unverified", "unverified"])
@@ -101,7 +120,7 @@ struct AudioVerdictWithdrawal518Tests {
         guard case .notChecked = reconfigured.verdict else { Issue.record("fixture: \(reconfigured.verdict)"); return }
         let r = VideoRecord()
         r.audioVerifyStatus = "ok"
-        _ = VerifyAudioJob.write(reconfigured, onto: r, at: Date(timeIntervalSince1970: 1_800_000_000))
+        _ = VerifyAudioJob.write(reconfigured, onto: r, copies: [r], stored: .none, at: Date(timeIntervalSince1970: 1_800_000_000))
         #expect(r.audioVerifyStatus == "unverified")
 
         // Not checked for another reason (the track was only partly measured): nothing moves.
@@ -109,13 +128,13 @@ struct AudioVerdictWithdrawal518Tests {
         guard case .notChecked = partial.verdict else { Issue.record("fixture: \(partial.verdict)"); return }
         let kept = VideoRecord()
         kept.audioVerifyStatus = "ok"
-        _ = VerifyAudioJob.write(partial, onto: kept, at: Date())
+        _ = VerifyAudioJob.write(partial, onto: kept, copies: [kept], stored: .none, at: Date())
         #expect(kept.audioVerifyStatus == "ok")
 
         // A damaged verdict is never withdrawn by a reconfigured pass.
         let measured = VideoRecord()
         measured.audioVerifyStatus = "damaged"
-        _ = VerifyAudioJob.write(reconfigured, onto: measured, at: Date())
+        _ = VerifyAudioJob.write(reconfigured, onto: measured, copies: [measured], stored: .none, at: Date())
         #expect(measured.audioVerifyStatus == "damaged")
     }
 
@@ -219,5 +238,222 @@ struct AudioVerdictWithdrawal518Tests {
             #expect(RemeasureFixture.shownLevels(r.mediaReportCard).mediaInfo.isEmpty, "relaunch \(n): levels")
         }
         if let c = model.catalogCutover.committer { await c.repository.close() }
+    }
+
+    // MARK: Round 2 — the withdrawal is a CONTENT decision (Codex 2026-11-27)
+
+    /// The two fixture rows that are copies of one content (one digest).
+    private static func twoCopies(_ model: VideoScanModel) throws -> (VideoRecord, VideoRecord) {
+        let a = try #require(model.records.first { $0.id.uuidString == PoisonedCatalogFixture.id(.curatedConflictA) })
+        let b = try #require(model.records.first { $0.id.uuidString == PoisonedCatalogFixture.id(.curatedConflictB) })
+        try #require(CatalogCommit.digest(of: a) != nil && CatalogCommit.digest(of: a) == CatalogCommit.digest(of: b),
+                     "the fixture's two copies share one digest")
+        return (a, b)
+    }
+
+    private static func setOK(_ r: VideoRecord, card: MediaReportCard?) {
+        r.mediaReportCard = card
+        r.audioVerifyStatus = "ok"
+        r.audioVerifyNote = ""
+        r.audioVerifyDate = RemeasureFixture.dayAgo
+    }
+
+    /// Both copies "ok" with `card`, committed, then a relaunch: memory is
+    /// exactly what catalog.sqlite holds.
+    private static func launchedWithOKCopies(_ scene: CutoverScene, card: (VideoRecord) -> MediaReportCard?) async throws -> VideoScanModel {
+        try await scene.launchOnSQLite()
+        let (a, b) = try Self.twoCopies(scene.model)
+        Self.setOK(a, card: card(a))
+        Self.setOK(b, card: card(b))
+        try #require(scene.model.saveCatalogNow())
+        return try await Self.relaunch(scene, from: scene.model)
+    }
+
+    @Test("REGRESSION round 2 P1-1: re-measure on copies [A damaged, B ok] with the store holding damaged keeps the damage on both — after relaunch neither is 'unverified'")
+    func remeasureNeverWithdrawsOverMeasuredDamage() async throws {
+        let scene = try CutoverScene.make("w518_r2_damage"); defer { scene.cleanup() }
+        var model = try await Self.launchedWithOKCopies(scene) { RemeasureFixture.preFixReconfiguredCard(size: $0.sizeBytes) }
+        let (a, b) = try Self.twoCopies(model)
+        // A is measured damaged and saved; B still holds the stale "ok" in memory.
+        a.audioVerifyStatus = "damaged"
+        a.audioVerifyNote = "Damaged audio: the sound is far shorter than the picture"
+        a.audioVerifyDate = Date()
+        try #require(model.saveCatalogNow())
+        try #require(b.audioVerifyStatus == "ok", "Codex's input: B still shows ok")
+        try #require(model.records.firstIndex { $0 === a }! < model.records.firstIndex { $0 === b }!, "order [A, B]")
+
+        let j = SoundLevelsRemeasureJob(model: model)
+        j.toolsAvailable = { true }
+        j.isOnline = { _ in true }
+        j.measure = { _, _ in .measured(RemeasureFixture.reconfigured()) }
+        await RemeasureFixture.run(j)
+        #expect(j.totals.reconfigured == 1 && !j.saveFailed, Comment(rawValue: j.summaryLine))
+        #expect(j.totals.cardsWritten == 2, "both copies' cards were rewritten: \(j.summaryLine)")
+
+        model = try await Self.relaunch(scene, from: model)
+        let (a2, b2) = try Self.twoCopies(model)
+        #expect(a2.audioVerifyStatus == "damaged", "A after relaunch: \(a2.audioVerifyStatus)")
+        #expect(b2.audioVerifyStatus == "damaged", "B after relaunch: \(b2.audioVerifyStatus)")
+        if let c = model.catalogCutover.committer { await c.repository.close() }
+    }
+
+    @Test("REGRESSION round 2 P1-2: Verify Audio on copy A (reconfigured pass) withdraws B too — B's later star-rating save cannot write 'ok' back; both 'unverified' after relaunch")
+    func verifyAudioWithdrawsEveryCopy() async throws {
+        let scene = try CutoverScene.make("w518_r2_verify"); defer { scene.cleanup() }
+        var model = try await Self.launchedWithOKCopies(scene) { _ in nil }
+        let (a, b) = try Self.twoCopies(model)
+
+        let job = VerifyAudioJob(record: a, model: model, diagnoseOverride: { _ in RemeasureFixture.reconfigured() })
+        job.start()
+        await job.task?.value
+        try #require(model.saveCatalogNow())
+        #expect(a.audioVerifyStatus == "unverified")
+        #expect(b.audioVerifyStatus == "unverified", "B withdrawn in the same step: \(b.audioVerifyStatus)")
+
+        b.starRating = 1   // an unrelated edit on B, saved (the store takes 1–3)
+        try #require(model.saveCatalogNow())
+
+        model = try await Self.relaunch(scene, from: model)
+        let (a2, b2) = try Self.twoCopies(model)
+        #expect(a2.audioVerifyStatus == "unverified", "A after relaunch: \(a2.audioVerifyStatus)")
+        #expect(b2.audioVerifyStatus == "unverified", "B after relaunch: \(b2.audioVerifyStatus)")
+        if let c = model.catalogCutover.committer { await c.repository.close() }
+    }
+
+    @Test("REGRESSION round 2 P1-2: Check Media (full) on copy A with a reconfigured sound pass withdraws B too — B's star-rating save cannot resurrect 'ok'")
+    func checkMediaWithdrawsEveryCopy() async throws {
+        let scene = try CutoverScene.make("w518_r2_check"); defer { scene.cleanup() }
+        var model = try await Self.launchedWithOKCopies(scene) { _ in nil }
+        let (a, b) = try Self.twoCopies(model)
+
+        let quick = try CheckMediaFixtures.healthy()
+        let video = VideoVerifyDiagnosis(findings: [], facts: quick.videoFacts, sample: nil,
+                                         decode: VideoDecodeFacts(coverage: .complete))
+        let audio = RemeasureFixture.reconfigured()
+        let job = CheckMediaJob(records: [a], tier: .full, model: model, center: nil,
+                                quickRunner: { _, _ in .measured(quick) },
+                                fullRunner: { _, _, _, _ in
+                                    CheckMediaFullInputs(video: .success(video), audio: .success(audio),
+                                                         signals: MediaSignalScan(progressive: 900))
+                                },
+                                soundAdviceLookup: { _ in .none })
+        job.start()
+        await job.task?.value
+        try #require(model.saveCatalogNow())
+        #expect(a.audioVerifyStatus == "unverified")
+        #expect(b.audioVerifyStatus == "unverified", "B withdrawn in the same step: \(b.audioVerifyStatus)")
+
+        b.starRating = 1
+        try #require(model.saveCatalogNow())
+
+        model = try await Self.relaunch(scene, from: model)
+        let (a2, b2) = try Self.twoCopies(model)
+        #expect(a2.audioVerifyStatus == "unverified", "A after relaunch: \(a2.audioVerifyStatus)")
+        #expect(b2.audioVerifyStatus == "unverified", "B after relaunch: \(b2.audioVerifyStatus)")
+        if let c = model.catalogCutover.committer { await c.repository.close() }
+    }
+
+    /// The card a v16 Re-measure (or v16 Check Media) left: stamped measured,
+    /// its Sound row "not checked — the sound changes partway", no levels.
+    private static func v16RemeasuredCard(size: Int64) -> MediaReportCard {
+        SoundLevelsRemeasureRules.rewrite(RemeasureFixture.preFixReconfiguredCard(size: size),
+                                          with: .measured(RemeasureFixture.reconfigured()),
+                                          context: VideoRecord().soundPresenceContext)
+    }
+
+    @Test("REGRESSION round 2 P1-3: a card v16 already re-measured (stamped, 'changes partway', no levels) whose record still holds 'ok' is planned, counted by Tidy, and withdrawn — 'unverified' after relaunch")
+    func v16RemeasuredOKIsFoundAndWithdrawn() async throws {
+        let scene = try CutoverScene.make("w518_r2_v16"); defer { scene.cleanup() }
+        try await scene.launchOnSQLite()
+        let id = PoisonedCatalogFixture.id(.healthy)
+        let rec = try #require(scene.model.records.first { $0.id.uuidString == id })
+        Self.setOK(rec, card: Self.v16RemeasuredCard(size: rec.sizeBytes))
+        try #require(rec.mediaReportCard?.soundLevels?.isCurrentMeasurement == true, "fixture: the v16 stamp")
+        try #require(scene.model.saveCatalogNow())
+        var model = try await Self.relaunch(scene, from: scene.model)
+
+        #expect(SoundLevelsRemeasureItem.plan(model.records).contains { $0.id.uuidString == id }, "planned")
+        #expect(CatalogTidyCalculator.project(model.records, isOnline: { _ in true }).soundLevelsToRemeasure >= 1, "Tidy counts it")
+
+        let j = SoundLevelsRemeasureJob(model: model)
+        j.toolsAvailable = { true }
+        j.isOnline = { _ in true }
+        j.measure = { _, _ in .measured(RemeasureFixture.reconfigured()) }
+        await RemeasureFixture.run(j)
+        #expect(!j.saveFailed, Comment(rawValue: j.summaryLine))
+
+        model = try await Self.relaunch(scene, from: model)
+        let r = try #require(model.records.first { $0.id.uuidString == id })
+        #expect(r.audioVerifyStatus == "unverified", "after relaunch: \(r.audioVerifyStatus)")
+        #expect(!SoundLevelsRemeasureItem.plan(model.records).contains { $0.id.uuidString == id }, "done: no longer planned")
+        if let c = model.catalogCutover.committer { await c.repository.close() }
+    }
+
+    @Test("P1-3 predicate: only a live, full card whose Sound row says 'changes partway' AND whose record says 'ok' is a stale verdict; damaged / unverified / '' / another not-checked reason / a removed row are not")
+    func staleVerdictPredicate() {
+        let card = Self.v16RemeasuredCard(size: 1_000)
+        #expect(SoundLevelsRemeasureRules.need(card, live: true) == nil, "the card alone owes nothing")
+        #expect(SoundLevelsRemeasureRules.need(card, live: true, audioStatus: "ok") == .staleVerdict)
+        for status in ["damaged", "attention", "unverified", ""] {
+            #expect(SoundLevelsRemeasureRules.need(card, live: true, audioStatus: status) == nil, "\(status)")
+        }
+        #expect(SoundLevelsRemeasureRules.need(card, live: false, audioStatus: "ok") == nil, "a removed row")
+        let other = MasterArchiveTestSupport.soundDiagnosis(channels: [-20, nil])
+        var partial = card
+        partial.checks = card.checks.map { $0.kind == .sound ? CheckMediaRules.soundRow(other) : $0 }
+        #expect(SoundLevelsRemeasureRules.need(partial, live: true, audioStatus: "ok") == nil, "another not-checked reason")
+        #expect(SoundLevelsRemeasureRules.isReconfiguredRow(CheckMediaRules.soundRow(RemeasureFixture.reconfigured())),
+                "today's Sound row for a rate-changing track carries the pinned words")
+    }
+
+    // MARK: The content step (AudioVerdictWithdrawal.decide) — unit cases
+
+    private static func copy(_ status: String, _ date: Date? = nil) -> VideoRecord {
+        let r = VideoRecord()
+        r.audioVerifyStatus = status
+        r.audioVerifyNote = status == "ok" ? "" : "note for \(status)"
+        r.audioVerifyDate = date
+        return r
+    }
+
+    @Test("decide: damage in the store or on any copy is kept and set on every copy; an unreadable store changes nothing; an ok anywhere withdraws every copy together; no ok, nothing")
+    func contentStepCases() {
+        let when = Date(timeIntervalSince1970: 1_800_000_000)
+        // Codex's P1-1: [A damaged, B ok], store damaged.
+        var a = Self.copy("damaged", when), b = Self.copy("ok")
+        var o = AudioVerdictWithdrawal.decide(copies: [a, b], stored: .check(StoredAudioCheck(status: "damaged", note: "note for damaged", checkedAt: when)), at: Date())
+        #expect(o.kind == .keptDamage("damaged") && [a, b].map(\.audioVerifyStatus) == ["damaged", "damaged"])
+        // Store attention, every copy ok in memory: the store's damage stands.
+        a = Self.copy("ok"); b = Self.copy("ok")
+        o = AudioVerdictWithdrawal.decide(copies: [a, b], stored: .check(StoredAudioCheck(status: "attention", note: "ref", checkedAt: when)), at: Date())
+        #expect(o.kind == .keptDamage("attention") && [a, b].map(\.audioVerifyStatus) == ["attention", "attention"])
+        // Unreadable store: refuse rather than guess.
+        a = Self.copy("ok"); b = Self.copy("ok")
+        o = AudioVerdictWithdrawal.decide(copies: [a, b], stored: .unreadable("disk I/O error"), at: Date())
+        #expect(o.changed.isEmpty && [a, b].map(\.audioVerifyStatus) == ["ok", "ok"])
+        // Store ok, copies ok / "" / unverified: all "unverified", same note and date.
+        a = Self.copy("ok"); b = Self.copy(""); let c = Self.copy("unverified", when)
+        o = AudioVerdictWithdrawal.decide(copies: [a, b, c], stored: .check(StoredAudioCheck(status: "ok", note: "", checkedAt: when)), at: when)
+        #expect(o.kind == .withdrew && Set([a, b, c].map(\.audioVerifyStatus)) == ["unverified"])
+        #expect(Set([a, b, c].map(\.audioVerifyNote)).count == 1 && Set([a, b, c].map(\.audioVerifyDate)).count == 1)
+        // Nothing ok anywhere: nothing written.
+        a = Self.copy(""); b = Self.copy("unverified", when)
+        o = AudioVerdictWithdrawal.decide(copies: [a, b], stored: .none, at: Date())
+        #expect(o.kind == .nothingToWithdraw && o.changed.isEmpty)
+    }
+
+    @Test("decide: an unreadable stored verdict leaves the re-measure's content alone (it stays a candidate) — nothing written")
+    func remeasureLeavesContentAloneWhenTheStoredVerdictIsUnreadable() async throws {
+        let dir = try RemeasureFixture.scratch("w518unreadable"); defer { try? FileManager.default.removeItem(at: dir) }
+        let m = RemeasureFixture.model(dir)
+        let rec = Self.okRecord("/Volumes/T/u.mov")
+        rec.contentFixity = Self.fixity(String(repeating: "7c", count: 32), size: 4_000)
+        m.records = [rec]
+        let card = rec.mediaReportCard
+        let j = RemeasureFixture.job(m) { _, _ in .measured(RemeasureFixture.reconfigured()) }
+        j.storedAudio = { _ in .unreadable("disk I/O error") }
+        await RemeasureFixture.run(j)
+        #expect(rec.audioVerifyStatus == "ok" && rec.mediaReportCard == card)
+        #expect(j.totals.changedMeanwhile == 1, Comment(rawValue: j.summaryLine))
     }
 }

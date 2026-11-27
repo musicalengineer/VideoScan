@@ -189,6 +189,13 @@ struct AudioVerifyDiagnosis: Sendable {
     /// did not see this and could store "ok"; such an "ok" is withdrawn
     /// (GH #518, `VerifyAudioJob.write`).
     var passWasReconfigured: Bool { balanceAnalysis?.shortDecode?.graphReconfigured == true }
+
+    /// Not a verdict, AND the pass found its graph rebuilt: a stored "ok"
+    /// for this content is withdrawn (content-level, AudioVerdictWithdrawal).
+    var withdrawsStaleOK: Bool {
+        guard case .notChecked = verdict else { return false }
+        return passWasReconfigured
+    }
     /// The findings' words: the persisted `audioVerifyNote` when a verdict
     /// is stored.
     var persistedNote: String {

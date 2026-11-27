@@ -121,7 +121,7 @@ struct AudioStatusAttentionGateTests {
         #expect(rebuildShort.persistedStatus == "damaged", "needs rebuilding is only promised after a complete decode (Codex #372)")
         for d in [reference, rebuild, short, rebuildShort] {
             let r = VideoRecord()
-            #expect(VerifyAudioJob.write(d, onto: r, at: Date()) == .stored)
+            #expect(VerifyAudioJob.write(d, onto: r, copies: [r], stored: .none, at: Date()) == .stored)
             #expect(StoredAudioStatus(r.audioVerifyStatus).refusesLikeDamage)
         }
     }

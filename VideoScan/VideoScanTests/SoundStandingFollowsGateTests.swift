@@ -119,7 +119,7 @@ enum SoundStandingFixture {
             r.streamTypeRaw = StreamType.videoOnly.rawValue
         }
         // The production writer (Codex #302): nothing typed by hand.
-        VerifyAudioJob.write(d, onto: r, at: Date(timeIntervalSince1970: 1_800_000_000))
+        VerifyAudioJob.write(d, onto: r, copies: [r], stored: .none, at: Date(timeIntervalSince1970: 1_800_000_000))
         if tagged { r.tags = [WorkflowTags.silentChecked] }
         return r
     }

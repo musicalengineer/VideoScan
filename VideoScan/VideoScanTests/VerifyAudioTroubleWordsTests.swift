@@ -51,7 +51,7 @@ private func shortAudio() -> AudioVerifyDiagnosis {
 @MainActor
 private func storedRow(_ d: AudioVerifyDiagnosis) -> VideoRecord {
     let r = VideoRecord()
-    #expect(VerifyAudioJob.write(d, onto: r, at: Date(timeIntervalSince1970: 1_800_000_000)) == .stored)
+    #expect(VerifyAudioJob.write(d, onto: r, copies: [r], stored: .none, at: Date(timeIntervalSince1970: 1_800_000_000)) == .stored)
     return r
 }
 

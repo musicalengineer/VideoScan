@@ -294,7 +294,7 @@ final class VerifyAudioJob: @MainActor MediaFileOperationJob {
                 return
             }
             diagnosis = result
-            persistVerdict(result)
+            await persistVerdict(result)
             onDiagnosis?(self, result)
             switch result.verdict {
             case .notChecked(let reason):
@@ -324,33 +324,70 @@ final class VerifyAudioJob: @MainActor MediaFileOperationJob {
         }
     }
 
+    /// TEST SEAM: the content's stored sound verdict (#518 round 2). nil in
+    /// production (`AudioVerdictWithdrawal.readStored(for:model:)`).
+    var storedAudioForTesting: (@MainActor (VideoRecord) async -> AudioVerdictWithdrawal.StoredRead)?
+
     /// Write the verdict onto the record (the persistent damaged marking
     /// the red rows key off) and schedule the debounced save — verbatim
     /// from the retired sheet flow. A failed probe never reaches here, and
     /// a `.notChecked` diagnosis writes nothing: "couldn't check" is not a
-    /// verdict.
-    private func persistVerdict(_ diagnosis: AudioVerifyDiagnosis) {
-        // regression: a rescan may replace the class instance while the
-        // diagnosis runs. Commit onto the current catalog object by UUID.
+    /// verdict — except a withdrawal (#518), a CONTENT decision: the stored
+    /// verdict is read first (async), then ONE synchronous step finds every
+    /// copy by digest and decides for all of them (AudioVerdictWithdrawal).
+    private func persistVerdict(_ diagnosis: AudioVerifyDiagnosis) async {
+        var stored: AudioVerdictWithdrawal.StoredRead = .none
+        if diagnosis.withdrawsStaleOK {
+            let now = model?.records.first(where: { $0.id == record.id }) ?? record
+            if let seam = storedAudioForTesting {
+                stored = await seam(now)
+            } else {
+                stored = await AudioVerdictWithdrawal.readStored(for: now, model: model)
+            }
+        }
+        // ONE synchronous step from here (no await): a rescan may replace
+        // the class instance while the diagnosis runs — commit onto the
+        // current catalog object by UUID, and its copies as they are now.
         let currentRecord = model?.records.first(where: { $0.id == record.id })
             ?? record
-        let written = Self.write(diagnosis, onto: currentRecord, at: Date())
-        guard written != .nothing else { return }
-        if written == .withdrewOK, let model {
-            Self.logWithdrawal(currentRecord, by: "Verify Audio", model: model)
+        let copies = AudioVerdictWithdrawal.copies(of: currentRecord, in: model?.records ?? [])
+        let written = Self.write(diagnosis, onto: currentRecord, copies: copies, stored: stored, at: Date())
+        if case .content(let outcome) = written, let model {
+            AudioVerdictWithdrawal.log(outcome, filename: currentRecord.filename, by: "Verify Audio", model: model)
         }
+        guard written.changedSomething else { return }
         model?.saveCatalogDebounced()
     }
 
-    /// What `write` did to the record.
-    enum Written: Sendable, Equatable {
+    /// What `write` did.
+    enum Written: Equatable {
         /// A verdict was stored ("ok" / "damaged" / "attention").
         case stored
-        /// The pass was not a verdict but found its filter graph rebuilt, so
-        /// the stored pre-fix "ok" was withdrawn to "unverified" (#518).
-        case withdrewOK
+        /// The pass was not a verdict but found its filter graph rebuilt: the
+        /// content-level withdrawal ran (#518) — what it did is in the outcome.
+        case content(AudioVerdictWithdrawal.Outcome)
         /// Nothing changed: "couldn't check" is not a verdict.
         case nothing
+
+        var changedSomething: Bool {
+            switch self {
+            case .stored: return true
+            case .content(let o): return !o.changed.isEmpty
+            case .nothing: return false
+            }
+        }
+
+        /// The withdrawal ran and stored "unverified".
+        var withdrew: Bool { if case .content(let o) = self { return o.kind == .withdrew }; return false }
+
+        static func == (a: Written, b: Written) -> Bool {
+            switch (a, b) {
+            case (.stored, .stored), (.nothing, .nothing): return true
+            case (.content(let x), .content(let y)):
+                return x.kind == y.kind && x.changed.map(ObjectIdentifier.init) == y.changed.map(ObjectIdentifier.init)
+            default: return false
+            }
+        }
     }
 
     /// THE writer of the persisted audio verdict — shared with Check Media
@@ -363,46 +400,31 @@ final class VerifyAudioJob: @MainActor MediaFileOperationJob {
     /// rebuilding, schema v1.16). A `.notChecked` verdict stores NO verdict —
     /// the record keeps whatever an earlier run stored, date included — with
     /// ONE exception (GH #518): a pass that found its filter graph rebuilt
-    /// mid-stream withdraws a stored "ok" (only pre-#368 code could have
-    /// written it for such a file) to "unverified". The caller logs a
-    /// withdrawal (`logWithdrawal`) and says "no verdict" for `.nothing`.
+    /// mid-stream withdraws a stale "ok" (only pre-#368 code could have
+    /// written it for such a file) — for the whole CONTENT: `copies` are
+    /// every copy found by digest in this same synchronous step, `stored` the
+    /// content's stored verdict read just before (AudioVerdictWithdrawal).
+    /// Measured damage is never withdrawn. The caller logs the outcome.
     @discardableResult
-    static func write(_ diagnosis: AudioVerifyDiagnosis, onto record: VideoRecord, at date: Date) -> Written {
+    static func write(_ diagnosis: AudioVerifyDiagnosis, onto record: VideoRecord, copies: [VideoRecord],
+                      stored: AudioVerdictWithdrawal.StoredRead, at date: Date) -> Written {
         switch diagnosis.verdict {
         case .notChecked:
-            guard diagnosis.passWasReconfigured else { return .nothing }
-            return withdrawOK(onto: record, at: date) ? .withdrewOK : .nothing
+            guard diagnosis.withdrawsStaleOK else { return .nothing }
+            let all = copies.contains { $0 === record } ? copies : copies + [record]
+            return .content(AudioVerdictWithdrawal.decide(copies: all, stored: stored, at: date))
         case .ok, .damaged:
-            record.audioVerifyStatus = diagnosis.persistedStatus
-            record.audioVerifyNote = diagnosis.persistedNote
-            record.audioVerifyDate = date
+            setVerdictFields(record, status: diagnosis.persistedStatus, note: diagnosis.persistedNote, date: date)
             return .stored
         }
     }
 
-    /// GH #518: a stored "ok" that a measurement no longer stands behind
-    /// becomes "unverified" (never "" — the catalog.json value imported
-    /// beside it would come back at the next load; the stored word outranks
-    /// it). Only an "ok" is withdrawn: damage that was measured stands, and
-    /// anything else already reads as never verified. True when it changed
-    /// the record. The ONE place "unverified" is written.
-    @discardableResult
-    static func withdrawOK(onto record: VideoRecord, at date: Date) -> Bool {
-        guard StoredAudioStatus(record.audioVerifyStatus) == .ok else { return false }
-        record.audioVerifyStatus = StoredAudioStatus.unverifiedWord
-        record.audioVerifyNote = StoredAudioStatus.unverifiedWords
+    /// The ONE assignment of the verdict fields (a measured verdict here; a
+    /// content-level withdrawal or kept damage from AudioVerdictWithdrawal).
+    static func setVerdictFields(_ record: VideoRecord, status: String, note: String, date: Date?) {
+        record.audioVerifyStatus = status
+        record.audioVerifyNote = note
         record.audioVerifyDate = date
-        return true
-    }
-
-    /// The one sink's line for a withdrawal (console + catalog.log through
-    /// `model.log`, videoscan.log, the unified log). Path-free.
-    static func logWithdrawal(_ record: VideoRecord, by verb: String, model: VideoScanModel) {
-        let line = "\(verb): \(record.filename) — stored sound verdict \"ok\" withdrawn to \"unverified\": "
-            + "the sound's sample rate, format or layout changes partway, so the earlier check did not cover it (#518)"
-        model.log(line)
-        appLog.write("[verify-audio] " + line)
-        verifyLog.notice("\(line, privacy: .public)")
     }
 
     // MARK: Finish helpers
