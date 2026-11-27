@@ -1,4 +1,5 @@
 import SwiftUI
+import VideoScanCore
 
 // MARK: - Workspace Import — Pass B
 //
@@ -21,6 +22,10 @@ import SwiftUI
 /// `onCommit` closure appends it to `model.records`.
 enum WorkspaceImportSheet: Identifiable {
     case lineagePicker(VideoRecord)
+    /// After the lineage question, when the imported file already has a
+    /// whole-file SHA-256: the provenance form for its content (DECISIONS
+    /// 2026-11-27). Without one, provenance is asked after Full Hashes.
+    case provenance(ProvenanceReviewItem)
 
     // Same id across cases so SwiftUI keeps the modal context alive on
     // re-entry. We never have two cases active, but matching the
@@ -194,6 +199,8 @@ struct WorkspaceImportLineageSheet: View {
     let catalogRecords: [VideoRecord]
     let onCommit: (UUID?) -> Void
     let onCancel: () -> Void
+    /// Said under the lineage question: when this file's provenance is asked.
+    var provenanceNote: String?
 
     @State private var search: String
     @State private var selectedParentID: UUID?
@@ -207,10 +214,12 @@ struct WorkspaceImportLineageSheet: View {
     // becomes "press Enter to commit" instead of "scroll a list of 50".
     init(imported: VideoRecord,
          catalogRecords: [VideoRecord],
+         provenanceNote: String? = nil,
          onCommit: @escaping (UUID?) -> Void,
          onCancel: @escaping () -> Void) {
         self.imported = imported
         self.catalogRecords = catalogRecords
+        self.provenanceNote = provenanceNote
         self.onCommit = onCommit
         self.onCancel = onCancel
 
@@ -271,6 +280,13 @@ struct WorkspaceImportLineageSheet: View {
                 .textFieldStyle(.roundedBorder)
 
             candidateList
+
+            if let provenanceNote {
+                Text(provenanceNote)
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             footer
         }
@@ -375,6 +391,28 @@ struct WorkspaceImportLineageSheet: View {
             .keyboardShortcut(.defaultAction)
             .disabled(selectedParentID == nil)
             .help("Link this file to the selected parent record.")
+        }
+    }
+}
+
+// MARK: - Provenance after the lineage question (DECISIONS 2026-11-27)
+
+/// What the manual add does about provenance once the file is in the
+/// catalog (pure; the tests read it): a file with a whole-file SHA-256 gets
+/// the form for its content now; one without waits for Full Hashes.
+enum WorkspaceImportProvenance: Equatable {
+    case askNow(digest: String)
+    case afterFullHashes
+
+    static func next(for record: VideoRecord) -> WorkspaceImportProvenance {
+        CatalogCommit.digest(of: record).map { .askNow(digest: $0) } ?? .afterFullHashes
+    }
+
+    /// The caption under the lineage question.
+    static func note(for record: VideoRecord) -> String {
+        switch next(for: record) {
+        case .askNow: return "Next: its provenance (digitized, tape, source) — every field optional."
+        case .afterFullHashes: return NewMediaProvenanceWords.manualAddWaits
         }
     }
 }

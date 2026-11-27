@@ -387,6 +387,7 @@ extension VideoScanModel {
         publicMarks.attach(PublicMarkCatalogBacking(committer: committer))
         Task { [weak self] in _ = await self?.publicMarks.load() }
         attachProvenanceEstimatesToCatalog(committer)
+        attachProvenanceFieldsToCatalog(committer)
         attachHeldBackToCatalog(committer)
         // The background helper's observations (schema v1.13): its journal
         // beside catalog.json, applied through this committer at launch and
@@ -441,6 +442,25 @@ extension VideoScanModel {
                                                                               version: self.promotionIndexVersion)?.filename
                                    })
         Task { [weak self] in _ = await self?.provenanceEstimates.load() }
+    }
+
+    /// Provenance fields Rick types (DECISIONS 2026-11-27): every save through
+    /// this committer; the Inspector reads catalog.sqlite; the words reach the
+    /// Catalog search as their own layer. The new-media queue lives beside the
+    /// catalog. Nothing runs at launch but the reads.
+    private func attachProvenanceFieldsToCatalog(_ committer: CatalogCommitter) {
+        provenanceFields.note = { [weak self] line in
+            self?.log("Provenance: " + line)
+            appLog.write("[provenance] " + line)
+        }
+        provenanceFields.onSearchTerms = { [weak self] layer in self?.searchIndex.setObservations(layer, source: .provenance) }
+        provenanceFields.attach(ProvenanceFieldsCatalogBacking(committer: committer), records: { [weak self] in self?.records ?? [] })
+        Task { [weak self] in _ = await self?.provenanceFields.load() }
+        newMediaProvenance.note = { [weak self] line in
+            self?.log(line)
+            appLog.write("[new-media] " + line)
+        }
+        newMediaProvenance.attach(folder: URL(fileURLWithPath: catalogStore.fileLocation).deletingLastPathComponent())
     }
 
     /// Held back at import (GH #339): the count Catalog Status shows is read

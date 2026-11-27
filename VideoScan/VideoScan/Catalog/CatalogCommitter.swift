@@ -460,6 +460,10 @@ final class CatalogCommitter {
         /// rows from Estimate Provenance and Rick's "Not Right" — rows of
         /// `provenance_assertions` (v1.13), through ProvenanceEstimateStore.
         case provenanceEstimates = "provenance estimates"
+        /// The three provenance fields Rick types (DECISIONS 2026-11-27):
+        /// digitization date, tape, source — rows of `provenance_assertions`
+        /// by 'rick', through ProvenanceFieldsStore.
+        case provenanceFields = "provenance fields"
         /// The background helper's observations (schema v1.13), from its
         /// journal through JournalApplier — the only road in (design §3.4).
         case observations = "background observations"

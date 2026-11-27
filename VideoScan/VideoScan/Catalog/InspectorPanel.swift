@@ -69,6 +69,11 @@ struct InspectorPanel: View {
     /// Estimated provenance (2026-11-10): the store the "Provenance
     /// (estimated): …" line reads catalog.sqlite through. nil = no line.
     var provenanceEstimates: ProvenanceEstimateStore?
+    /// The provenance fields Rick types (2026-11-27): the store the
+    /// "Digitized / Tape / Source" lines read catalog.sqlite through, and
+    /// whether the selected file's date is Update…'s (archived). nil = no lines.
+    var provenanceFields: ProvenanceFieldsStore?
+    var provenanceDateLocked = false
     /// The file dossier's one door (FileDossierLoader.production), passed by
     /// the host; nil = no Dossier section (previews).
     var fileDossiers: FileDossierLoader?
@@ -92,6 +97,10 @@ struct InspectorPanel: View {
                                                             archivePath: (masterCopy ?? rec).fullPath,
                                                             store: provenanceEstimates, roles: provenanceRoles)
                         }
+                    }
+                    if let provenanceFields {
+                        InspectorProvenanceFieldsLines(record: rec, digest: contentDigest, dateLocked: provenanceDateLocked,
+                                                       store: provenanceFields)
                     }
 
                     Divider().padding(.horizontal, 16)

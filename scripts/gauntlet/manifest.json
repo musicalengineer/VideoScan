@@ -5169,6 +5169,7 @@
     {
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/TestHostScratchTests.swift",
+      "stage": "unit",
       "suites": [
         "TestHostScratchTests"
       ],
@@ -5182,8 +5183,7 @@
         "rootRequiresTheRunnersMarker",
         "scopeNeverRemovesThroughASymlink",
         "thisProcessRootMatchesItsEnvironment"
-      ],
-      "stage": "unit"
+      ]
     },
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
@@ -31181,6 +31181,7 @@
     {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/TestTempLeakGuardTests.swift",
+      "stage": "unit",
       "suites": [
         "TestTempLeakGuardTests"
       ],
@@ -31198,8 +31199,7 @@
         "theTestTrashRefusesADotDotThroughASymlink",
         "theTestTrashRefusesNonScratchSources",
         "theTestTrashTakesScratchSources"
-      ],
-      "stage": "unit"
+      ]
     },
     {
       "kind": "xcode",
@@ -37971,6 +37971,38 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/ProvenanceFieldsTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ProvenanceFieldsLogicTests",
+        "ProvenanceFieldsDoorTests",
+        "NewContentFinderTests",
+        "NewContentFinderScaleTests"
+      ],
+      "tests": [
+        "anUnhashedOlderCopyIsKnownContent",
+        "archivedContentKeepsItsDate",
+        "contentMissing",
+        "digitizationDate",
+        "drafts",
+        "droppedAndEmpty",
+        "formValues",
+        "hundredThousand",
+        "machineRowsAreNeverRead",
+        "missingIsUnknown",
+        "newVersusCopyOfKnown",
+        "newestRickRowStands",
+        "normalise",
+        "onePerContentAndNoRepeat",
+        "poisonedRowsAreIgnored",
+        "roundTripAndRelaunch",
+        "searchWords",
+        "strangers",
+        "waitsForTheHash"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitFailsAfterPhaseOneTests.swift",
       "stage": "regression",
       "suites": [
@@ -38063,6 +38095,40 @@
         "unattachedShowsNothingAndRefuses",
         "wiring",
         "withdrawalIsIdempotentReversibleAndNeverTouchesRicksWord"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ProvenanceFieldsAppTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ProvenanceFieldsStoreAppTests",
+        "ProvenanceFieldsSearchAppTests",
+        "NewMediaProvenanceAppTests",
+        "NewMediaProvenanceScaleAppTests",
+        "ProvenanceFieldsSensorAppTests"
+      ],
+      "tests": [
+        "acrossAViewerMasterFlip",
+        "archivedContentKeepsItsDate",
+        "duringAWriteHold",
+        "hundredThousand",
+        "insideTheDebounceWindow",
+        "inspectorTruth",
+        "isolation",
+        "manualAdd",
+        "newVersusReseenVersusMoved",
+        "poisonedQueueFile",
+        "rememberedAndPersisted",
+        "reviewRows",
+        "saveRoundTripAndRelaunch",
+        "searchHits",
+        "shape",
+        "sharedCarrierField",
+        "theRealJobOffersOnlyNewContent",
+        "twoLayers",
+        "waitingFileFollowsTheRescan",
+        "wiring"
       ]
     },
     {
@@ -42568,9 +42634,9 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 4166,
+      "expected_floor": 4186,
       "name": "unit",
-      "package_expected_floor": 1027,
+      "package_expected_floor": 1046,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",
@@ -42676,6 +42742,10 @@
         "VideoScanCoreTests.ProvenanceResolverGroupingTests",
         "VideoScanCoreTests.ProvenanceResolverReviewTests",
         "VideoScanCoreTests.ProvenanceResolverReviewFixTests",
+        "VideoScanCoreTests.ProvenanceFieldsLogicTests",
+        "VideoScanCoreTests.ProvenanceFieldsDoorTests",
+        "VideoScanCoreTests.NewContentFinderTests",
+        "VideoScanCoreTests.NewContentFinderScaleTests",
         "VideoScanCoreTests.CommandExecutorSeamTests",
         "VideoScanCoreTests.CommandExecutorIsolationTests",
         "VideoScanCoreTests.CommandExecutorEscapeGuardTests",
@@ -43308,6 +43378,11 @@
         "VideoScanTests/ProvenanceEstimateSensorTests",
         "VideoScanTests/ProvenanceEstimateReviewTests",
         "VideoScanTests/ProvenanceEstimateReviewFixTests",
+        "VideoScanTests/ProvenanceFieldsStoreAppTests",
+        "VideoScanTests/ProvenanceFieldsSearchAppTests",
+        "VideoScanTests/NewMediaProvenanceAppTests",
+        "VideoScanTests/NewMediaProvenanceScaleAppTests",
+        "VideoScanTests/ProvenanceFieldsSensorAppTests",
         "VideoScanTests/FileJourneyBuilderLadderTests",
         "VideoScanTests/FileJourneyBuilderTruthTests",
         "VideoScanTests/FileJourneyBuilderRobustnessTests",
