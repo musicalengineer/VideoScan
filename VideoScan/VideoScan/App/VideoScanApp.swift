@@ -776,8 +776,10 @@ struct VideoScanApp: App {
                             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak catalogModel] in
                                 catalogModel?.catalogAuditRunMarker.announceLastRun(to: catalogModel)
                                 // A quit that could not save left a recovery
-                                // copy beside the catalog: say so (never merged).
+                                // copy beside the catalog: say so, then offer
+                                // Apply… / Discard… / Later (GH #520).
                                 catalogModel?.announceCatalogRecoveryCopies()
+                                CatalogRescueApply.presentLaunchNotice(model: catalogModel)
                             }
                         }
                         // Catalog Status (2026-10-16, §4): the freshness

@@ -113,8 +113,9 @@ extension VideoScanModel {
         }
     }
 
-    /// The save panel. nil = cancelled.
-    private func askWhereToSaveBackup() -> URL? {
+    /// The save panel. nil = cancelled. Also where the rescue copy's Apply…
+    /// asks for its backup (GH #520, CatalogRescueApply).
+    func askWhereToSaveBackup() -> URL? {
         let panel = NSSavePanel()
         panel.title = "Back Up Catalog"
         panel.message = "Save a backup containing the catalog database, volume metadata, settings, and reference photos for every person."

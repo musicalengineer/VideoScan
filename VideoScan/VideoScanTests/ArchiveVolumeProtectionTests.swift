@@ -687,6 +687,8 @@ struct ArchiveVolumeProtectionSourceSensor {
             "ExclusivePublish: a job's own `.vs-partial` → its final output name (Combine / Transcode / Reformat), outside the archive"),
         "VideoScan/People/POIStorage.swift": Reviewed(count: 2, reason:
             "POI folder moves under App Support (never media)"),
+        "VideoScan/App/CatalogRescueApply.swift": Reviewed(count: 1, reason:
+            "GH #520: an applied quit rescue copy (catalog.recovery-*.json beside the catalog, App Support, never media) → catalog.applied-recovery-*.json; a taken name is refused, never replaced"),
         "VideoScan/MediaOps/RescueFileCopier.swift": Reviewed(count: 1, reason:
             "a verified rescue partial → a FREE destination name; its ONLY publish — a taken name is refused, never replaced (2026-11-21)"),
         "VideoScan/Volumes/VolumeCompare.swift": Reviewed(count: 1, reason:

@@ -11619,6 +11619,35 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogRescueApplyTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogRescueApplyTests",
+        "CatalogRescueApplyLogicTests",
+        "CatalogRescueApplySensorTests"
+      ],
+      "tests": [
+        "applyUsesTheOneDoors",
+        "backupFailureAppliesNothing",
+        "bothQuitWritersRecordTheBasis",
+        "conflictIsListedAndLeft",
+        "discardMovesToTheTrash",
+        "discardRefusesTheCatalog",
+        "editInsideTheDebounceWindowWins",
+        "everyReason",
+        "newRecordIsApplied",
+        "noConflictAppliesAllAfterTheBackup",
+        "offeredUntilAppliedOrDiscarded",
+        "oldCopyWithoutBasisAppliesNothing",
+        "quitAndLaunchWiring",
+        "readOnlySessionRefusesApply",
+        "scale",
+        "words",
+        "writeHoldRefusesApply"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogReachableDefaultSensorTests.swift",
@@ -43844,7 +43873,7 @@
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 1193,
+      "expected_floor": 1210,
       "name": "regression",
       "package_expected_floor": 396,
       "package_selectors": [
@@ -43975,6 +44004,9 @@
         "VideoScanTests/CatalogPurgeDoorSensorTests",
         "VideoScanTests/CatalogPurgeMarkerTests",
         "VideoScanTests/CatalogQuitCornerTests",
+        "VideoScanTests/CatalogRescueApplyTests",
+        "VideoScanTests/CatalogRescueApplyLogicTests",
+        "VideoScanTests/CatalogRescueApplySensorTests",
         "VideoScanTests/CatalogRescanRefusedReplacementTests",
         "VideoScanTests/CatalogRestoreFromBackupSensorTests",
         "VideoScanTests/CatalogRestoreFromBackupTests",

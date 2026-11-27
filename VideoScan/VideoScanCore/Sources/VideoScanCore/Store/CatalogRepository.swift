@@ -119,6 +119,12 @@ public enum CatalogWriter: String, Sendable {
     /// `row_knowledge.source` = "app:import carry" (the values came from the
     /// October import's row, not a fresh edit).
     case importCarry = "import carry"
+    /// GH #520: Rick chose Apply… on the launch notice of a quit rescue copy
+    /// — the rescued records the catalog had not changed since the copy was
+    /// made. Its own door so the audit trail says the values came from the
+    /// rescue copy, not a fresh edit: `generation_history.writer` = "rescue
+    /// apply", `row_knowledge.source` = "app:rescue apply".
+    case rescueApply = "rescue apply"
 }
 
 // MARK: - What a body sees
