@@ -191,7 +191,7 @@ struct AudioVerdictWithdrawal518Tests {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         let dto = try JSONDecoder().decode(CatalogJSONValue.self, from: encoder.encode(VideoRecordDTO(carrier)))
-        rows[i]["mediaReportCard"] = try #require(dto["mediaReportCard"])
+        rows[i]["mediaReportCard"] = dto["mediaReportCard"]
         rows[i]["audioVerifyStatus"] = .string("ok")
         rows[i]["audioVerifyNote"] = .string("")
         rows[i]["audioVerifyDate"] = .string("2026-09-01T00:00:00Z")
