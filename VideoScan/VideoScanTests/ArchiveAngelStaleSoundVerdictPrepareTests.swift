@@ -130,7 +130,7 @@ struct ArchiveAngelStaleSoundVerdictPrepareTests {
         // What an earlier version of this file left behind: a complete mono
         // verdict on the record AND in the session's diagnosis cache.
         let mono = F.diagnosis(.mono)
-        VerifyAudioJob.write(mono, onto: rec, at: Date())
+        VerifyAudioJob.write(mono, onto: rec, copies: [rec], stored: .none, at: Date())
         b.center.storeVerifyDiagnosis(mono, forRecordID: rec.id)
         b.model.records = [rec]
         #expect(rec.audioVerifyStatus == "ok" && rec.audioVerifyNote == "mono audio")
@@ -164,7 +164,7 @@ struct ArchiveAngelStaleSoundVerdictPrepareTests {
         let real = try await VerifyAudioProbe.diagnose(path: url.path)
         #expect(real.findings == [.channelImbalance(.mono)], "\(real.findings)")
         #expect(real.shape.audioStreams == 2 && real.balanceAnalysis?.programStreamCount == 1)
-        VerifyAudioJob.write(real, onto: rec, at: Date())
+        VerifyAudioJob.write(real, onto: rec, copies: [rec], stored: .none, at: Date())
         b.center.storeVerifyDiagnosis(real, forRecordID: rec.id)
         b.model.records = [rec]
 

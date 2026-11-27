@@ -16,8 +16,19 @@
 //
 // Safety (data-risk: a catalog writer; follow-up Codex pass before merge):
 //   * READ-ONLY on media: ffprobe + an audio-only ffmpeg decode.
-//   * The ONLY write is the card's Sound row, `soundMeasuredSilent`, its
-//     `soundLevels` stamp and (when the row's verdict changed) the headline.
+//   * The ONLY writes are the card's Sound row, `soundMeasuredSilent`, its
+//     `soundLevels` stamp and (when the row's verdict changed) the headline —
+//     and, when the sound changes partway, the CONTENT's stale sound verdict
+//     "ok" withdrawn to "unverified" on every copy (GH #518) through
+//     `AudioVerdictWithdrawal.decide`, in the same synchronous step and commit
+//     as the card. Measured damage the store or any copy holds is never
+//     withdrawn: every copy is set to it (Codex round 2 P1). The stored
+//     verdict is read with the stored card, before the step; unreadable →
+//     the content is left alone. One log line per content.
+//   * Planned also: a card that today's pass already rewrote as "the sound
+//     changes partway" (v16 Re-measure, or v16 Check Media) whose record still
+//     holds "ok" — `SoundLevelsRemeasureRules.need(_:live:audioStatus:)`,
+//     `.staleVerdict` (Codex round 2 P1-3).
 //   * Cards are stored per DIGEST (`media_checks`), so one content is ONE
 //     plan item. Its write is ONE synchronous main-actor step with no await
 //     inside (Codex closing pass, P0-1/P0-2): (a) find the content's copies
@@ -92,7 +103,7 @@ struct SoundLevelsRemeasureItem: Sendable, Equatable {
         var byKey: [String: SoundLevelsRemeasureItem] = [:]
         for r in records {
             guard let card = r.mediaReportCard,
-                  let need = SoundLevelsRemeasureRules.need(card, live: r.removal == nil),
+                  let need = SoundLevelsRemeasureRules.need(card, live: r.removal == nil, audioStatus: r.audioVerifyStatus),
                   let row = card.check(.sound) else { continue }
             let k = key(r)
             if let first = byKey[k] {
@@ -185,6 +196,8 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
         var cardsWritten = 0
         /// Of `changedMeanwhile`: contents whose copies' cards differ.
         var copiesDiffer = 0
+        /// Copies whose stored sound verdict "ok" was withdrawn (#518).
+        var verdictsWithdrawn = 0
         var withdrawn: Int { offline + notFound + changed + failed }
     }
 
@@ -211,6 +224,10 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
     /// The card catalog.sqlite holds for a digest (P0-1). Production reads
     /// the committer's repository; with no SQLite store there is none.
     var storedCard: @MainActor (String) async -> SoundLevelsStoredCard = { _ in .none }
+    /// The content's stored sound verdict (#518 round 2), read only when the
+    /// pass found the sound changing partway. Production reads the
+    /// committer's repository; with no SQLite store there is none.
+    var storedAudio: @MainActor (String) async -> AudioVerdictWithdrawal.StoredRead = { _ in .none }
     var now: () -> Date = { Date() }
     var progressLineEvery = 50
     static let sampleCap = 500
@@ -254,6 +271,9 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
         self.catalogFile = catalogFile ?? model.catalogStore.fileLocation
         self.storedCard = { [weak model] digest in
             await Self.readStoredCard(model?.catalogCutover.committer?.repository, digest: digest)
+        }
+        self.storedAudio = { [weak model] digest in
+            await AudioVerdictWithdrawal.readStored(model?.catalogCutover.committer?.repository, digest: digest)
         }
     }
 
@@ -350,8 +370,10 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
     private func turn(_ item: SoundLevelsRemeasureItem, index i: Int, model: VideoScanModel) async -> Bool {
         guard let outcome = await measureOne(item, index: i) else { return false }
         let stored: SoundLevelsStoredCard = if let d = item.digest { await storedCard(d) } else { .none }
+        let audio: AudioVerdictWithdrawal.StoredRead =
+            if let d = item.digest, SoundLevelsRemeasureRules.result(of: outcome) == .reconfigured { await storedAudio(d) } else { .none }
         guard !stopped else { return false }
-        record(outcome, for: item, stored: stored, index: i, model: model)
+        record(outcome, for: item, stored: stored, storedAudio: audio, index: i, model: model)
         if let refused = refusedCommit {
             refusedCommit = nil
             await reconcileRefusedCommit(refused, model: model)
@@ -424,7 +446,8 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
     /// stored snapshot against the card the plan read, write every copy,
     /// commit exactly those rows. Refused commit → put back, stop.
     private func record(_ r: SoundLevelsRemeasureRules.Remeasured, for item: SoundLevelsRemeasureItem,
-                        stored: SoundLevelsStoredCard, index i: Int, model: VideoScanModel) {
+                        stored: SoundLevelsStoredCard, storedAudio: AudioVerdictWithdrawal.StoredRead,
+                        index i: Int, model: VideoScanModel) {
         guard let rec = model.record(forID: item.id), let card = rec.mediaReportCard,
               card.checkedAt == item.checkedAt, card.check(.sound) == item.soundRow else {
             return leftAlone(i, item, "its card changed in the catalog during the run (checked again, or removed)")
@@ -443,23 +466,57 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
         case .unreadable(let why):
             return leftAlone(i, item, "the stored card for this content could not be read (\(why))")
         }
-        var before: [(VideoRecord, MediaReportCard, MediaReportCard)] = []
-        for copy in copies {
-            guard let old = copy.mediaReportCard else { continue }
-            let new = SoundLevelsRemeasureRules.rewrite(old, with: r, context: copy.soundPresenceContext)
-            guard new != old else { continue }
-            copy.mediaReportCard = new
-            before.append((copy, old, new))
+        if case .unreadable(let why) = storedAudio {
+            return leftAlone(i, item, "the stored sound verdict for this content could not be read (\(why))")
         }
+        let (before, verdict) = Self.rewriteCopies(copies, with: r, storedAudio: storedAudio, at: now())
         if !before.isEmpty {
             guard commitRows(before.map(\.0.id), model: model) else {
+                // The verdict step is NOT put back with the cards: in memory
+                // "unverified" (or the content's kept damage) never claims more
+                // than the store holds (the safe direction). If the store still
+                // says "ok", the card is set back to the stored one (`settle`),
+                // so the content stays a candidate and the next run withdraws
+                // again (after a relaunch, `.staleVerdict` also plans it).
                 refusedCommit = RefusedCommit(item: item, copies: before)
                 return
             }
             savedCount += before.count
             totals.cardsWritten += before.count
         }
+        if let verdict { noteVerdict(verdict, item: item, model: model) }
         tally(SoundLevelsRemeasureRules.result(of: r), i, item, model: model)
+    }
+
+    /// One content's rewrite applied to every copy, in memory, synchronously:
+    /// the card as today's pass writes it and — when the sound changes
+    /// partway (GH #518) — the content-level verdict step
+    /// (`AudioVerdictWithdrawal.decide`: a stale "ok" withdrawn on every copy,
+    /// measured damage kept on every copy), in the same step and so the same
+    /// commit as the card. Returns the copies that changed (card before and
+    /// after) and the verdict step's outcome (nil when it did not run).
+    static func rewriteCopies(_ copies: [VideoRecord], with r: SoundLevelsRemeasureRules.Remeasured,
+                              storedAudio: AudioVerdictWithdrawal.StoredRead, at date: Date)
+        -> (written: [(VideoRecord, MediaReportCard, MediaReportCard)], verdict: AudioVerdictWithdrawal.Outcome?) {
+        let verdict = SoundLevelsRemeasureRules.result(of: r) == .reconfigured
+            ? AudioVerdictWithdrawal.decide(copies: copies, stored: storedAudio, at: date) : nil
+        let statusChanged = Set((verdict?.changed ?? []).map(ObjectIdentifier.init))
+        var written: [(VideoRecord, MediaReportCard, MediaReportCard)] = []
+        for copy in copies {
+            guard let old = copy.mediaReportCard else { continue }
+            let new = SoundLevelsRemeasureRules.rewrite(old, with: r, context: copy.soundPresenceContext)
+            guard new != old || statusChanged.contains(ObjectIdentifier(copy)) else { continue }
+            copy.mediaReportCard = new
+            written.append((copy, old, new))
+        }
+        return (written, verdict)
+    }
+
+    /// The verdict step's one line through the one sink, and the tally.
+    private func noteVerdict(_ o: AudioVerdictWithdrawal.Outcome, item: SoundLevelsRemeasureItem, model: VideoScanModel) {
+        if o.kind == .withdrew { totals.verdictsWithdrawn += o.changed.count }
+        guard let words = AudioVerdictWithdrawal.words(o, subject: item.path) else { return }
+        note(words, model: model)
     }
 
     /// Commit exactly these rows now, synchronously: the committer's scoped
@@ -620,9 +677,11 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
     /// "12 content(s): 10 with sound levels from an earlier measurement, 2 withdrawn earlier …"
     nonisolated static func startClause(_ plan: [SoundLevelsRemeasureItem]) -> String {
         let withdrawn = plan.filter { $0.need == .withdrawn }.count
-        return "\(plan.count) content(s): \(plan.count - withdrawn) with sound levels from an earlier measurement, "
-            + "\(withdrawn) withdrawn earlier and waiting to be measured; "
-            + "read-only on media — rewrites only each card's Sound row"
+        let stale = plan.filter { $0.need == .staleVerdict }.count
+        return "\(plan.count) content(s): \(plan.count - withdrawn - stale) with sound levels from an earlier measurement, "
+            + "\(withdrawn) withdrawn earlier and waiting to be measured"
+            + (stale == 0 ? "" : ", \(stale) whose sound verdict \"ok\" predates the fix for a sound that changes partway")
+            + "; read-only on media — rewrites only each card's Sound row (and a stale sound verdict \"ok\")"
     }
 
     /// "catalog rows before 100 · after 101 · difference +1 from other work during the run (…)" — `before` is
@@ -643,6 +702,7 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
         if t.changed > 0 { why.append("changed on disk \(t.changed)") }
         if t.failed > 0 { why.append("could not measure \(t.failed)") }
         parts.append("withdrawn \(t.withdrawn)" + (why.isEmpty ? "" : " (\(why.joined(separator: ", ")))"))
+        if t.verdictsWithdrawn > 0 { parts.append("sound verdict \"ok\" withdrawn \(t.verdictsWithdrawn)") }
         if t.copiesDiffer > 0 { parts.append("\(t.copiesDiffer) file\(t.copiesDiffer == 1 ? "" : "s") left alone: their copies' cards differ") }
         let meanwhile = t.changedMeanwhile - t.copiesDiffer
         if meanwhile > 0 { parts.append("changed meanwhile \(meanwhile)") }

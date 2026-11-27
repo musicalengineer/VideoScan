@@ -117,7 +117,8 @@ enum ArchiveAngelAudioOutcome: Equatable {
     /// and the file is verified now. Pure.
     static func reusableDiagnosis(storedStatus: String, cached: AudioVerifyDiagnosis?,
                                   standing: ArchiveReadiness.SoundStanding) -> AudioVerifyDiagnosis? {
-        guard !storedStatus.isEmpty, standing != .notChecked, let cached else { return nil }
+        // A withdrawn ("unverified", #518) or unreadable status is not a verdict.
+        guard StoredAudioStatus(storedStatus).isMeasuredVerdict, standing != .notChecked, let cached else { return nil }
         if case .notChecked = cached.verdict { return nil }
         return cached
     }

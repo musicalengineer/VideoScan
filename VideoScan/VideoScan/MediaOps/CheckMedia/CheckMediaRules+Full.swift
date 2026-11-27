@@ -114,7 +114,7 @@ extension CheckMediaRules {
         let evidence = channels.enumerated().map { index, c in
             MediaEvidence(channelName(index, of: channels.count), levelText(c))
         }
-        if diagnosis.persistedStatus == "damaged" {
+        if diagnosis.verdict == .damaged {
             // A Problem whatever the kind (Repair… keeps Rebuild on offer for
             // it); only real damage is called damaged (Rick 2026-11-25).
             let note = diagnosis.persistedNote

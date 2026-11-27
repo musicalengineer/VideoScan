@@ -160,10 +160,14 @@ struct AudioShortDecode: Sendable, Equatable {
         return b.missingSeconds > a.missingSeconds ? b : a
     }
 
+    /// The first words of a rebuilt graph's reason. Persisted on cards (a
+    /// Sound row's "not checked" reason) and read back by Re-measure's plan
+    /// (`SoundLevelsRemeasureRules.isReconfiguredRow`): never reword.
+    static let reconfiguredWords = "the sound's sample rate, format or channel layout changes partway through the track"
+
     var reason: String {
         if graphReconfigured {
-            return "the sound's sample rate, format or channel layout changes partway through the track, "
-                + "so no single measurement covers all of it"
+            return Self.reconfiguredWords + ", so no single measurement covers all of it"
         }
         return "the sound decode stopped early — "
             + String(format: "%.1f s of the %.1f s", missingSeconds, statedSeconds)

@@ -509,6 +509,14 @@ public actor GRDBCatalogRepository: CatalogRepository {
                 try db.execute(sql: statement)
             }
         }
+        // The stored audio status (v1.16, Rick approved 2026-11-27, GH #518):
+        // `media_checks` rebuilt with two more audio words ('attention',
+        // 'unverified'), every row copied and counted, version 17. No parent
+        // table is dropped, so foreign keys stay `.immediate`.
+        migrator.registerMigration(CatalogAudioStatusSchema.migrationID, foreignKeyChecks: .immediate) { db in
+            try confirm?(db)
+            try CatalogAudioStatusSchema.run(db)
+        }
         return migrator
     }
 
@@ -516,8 +524,9 @@ public actor GRDBCatalogRepository: CatalogRepository {
     /// (v1 creates 7; `v3_live_writes` raises it to 8; `v4_pending_rows` to
     /// 9; `v5_b22_commit` to 10; `v6_folder_kind` to 11; `v7_decision_tables`
     /// to 12; `v8_provenance_roles` to 13; `v9_provenance_assertions` to
-    /// 14; `v10_sound_attempts` to 15; `v11_public_marks` to 16). A HIGHER number is a newer build's file and is refused at open.
-    static let currentSchemaVersion = CatalogPublicMarksSchema.schemaVersion
+    /// 14; `v10_sound_attempts` to 15; `v11_public_marks` to 16;
+    /// `v12_audio_status` to 17). A HIGHER number is a newer build's file and is refused at open.
+    static let currentSchemaVersion = CatalogAudioStatusSchema.schemaVersion
 
     // MARK: - High-water at open (DDL §11)
 

@@ -8,10 +8,12 @@
 // What moves: the WORDS (the stored note, the Verify Audio sheet headline,
 // the Check Media Sound row, the Archive Angel sound line, the corpus word)
 // and therefore the `notes:damaged` batch-delete query, which these files
-// leave. What does not move: the stored status ("damaged" — the schema's only
-// not-ok value), so readiness, the copy-family survivor pick, the red row and
-// the Promote sound gate treat both exactly as before. Nothing moves IN to
-// any healthy or delete set.
+// leave. Since schema v1.16 (DECISIONS 2026-11-27) the stored status moves
+// too: "attention" (orange) for the two, "damaged" (red) for real damage —
+// and every gate (readiness, the no-usable-sound floor, the copy-family
+// survivor pick, the Promote sound gate) refuses "attention" exactly as
+// "damaged" (StoredAudioStatus.refusesLikeDamage). Nothing moves IN to any
+// healthy or delete set.
 //
 // Pure: values in, values out. No file, no subprocess, no model.
 
@@ -49,7 +51,7 @@ private func shortAudio() -> AudioVerifyDiagnosis {
 @MainActor
 private func storedRow(_ d: AudioVerifyDiagnosis) -> VideoRecord {
     let r = VideoRecord()
-    #expect(VerifyAudioJob.write(d, onto: r, at: Date(timeIntervalSince1970: 1_800_000_000)))
+    #expect(VerifyAudioJob.write(d, onto: r, copies: [r], stored: .none, at: Date(timeIntervalSince1970: 1_800_000_000)) == .stored)
     return r
 }
 
@@ -93,13 +95,14 @@ struct VerifyAudioTroubleWordsTests {
         #expect(pfRecordMatchesQuery(storedRow(needsRebuild()), query: "notes:rebuilding"))
     }
 
-    @Test("SAFETY: the stored status stays 'damaged' (not ok) — readiness and the no-usable-sound floor read them as before")
-    func storedStatusDoesNotMove() {
-        for d in [referenceMovie(), needsRebuild(), shortAudio()] {
-            #expect(d.verdict == .damaged && d.persistedStatus == "damaged", "\(d.findings)")
+    @Test("SAFETY: a reference movie / a sound that needs rebuilding is stored 'attention', real damage 'damaged' — both not ok, and readiness and the no-usable-sound floor refuse both")
+    func storedStatusIsAttentionOrDamaged() {
+        for (d, word) in [(referenceMovie(), "attention"), (needsRebuild(), "attention"), (shortAudio(), "damaged")] {
+            #expect(d.verdict == .damaged && d.persistedStatus == word, "\(d.findings)")
             #expect(d.findings.contains(where: VerifyAudioRules.isDamage))
             let r = storedRow(d)
-            #expect(r.audioVerifyStatus == "damaged")
+            #expect(r.audioVerifyStatus == word)
+            #expect(StoredAudioStatus(r.audioVerifyStatus).refusesLikeDamage)
             #expect(ArchiveReadiness.lacksUsableSound(streamTypeRaw: StreamType.videoAndAudio.rawValue,
                                                       audioVerifyStatus: r.audioVerifyStatus,
                                                       audioVerifyNote: r.audioVerifyNote))

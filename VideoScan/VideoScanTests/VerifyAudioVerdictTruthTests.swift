@@ -375,7 +375,10 @@ struct VerifyAudioReadFailureTests {
             let rec = soundRecord(name)
             model.records.append(rec)
             let job = await runVerify(rec, model: model) { _ in diagnosis }
-            #expect(rec.audioVerifyStatus == "damaged", "\(name): \(job.state)")
+            // Real damage is stored "damaged"; a reference movie / a fully decoded
+            // needs-rebuild codec "attention" (v1.16) — both refused alike.
+            #expect(rec.audioVerifyStatus == (diagnosis.trouble == .damaged ? "damaged" : "attention"), "\(name): \(job.state)")
+            #expect(StoredAudioStatus(rec.audioVerifyStatus).refusesLikeDamage, "\(name)")
             // Each names itself: only real damage leads with the batch-find prefix (Rick 2026-11-25).
             let lead = switch diagnosis.trouble {
             case .referenceMovie?: VerifyAudioRules.referenceMovieNotePrefix
@@ -460,7 +463,7 @@ struct VerifyAudioVerdictIsolationTests {
         #expect(S.soundDiagnosis(channels: [], audioStreams: 0).persistedStatus == "ok")
         let pointer = AudioVerifyDiagnosis(findings: [.referenceMovie(referencedPaths: ["/x"])],
                                            shape: AudioVerifyShape(), balanceAnalysis: nil)
-        #expect(pointer.persistedStatus == "damaged")
+        #expect(pointer.persistedStatus == "attention", "refused like damage, orange (v1.16)")
     }
 }
 

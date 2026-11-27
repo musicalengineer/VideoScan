@@ -278,15 +278,18 @@ struct ArchiveReadiness: Equatable, Sendable {
 
         // ---- Audio
         let hasAudio = stream == .videoAndAudio || stream == .audioOnly
-        // A stored "damaged" comes first, track or no track (Codex #302): a
-        // reference movie has no audio stream of its own AND is damaged, and
-        // Promote's gate puts damage ahead of "no track".
+        let status = StoredAudioStatus(audioVerifyStatus)
+        // A stored "damaged" / "attention" comes first, track or no track
+        // (Codex #302): a reference movie has no audio stream of its own AND
+        // is refused, and Promote's gate puts damage ahead of "no track".
+        // "unverified" (withdrawn, #518) and an unreadable word read as never
+        // verified — whatever date or note sits beside them.
         let audio: Audio
-        if audioVerifyStatus == "damaged" {
+        if status.refusesLikeDamage {
             audio = .verifiedProblem(audioVerifyNote.isEmpty ? "damaged audio" : audioVerifyNote)
         } else if !hasAudio {
             audio = .noAudioTrack
-        } else if audioVerifyStatus == "ok" || audioVerifyDate != nil {
+        } else if status == .ok || (status == .neverVerified && audioVerifyDate != nil) {
             audio = audioVerifyNote.isEmpty ? .verifiedOK : .verifiedProblem(audioVerifyNote)
         } else {
             audio = .notVerified
@@ -295,7 +298,7 @@ struct ArchiveReadiness: Equatable, Sendable {
         // An un-probeable file has no sound fact at all: Promote's gate
         // answers "could not check" for it, so it is not "no track" — unless
         // damage is stored, which nothing outranks.
-        let sound: SoundStanding = blocking && audioVerifyStatus != "damaged"
+        let sound: SoundStanding = blocking && !status.refusesLikeDamage
             ? .notChecked
             : soundStanding(audio: audio, audioVerifyStatus: audioVerifyStatus,
                             channelCount: channelCount(audioChannels), mark: mark)
@@ -305,8 +308,9 @@ struct ArchiveReadiness: Equatable, Sendable {
 
     /// The ONE "no usable sound" rule (Rick 2026-10-06 — the Archive
     /// Angel's `noSound` floor): true for anything but a picture WITH a
-    /// sound track (video-only, audio-only, un-probed), for damaged audio
-    /// (Verify Audio's "damaged"), and for a track Verify Audio found
+    /// sound track (video-only, audio-only, un-probed), for sound Verify
+    /// Audio found not usable (stored "damaged" or "attention" — a reference
+    /// movie, a sound that needs rebuilding), and for a track Verify Audio found
     /// silent or missing (status "ok" + that note fragment — honest states,
     /// not damage, so the status alone cannot say it). A track never
     /// checked is NOT refused here: Prepare checks it, and it is never
@@ -316,7 +320,10 @@ struct ArchiveReadiness: Equatable, Sendable {
     static func lacksUsableSound(streamTypeRaw: String, audioVerifyStatus: String,
                                  audioVerifyNote: String) -> Bool {
         guard streamTypeRaw == StreamType.videoAndAudio.rawValue else { return true }
-        if audioVerifyStatus == "damaged" { return true }
+        let status = StoredAudioStatus(audioVerifyStatus)
+        if status.refusesLikeDamage { return true }
+        // Withdrawn / unreadable: never verified, so its note is not a fact.
+        guard status.isMeasuredVerdict || status == .neverVerified else { return false }
         guard !audioVerifyNote.isEmpty else { return false }
         let fragments = audioVerifyNote.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }
         return fragments.contains(silentNoteFragment) || fragments.contains(noStreamNoteFragment)
@@ -372,8 +379,9 @@ struct ArchiveReadiness: Equatable, Sendable {
                               channelCount: Int? = nil,
                               mark: PromoteSoundGate.Mark = .absent) -> SoundStanding {
         // Damage first, whatever `audio` says: the owner's tag accepts
-        // silence and a missing track, never damage (Codex #302).
-        if audioVerifyStatus == "damaged" {
+        // silence and a missing track, never damage (Codex #302) — nor a
+        // reference movie / a sound that needs rebuilding ("attention").
+        if StoredAudioStatus(audioVerifyStatus).refusesLikeDamage {
             if case .verifiedProblem(let note) = audio { return .refusable(note) }
             return .refusable("damaged audio")
         }

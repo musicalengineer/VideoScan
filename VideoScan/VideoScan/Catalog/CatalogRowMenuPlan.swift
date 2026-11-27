@@ -198,9 +198,11 @@ enum CatalogRowMenuRules {
     // Family Music… item, 2026-10-07 — Rick: "this app is not going to
     // track Rick's Music". Existing marks stay on records, inert.)
 
-    /// Rows whose last sound check (Verify Audio, now Verify) said
-    /// damaged — the Repair sheet offers Link Repaired Copy… for these.
+    /// Rows whose last sound check (Verify Audio, now Verify) found the
+    /// sound not usable — "damaged" or "attention" (a reference movie, a
+    /// sound that needs rebuilding; refused exactly alike) — the Repair
+    /// sheet offers Link Repaired Copy… for these.
     static func damagedAudio(_ verifiable: [VideoRecord]) -> [VideoRecord] {
-        verifiable.filter { $0.audioVerifyStatus == "damaged" }
+        verifiable.filter { StoredAudioStatus($0.audioVerifyStatus).refusesLikeDamage }
     }
 }

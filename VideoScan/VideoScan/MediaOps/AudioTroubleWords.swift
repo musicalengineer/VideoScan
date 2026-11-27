@@ -5,13 +5,16 @@
 // "damaged": 36 were QuickTime reference movies and 7 an old codec ffmpeg
 // decodes. Neither is damage.
 //
-// All three kinds store the same status ("damaged" — media_checks takes only
-// 'ok' / 'damaged' for audio) and meet the same gates: readiness, the copy-
-// family pick, the red row, Repair…, and Promote's sound gate (refusal code
-// sound-damaged). The kind decides the WORDS only — the stored note, the
-// Verify Audio sheet, the Check Media row, Promote's refusal detail, the
-// Archive Angel line — so only real damage is called damaged, and only real
-// damage is in the `notes:damaged` batch-delete find.
+// Real damage stores "damaged" (red row); a reference movie or a sound that
+// needs rebuilding stores "attention" (orange row; schema v1.16, DECISIONS
+// 2026-11-27). All three meet the same gates: readiness, the copy-family
+// pick, Repair…, and Promote's sound gate (refusal code sound-damaged) —
+// `StoredAudioStatus.refusesLikeDamage`. The kind decides the WORDS and the
+// tint only — the stored note, the Verify Audio sheet, the Check Media row,
+// Promote's refusal detail, the Archive Angel line — so only real damage is
+// called damaged, and only real damage is in the `notes:damaged` find.
+// Rows stored "damaged" for the other two before 2026-11-27 stay red until
+// the file is verified again.
 //
 // SEPARATOR RULE (VerifyAudioRules.damagedNotePrefix): a note is fragments
 // joined by "; ", a lead's em dash separates it from its detail — so no
@@ -76,9 +79,9 @@ enum AudioTrouble: Int, Sendable, Comparable, CaseIterable {
         case .damaged:
             return "This file's audio is damaged — it's marked red in the catalog so you can find it again later."
         case .referenceMovie:
-            return "This is a reference movie: its picture and sound are stored in other files, so this file alone does not play. Its row stays red in the catalog."
+            return "This is a reference movie: its picture and sound are stored in other files, so this file alone does not play. Its row is marked orange in the catalog."
         case .needsRebuild:
-            return "The sound needs rebuilding: it is stored in a format Apple can't play. Rebuild Audio Track below fixes it; its row stays red in the catalog until then."
+            return "The sound needs rebuilding: it is stored in a format Apple can't play. Rebuild Audio Track below fixes it; its row stays orange in the catalog until then."
         }
     }
 

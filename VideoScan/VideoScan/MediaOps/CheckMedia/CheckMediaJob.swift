@@ -261,7 +261,8 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
         var card = CheckMediaRules.card(tier: tier, checks: checks, quick: quick, at: Date())
         card.measuredPictureSeconds = measuredPicture
         card.soundMeasuredSilent = measuredSilent
-        persist(card: card, video: video, audio: audio, on: rec, index: index)
+        let stored = await storedAudio(for: audio, rec)
+        persist(card: card, video: video, audio: audio, storedAudio: stored, on: rec, index: index)
         await lookUpSound(for: card, recordID: rec.id, index: index)
     }
 
@@ -279,7 +280,17 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
         model?.record(forID: rec.id) ?? rec
     }
 
+    /// The content's stored sound verdict, read BEFORE `persist` only when a
+    /// withdrawal may follow (#518 round 2; AudioVerdictWithdrawal).
+    private func storedAudio(for audio: AudioVerifyDiagnosis?, _ rec: VideoRecord) async -> AudioVerdictWithdrawal.StoredRead {
+        guard audio?.withdrawsStaleOK == true else { return .none }
+        return await AudioVerdictWithdrawal.readStored(for: currentRecord(rec), model: model)
+    }
+
+    /// ONE synchronous step (no await): the card, the picture verdict, the
+    /// sound verdict — and a withdrawal for every copy of the content (#518).
     private func persist(card: MediaReportCard, video: VideoVerifyDiagnosis?, audio: AudioVerifyDiagnosis?,
+                         storedAudio: AudioVerdictWithdrawal.StoredRead = .none,
                          on rec: VideoRecord, index: Int) {
         let current = model?.records.first { $0.id == rec.id } ?? rec
         let now = Date()
@@ -289,10 +300,18 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
         current.mediaReportCard = card
         if let video { VerifyVideoJob.write(video, onto: current, at: now) }
         if let audio {
-            // The one writer stores only "ok" / "damaged". A sound pass that
-            // failed or was incomplete stores nothing (GH #467 / #468): the
-            // card's Sound row says "Not checked" and why, and so does the log.
-            if !VerifyAudioJob.write(audio, onto: current, at: now), case .notChecked(let reason) = audio.verdict {
+            // The one writer stores only "ok" / "damaged" / "attention". A
+            // sound pass that failed or was incomplete stores nothing (GH #467
+            // / #468): the card's Sound row says "Not checked" and why, and so
+            // does the log — except that a pass whose filter graph was rebuilt
+            // withdraws a stale "ok" for EVERY copy of the content, never over
+            // measured damage (#518, AudioVerdictWithdrawal), logged.
+            let copies = AudioVerdictWithdrawal.copies(of: current, in: model?.records ?? [])
+            let written = VerifyAudioJob.write(audio, onto: current, copies: copies, stored: storedAudio, at: now)
+            if case .content(let outcome) = written, let model {
+                AudioVerdictWithdrawal.log(outcome, filename: rec.filename, by: "Verify", model: model)
+            }
+            if case .notChecked(let reason) = audio.verdict {
                 model?.log("Verify: \(rec.filename) — sound not checked: \(reason); no sound verdict was recorded")
                 checkMediaJobLog.notice("verify media: \(rec.filename, privacy: .public) sound not checked — \(reason, privacy: .public); no sound verdict recorded")
             }

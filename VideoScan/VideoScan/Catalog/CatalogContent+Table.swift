@@ -52,9 +52,9 @@ extension CatalogContent {
         // The note self-describes since the "Damaged audio — <detail>"
         // standardization, so no extra label — a label would double up
         // as "Damaged audio: Damaged audio — …".
-        if rec.audioVerifyStatus == "damaged" {
-            // A note stored before 2026-11-25 is shown in today's words.
-            tip += "\n\n⚠️ \(rec.audioVerifyNote.isEmpty ? "Damaged audio" : AudioTrouble.displayNote(rec.audioVerifyNote))"
+        // "unverified" (#518) says plainly that the sound is NOT verified.
+        if let sound = StoredAudioStatus(rec.audioVerifyStatus).tooltipLine(note: rec.audioVerifyNote) {
+            tip += "\n\n⚠️ \(sound)"
         }
         // Verify Video (2026-09-23): broken AND warning verdicts explain
         // themselves here; the note self-describes ("Broken video — …").

@@ -46,6 +46,7 @@ struct ProductionShapePublicMarksMigrationTests {
     /// the migration's record and both version stamps.
     static func rewindToFifteen(_ db: URL) throws {
         try sqliteExecute(db, [
+            "DELETE FROM grdb_migrations WHERE identifier = 'v12_audio_status'",   // a 17 copy: v12 re-runs its row-for-row rebuild after v11
             "DROP TABLE public_marks",
             "DELETE FROM grdb_migrations WHERE identifier = 'v11_public_marks'",   // CatalogPublicMarksSchema.migrationID (Core-internal)
             "UPDATE catalog_state SET schema_version = 15 WHERE singleton = 1",
@@ -58,7 +59,7 @@ struct ProductionShapePublicMarksMigrationTests {
         let scene = try Shape.copy("prodshape_v16"); defer { scene.cleanup() }
         let db = scene.databaseURL
         let before = try Shape.schema(db)
-        try #require(before.state >= 14 && before.state <= 16, "the copy is at schema \(before.state)")
+        try #require(before.state >= 14 && before.state <= Shape.buildSchema, "the copy is at schema \(before.state)")
         let tables = try Shape.tables(db)
         let rowsBefore = try Shape.counts(db, tables)
         let marksBefore = tables.contains("public_marks") ? try Self.marks(db) : []
@@ -68,7 +69,7 @@ struct ProductionShapePublicMarksMigrationTests {
         #expect(opened == .readWrite, "\(opened)")
 
         let after = try Shape.schema(db)
-        #expect(after.state == 16 && after.pragma == 16, "schema \(after.state), user_version \(after.pragma)")
+        #expect(after.state == Shape.buildSchema && after.pragma == Shape.buildSchema, "schema \(after.state), user_version \(after.pragma)")
         let rowsAfter = try Shape.counts(db, tables)
         let changed = rowsBefore.filter { rowsAfter[$0.key] != $0.value }.keys.sorted()
         #expect(changed.isEmpty, "row counts moved in: \(changed)")
@@ -88,8 +89,8 @@ struct ProductionShapePublicMarksMigrationTests {
         let scene = try Shape.copy("prodshape_v16_rewound"); defer { scene.cleanup() }
         let db = scene.databaseURL
         let live = try Shape.schema(db)
-        try #require(live.state >= 14 && live.state <= 16,
-                     "the copy is at schema \(live.state): this build understands 14…16; a later schema means this test is due for its successor")
+        try #require(live.state >= 14 && live.state <= Shape.buildSchema,
+                     "the copy is at schema \(live.state): this build understands 14…\(Shape.buildSchema); a later schema means this test is due for its successor")
         // A catalog this build has not opened yet (the M4's viewer copy sat at 14
         // on 2026-11-09 and this test failed there for it): bring the COPY to 16
         // with this build's own store first, then rewind the one step under test.
@@ -98,7 +99,7 @@ struct ProductionShapePublicMarksMigrationTests {
             let forward = await Shape.open(db, host: "prodshape-v16-rewound")
             try #require(forward == .readWrite, "the copy at \(live.state) did not open on this build: \(forward)")
         }
-        if try Shape.schema(db).state == 16 { try Self.rewindToFifteen(db) }
+        if try Shape.schema(db).state >= 16 { try Self.rewindToFifteen(db) }
         let before = try Shape.schema(db)
         try #require(before.state == 15 && before.pragma == 15, "rewound to \(before.state) / user_version \(before.pragma)")
         let tables = try Shape.tables(db)
@@ -110,7 +111,7 @@ struct ProductionShapePublicMarksMigrationTests {
         #expect(opened == .readWrite, "\(opened)")
 
         let after = try Shape.schema(db)
-        #expect(after.state == 16 && after.pragma == 16, "schema \(after.state), user_version \(after.pragma)")
+        #expect(after.state == Shape.buildSchema && after.pragma == Shape.buildSchema, "schema \(after.state), user_version \(after.pragma)")
         let rowsAfter = try Shape.counts(db, tables)
         let changed = rowsBefore.filter { rowsAfter[$0.key] != $0.value }.keys.sorted()
         #expect(changed.isEmpty, "row counts moved in: \(changed)")

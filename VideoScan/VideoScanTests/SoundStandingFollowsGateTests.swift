@@ -119,7 +119,7 @@ enum SoundStandingFixture {
             r.streamTypeRaw = StreamType.videoOnly.rawValue
         }
         // The production writer (Codex #302): nothing typed by hand.
-        VerifyAudioJob.write(d, onto: r, at: Date(timeIntervalSince1970: 1_800_000_000))
+        VerifyAudioJob.write(d, onto: r, copies: [r], stored: .none, at: Date(timeIntervalSince1970: 1_800_000_000))
         if tagged { r.tags = [WorkflowTags.silentChecked] }
         return r
     }
@@ -398,11 +398,11 @@ struct SoundStandingFollowsGateTests {
 
     // Codex #302 F1: `assess` chose "no audio track" before it looked at the
     // stored "damaged", and the tag accepts no-track.
-    @Test("F4: a stored 'damaged' outranks everything — a tagged reference movie with no audio stream is red, never 'accepted'")
+    @Test("F4: a stored refusal outranks everything — a tagged reference movie (stored 'attention' since v1.16, refused exactly like 'damaged') with no audio stream is refused, never 'accepted'")
     func damageOutranksTheTagEvenWithNoTrack() {
         let d = F.referenceMovieDiagnosis()
         let r = F.record(for: d, tagged: true)
-        #expect(r.audioVerifyStatus == "damaged" && r.streamTypeRaw == StreamType.videoOnly.rawValue)
+        #expect(r.audioVerifyStatus == "attention" && r.streamTypeRaw == StreamType.videoOnly.rawValue)
         #expect(F.gate(d, record: r).isRefusal)
         let readiness = ArchiveReadiness.assess(record: r)
         let line = readiness.sheetLine(dateLabel: "1992")

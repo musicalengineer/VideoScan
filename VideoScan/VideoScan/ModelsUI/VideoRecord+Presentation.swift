@@ -15,24 +15,33 @@ import SwiftUI
 extension VideoRecord {
 
     /// Filename tint color based on archival/disposition status.
-    /// Priority: damaged (red) → junk (gray) → archived (green) →
-    /// master (blue) → in-progress (orange) → flagged (yellow) → default (primary).
+    /// Priority: damaged (red) → sound needs attention (orange) → junk (gray)
+    /// → archived (green) → master (blue) → in-progress (orange) → flagged
+    /// (yellow) → default (primary).
     var filenameColor: Color {
         if streamType == .ffprobeFailed || streamType == .noStreams {
             return .red
         }
         // Verify Audio verdict (GH #128): damaged audio shares the
         // "damaged (red)" priority tier with unreadable files — the sound
-        // is not usable as it stands (real damage, a reference movie, a
-        // sound that needs rebuilding; the note says which), so the tint
-        // must survive every softer disposition below.
-        if audioVerifyStatus == "damaged" {
+        // is not usable as it stands (real damage — and a reference movie or
+        // a sound that needs rebuilding stored "damaged" before 2026-11-27,
+        // until verified again; the note says which), so the tint must
+        // survive every softer disposition below.
+        let sound = StoredAudioStatus(audioVerifyStatus).tint
+        if sound == .damaged {
             return .red
         }
         // Verify Video "broken" verdict (2026-09-23) — the same damaged
         // tier: a broken picture must never read as an ordinary row.
         if videoVerifyStatus == "broken" {
             return .red
+        }
+        // "attention" (DECISIONS 2026-11-27): a reference movie or a sound
+        // that needs rebuilding — not usable as it stands, not damage. Orange,
+        // and like red it survives every softer disposition below.
+        if sound == .attention {
+            return .orange
         }
         if mediaDisposition == .confirmedJunk {
             return .secondary
@@ -78,8 +87,13 @@ extension VideoRecord {
         }
         // Verify Audio damaged verdict (GH #128) — same red wash the
         // ffprobeFailed state uses (one damaged-row language).
-        if audioVerifyStatus == "damaged" || videoVerifyStatus == "broken" {
+        let sound = StoredAudioStatus(audioVerifyStatus).tint
+        if sound == .damaged || videoVerifyStatus == "broken" {
             return Color.red.opacity(0.15)
+        }
+        // "attention": reference movie / sound that needs rebuilding — orange, not red.
+        if sound == .attention {
+            return Color.orange.opacity(0.18)
         }
         switch streamType {
         case .videoOnly:     return Color.yellow.opacity(0.25)

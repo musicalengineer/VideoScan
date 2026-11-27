@@ -32244,7 +32244,7 @@
         "realDamageUnchanged",
         "referenceMovieNote",
         "sheetHeadline",
-        "storedStatusDoesNotMove",
+        "storedStatusIsAttentionOrDamaged",
         "wordsTableKeepsTheSeparatorRule"
       ]
     },
@@ -39778,6 +39778,85 @@
       "tests": [
         "sharesChangeAndEveryPropagationIsProven"
       ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogAudioStatusMigrationTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogAudioStatusMigrationTests"
+      ],
+      "tests": [
+        "aFreshCatalogIsSeventeenAndReopensQuietly",
+        "aHundredThousandContentsMigrateInsideTheBudget",
+        "aMigrationThatFailsPartWayRollsBackWhole",
+        "aPoisonedSixteenFileIsRefusedAndLeftWhole",
+        "aRowTheNewTableRefusesRollsTheMigrationBack",
+        "aSeventeenFileIsRefusedByASixteenBuild",
+        "aSixteenFileMigratesWithEveryRowKept",
+        "anUnverifiedRowOutranksTheImportedOKAtEveryRelaunch",
+        "attentionRoundTrips",
+        "clearingInsteadOfWithdrawingResurrectsTheImportedOK",
+        "storedAudioCheckReadsTheBoundRow",
+        "theSixteenSchemaRefusesTheNewWords",
+        "theWidenedCheckTakesExactlyTheTwoNewAudioWords"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AudioStatusAttentionGateTests.swift",
+      "stage": "unit",
+      "suites": [
+        "AudioStatusAttentionGateTests"
+      ],
+      "tests": [
+        "aHundredThousandRecords",
+        "attentionRefusesEverywhereDamagedDid",
+        "keeperChoiceTreatsUnverifiedAsNeverVerified",
+        "poisonedWordsFailClosed",
+        "theReading",
+        "theTint",
+        "theUISaysNotVerified",
+        "theWriterChoosesTheWord",
+        "unverifiedIsNeverVerified"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AudioVerdictWithdrawal518Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "AudioVerdictWithdrawal518Tests"
+      ],
+      "tests": [
+        "aFreshVerdictWrittenMeanwhileIsLeftAlone",
+        "aReadOnlyCatalogChangesNothing",
+        "checkMediaWithdrawsEveryCopy",
+        "contentStepCases",
+        "everyCopyIsWithdrawn",
+        "onlyAStaleOKIsWithdrawn",
+        "remeasureLeavesContentAloneWhenTheStoredVerdictIsUnreadable",
+        "remeasureNeverWithdrawsOverMeasuredDamage",
+        "remeasureWithdrawsTheStaleOK",
+        "staleVerdictPredicate",
+        "theImportedOKNeverComesBack",
+        "v16RemeasuredOKIsFoundAndWithdrawn",
+        "verifyAudioWithdrawsEveryCopy",
+        "verifyWriterWithdrawsOnlyOnAReconfiguredPass"
+      ]
+    },
+    {
+      "blocked_reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ProductionShapeAudioStatusMigrationTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ProductionShapeAudioStatusMigrationTests"
+      ],
+      "tests": [
+        "theLiveCatalogOpensWithEveryRowKept",
+        "theRewoundCopyMigratesRowForRow"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -42574,7 +42653,7 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 4166,
+      "expected_floor": 4175,
       "name": "unit",
       "package_expected_floor": 1027,
       "package_selectors": [
@@ -43380,7 +43459,8 @@
         "VideoScanTests/HeldBackPlanTests",
         "VideoScanTests/HeldBackProofTests",
         "VideoScanTests/HeldBackCarryTests",
-        "VideoScanTests/ArchivedContentIndexTests"
+        "VideoScanTests/ArchivedContentIndexTests",
+        "VideoScanTests/AudioStatusAttentionGateTests"
       ]
     },
     {
@@ -43848,11 +43928,15 @@
         {
           "name": "VideoScan/VideoScanTests/ProductionShapeWholeFileIdentityTests.swift",
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ProductionShapeAudioStatusMigrationTests.swift",
+          "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 1193,
+      "expected_floor": 1207,
       "name": "regression",
-      "package_expected_floor": 396,
+      "package_expected_floor": 409,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -43919,7 +44003,8 @@
         "VideoScanCoreTests.CatalogCommitFailsAfterPhaseOneTests",
         "VideoScanCoreTests.CatalogSpaceFloorTests",
         "VideoScanCoreTests.CatalogHeldBackRowsTests",
-        "VideoScanCoreTests.HeldBackCuratedTests"
+        "VideoScanCoreTests.HeldBackCuratedTests",
+        "VideoScanCoreTests.CatalogAudioStatusMigrationTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
@@ -44142,7 +44227,8 @@
         "VideoScanTests/WitnessWholeDiskIndependenceTests",
         "VideoScanTests/RescanKeepsKnownHashTests",
         "VideoScanTests/ArchivedTwinDateWritersTests",
-        "VideoScanTests/WholeFileIdentityTests"
+        "VideoScanTests/WholeFileIdentityTests",
+        "VideoScanTests/AudioVerdictWithdrawal518Tests"
       ]
     },
     {

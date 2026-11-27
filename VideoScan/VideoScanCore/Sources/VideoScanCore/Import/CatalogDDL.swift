@@ -178,6 +178,22 @@ public enum CatalogDDL {
         public static let ddlLocation = Location("media_checks", "kind")
     }
 
+    /// media_checks.status for kind 'audio' (v1.16, migration `v12_audio_status`;
+    /// the first `status IN (` list after CREATE TABLE media_checks). The app
+    /// reads these through `StoredAudioStatus`; "" (no row) = never verified.
+    public enum AudioCheckStatus: String, Codable, CaseIterable, Sendable {
+        /// Measured in full, nothing that makes the sound unusable.
+        case ok
+        /// Real damage (the sound runs far shorter than the picture).
+        case damaged
+        /// A reference movie, or sound that needs rebuilding: refused by every
+        /// gate exactly like `damaged`; shown orange, not red.
+        case attention
+        /// A pre-fix "ok" withdrawn by a re-measure (GH #518): never verified.
+        case unverified
+        public static let ddlLocation = Location("media_checks", "status")
+    }
+
     /// regen_context.kind.
     public enum RegenKind: String, Codable, CaseIterable, Sendable {
         case folderDate, donorDate
@@ -327,6 +343,7 @@ public enum CatalogDDL {
         (Disposition.ddlLocation, Disposition.allCases.map(\.rawValue)),
         (SoundOutcome.ddlLocation, SoundOutcome.allCases.map(\.rawValue)),
         (SoundAttemptOutcome.ddlLocation, SoundAttemptOutcome.allCases.map(\.rawValue)),
+        (AudioCheckStatus.ddlLocation, AudioCheckStatus.allCases.map(\.rawValue)),
         (CaptionKind.ddlLocation, CaptionKind.allCases.map(\.rawValue)),
         (DerivedKind.ddlLocation, DerivedKind.allCases.map(\.rawValue)),
         (MediaCheckKind.ddlLocation, MediaCheckKind.allCases.map(\.rawValue)),

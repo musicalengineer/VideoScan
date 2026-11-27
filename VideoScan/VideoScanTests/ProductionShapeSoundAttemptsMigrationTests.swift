@@ -36,7 +36,7 @@ struct ProductionShapeSoundAttemptsMigrationTests {
 
     /// The schema this build's store leaves a catalog at (Core's
     /// `GRDBCatalogRepository.currentSchemaVersion`, internal to Core).
-    static let buildSchema = 16
+    static let buildSchema = 17
 
     static let attemptsColumns = "digest, engine_version, outcome, attempts, last_at, coalesce(detail, '<null>')"
 
@@ -134,9 +134,10 @@ struct ProductionShapeSoundAttemptsMigrationTests {
         try #require(live.state >= 14 && live.state <= Self.buildSchema,
                      "the copy is at schema \(live.state): this build understands 14…\(Self.buildSchema); a later schema means the rewind below is due for the new table")
         if live.state >= 15 {
-            // Later steps first (schema 16, `public_marks`), then this one.
+            // Later steps first (schema 17 unrecorded, schema 16 `public_marks`), then this one.
             // DROP TABLE takes the table's index and its append-only triggers with it.
             try sqliteExecute(db, [
+                "DELETE FROM grdb_migrations WHERE identifier = 'v12_audio_status'",     // CatalogAudioStatusSchema.migrationID: re-runs its row-for-row rebuild
                 "DROP TABLE IF EXISTS public_marks",
                 "DELETE FROM grdb_migrations WHERE identifier = 'v11_public_marks'",     // CatalogPublicMarksSchema.migrationID (Core-internal)
                 "DROP TABLE sound_attempts",

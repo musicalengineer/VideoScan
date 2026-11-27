@@ -43,19 +43,24 @@ import os
 // STORED VERDICT (GH #467 / #468, 2026-11-10) — `AudioVerifyVerdict`:
 //   - damaged     the sound is not usable as it stands: short audio (real
 //                 damage), a reference movie, or an old codec that needs
-//                 rebuilding. Stored as "damaged" — media_checks takes only
-//                 'ok' / 'damaged' for audio — so every gate and reader of
-//                 the status treats all three alike. Which of the three it
-//                 is (`AudioTrouble`, Rick 2026-11-25) decides the WORDS
-//                 only: only real damage says "damaged", so `notes:damaged`
-//                 (the batch-delete find) lists only real damage.
+//                 rebuilding. Real damage is stored "damaged" (red); a
+//                 reference movie or a sound that needs rebuilding is stored
+//                 "attention" (orange; schema v1.16, DECISIONS 2026-11-27).
+//                 Every gate refuses both exactly alike
+//                 (`StoredAudioStatus.refusesLikeDamage`). Which kind it is
+//                 (`AudioTrouble`, Rick 2026-11-25) also decides the WORDS:
+//                 only real damage says "damaged", so `notes:damaged` (the
+//                 batch-delete find) lists only real damage.
 //   - ok          no damage AND the levels pass covered every declared
 //                 channel of every stream (or none was needed). Stored.
 //   - notChecked  the levels pass failed (a failed read looks the same as a
 //                 track that will not decode) or did not cover everything.
 //                 NOTHING is stored; the job says "could not check" with the
 //                 reason and the next run checks again. Promote's sound gate
-//                 gives the same answer for the same diagnosis.
+//                 gives the same answer for the same diagnosis. One exception
+//                 (GH #518): when the pass found its filter graph rebuilt
+//                 mid-stream, a stored "ok" (which only pre-#368 code could
+//                 have written for such a file) is withdrawn to "unverified".
 //
 // Memory: ffprobe/ffmpeg stream; this process retains only ffprobe's
 // JSON (KBs) + its stderr (capped 256 KB by ProcessRunner) + astats
@@ -164,15 +169,32 @@ struct AudioVerifyDiagnosis: Sendable {
         VerifyAudioRules.trouble(of: findings, decodeComplete: levelsPass == .complete)
     }
 
-    /// Persisted `audioVerifyStatus`: "ok" / "damaged", or "" when the
-    /// verdict is `.notChecked` — "" is the never-verified value and is
-    /// never written (VerifyAudioJob.write stores nothing).
+    /// Persisted `audioVerifyStatus` (StoredAudioStatus.swift): "ok"; for a
+    /// `.damaged` verdict "damaged" when it is real damage and "attention"
+    /// for a reference movie or a sound that needs rebuilding (schema v1.16,
+    /// DECISIONS 2026-11-27 — orange, refused by every gate exactly like
+    /// "damaged"); "" when the verdict is `.notChecked` — "" is the
+    /// never-verified value and is never written (VerifyAudioJob.write
+    /// stores nothing, or withdraws a stale "ok", #518).
     var persistedStatus: String {
         switch verdict {
-        case .ok: return "ok"
-        case .damaged: return "damaged"
+        case .ok: return StoredAudioStatus.okWord
+        case .damaged: return trouble == .damaged || trouble == nil ? StoredAudioStatus.damagedWord : StoredAudioStatus.attentionWord
         case .notChecked: return ""
         }
+    }
+
+    /// The levels pass's filter graph was rebuilt mid-stream (the sound's
+    /// rate, format or layout changes partway). Code older than the #368 fix
+    /// did not see this and could store "ok"; such an "ok" is withdrawn
+    /// (GH #518, `VerifyAudioJob.write`).
+    var passWasReconfigured: Bool { balanceAnalysis?.shortDecode?.graphReconfigured == true }
+
+    /// Not a verdict, AND the pass found its graph rebuilt: a stored "ok"
+    /// for this content is withdrawn (content-level, AudioVerdictWithdrawal).
+    var withdrawsStaleOK: Bool {
+        guard case .notChecked = verdict else { return false }
+        return passWasReconfigured
     }
     /// The findings' words: the persisted `audioVerifyNote` when a verdict
     /// is stored.
@@ -198,9 +220,9 @@ enum AudioLevelsPass: Sendable, Equatable {
     case readFailed(reason: String)
 }
 
-/// What Verify Audio / Check Media may store for a diagnosis. `media_checks`
-/// takes only 'ok' and 'damaged' for the audio kind, so `.notChecked` stores
-/// nothing.
+/// What Verify Audio / Check Media may store for a diagnosis. `.damaged`
+/// stores "damaged" or "attention" (`persistedStatus`); `.notChecked` stores
+/// nothing (or withdraws a stale "ok", #518).
 enum AudioVerifyVerdict: Sendable, Equatable {
     case ok
     case damaged
