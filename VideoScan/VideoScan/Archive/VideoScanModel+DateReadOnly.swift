@@ -72,7 +72,31 @@ extension VideoScanModel {
     /// (`isArchiveElement`, Rick 2026-09-27). O(1): an enum compare, a
     /// string compare and a prefix test.
     func isDateReadOnlyItself(_ record: VideoRecord) -> Bool {
-        record.lifecycleStage == .archived || isArchiveElement(record)
+        Self.isDateReadOnlyItself(record, root: masterArchiveRootPath)
+    }
+
+    /// The per-row rule with the archive root captured — THE rule both the
+    /// instance seam and `DateReadOnlyRule` apply (stage, promoted copy,
+    /// inside the root — `isArchiveElement` with its root read once).
+    static func isDateReadOnlyItself(_ record: VideoRecord, root: String?) -> Bool {
+        record.lifecycleStage == .archived || isArchiveElement(record, root: root)
+    }
+
+    /// The seam hoisted for ONE synchronous pass over many rows (a date
+    /// writer's bucketing walk over the whole catalog): the archive root,
+    /// the records array and the archived-content index's stamp are read
+    /// once here, so each row costs the per-row test plus (only when an
+    /// archived copy has the row's size) one digest read and a bucket probe.
+    /// Same answers as `isDateReadOnly` — same per-row rule, same index —
+    /// for as long as the pass does not await (never store it).
+    /// 2026-11-27: per-row `isDateReadOnly` re-read two @Published values,
+    /// took the generation lock and re-checked the index stamp for each of
+    /// 100k rows (≈ 0.5 µs a row), which made a donor-scoped catch-up pass
+    /// ~50 ms slower than before GH #528 (DateReviewF2Tests).
+    func dateReadOnlyRule() -> DateReadOnlyRule {
+        let root = masterArchiveRootPath
+        let itself = { (rec: VideoRecord) in Self.isDateReadOnlyItself(rec, root: root) }
+        return DateReadOnlyRule(root: root, twins: archivedContentIndex.frozen(records, root: root, isFixedItself: itself))
     }
 
     /// The archived row whose filed date fixes `record`'s date: `record`
@@ -126,5 +150,20 @@ extension VideoScanModel {
         }
         log("\(writer): \(record.filename) is archived — date left as filed "
             + "(\(record.userDate ?? "none")); \(value) not written. Use Update… to change an archived file's date.")
+    }
+}
+
+/// `VideoScanModel.dateReadOnlyRule()` — the date seam for one synchronous
+/// pass (≈ a C++ functor holding the root and a const view of the index).
+@MainActor
+struct DateReadOnlyRule {
+    let root: String?
+    let twins: ArchivedContentIndex.Frozen
+
+    /// `isDateReadOnly(_:)`, with the pass's root and index view.
+    func isDateReadOnly(_ record: VideoRecord) -> Bool {
+        let root = self.root
+        let itself = { (rec: VideoRecord) in VideoScanModel.isDateReadOnlyItself(rec, root: root) }
+        return itself(record) || twins.archivedCopy(sharingContentOf: record, isFixedItself: itself) != nil
     }
 }

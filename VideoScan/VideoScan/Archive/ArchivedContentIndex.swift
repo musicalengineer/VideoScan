@@ -74,11 +74,39 @@ final class ArchivedContentIndex {
     /// Archive root the predicate reads (part of the stamp).
     func archivedCopy(sharingContentOf record: VideoRecord, in records: [VideoRecord], root: String?,
                       isFixedItself: (VideoRecord) -> Bool) -> VideoRecord? {
+        frozen(records, root: root, isFixedItself: isFixedItself)
+            .archivedCopy(sharingContentOf: record, isFixedItself: isFixedItself)
+    }
+
+    /// The index as it stands now, for ONE synchronous pass over many rows
+    /// (a date writer's bucketing walk): the stamp check and any rebuild
+    /// happen here, once, so each lookup after it is a set probe — no
+    /// generation lock, no root read, no records-array fetch per row
+    /// (2026-11-27: those per-row costs made a donor-scoped date pass over
+    /// 100k rows ~50 ms slower, DateReviewF2Tests). Shares the dictionaries
+    /// (copy-on-write: nothing is copied). Hits are still re-verified live.
+    /// Valid only while nothing can change an archive fact — within the
+    /// synchronous pass it was taken for; never stored.
+    func frozen(_ records: [VideoRecord], root: String?, isFixedItself: (VideoRecord) -> Bool) -> Frozen {
         rebuildIfNeeded(records, root: root, isFixedItself: isFixedItself)
-        guard !sizes.isEmpty, sizes.contains(record.sizeBytes),
-              let digest = CatalogCommit.digest(of: record), let bucket = byDigest[digest] else { return nil }
-        return bucket.first { copy in
-            copy !== record && copy.removal == nil && isFixedItself(copy) && CatalogCommit.digest(of: copy) == digest
+        return Frozen(byDigest: byDigest, sizes: sizes)
+    }
+
+    /// See `frozen(_:root:isFixedItself:)`. (For Rick: a const view of the
+    /// map taken once before a loop, instead of re-validating the cache on
+    /// every iteration.)
+    @MainActor
+    struct Frozen {
+        fileprivate let byDigest: [String: [VideoRecord]]
+        fileprivate let sizes: Set<Int64>
+
+        /// The one lookup (the index's own `archivedCopy` comes through here).
+        func archivedCopy(sharingContentOf record: VideoRecord, isFixedItself: (VideoRecord) -> Bool) -> VideoRecord? {
+            guard !sizes.isEmpty, sizes.contains(record.sizeBytes),
+                  let digest = CatalogCommit.digest(of: record), let bucket = byDigest[digest] else { return nil }
+            return bucket.first { copy in
+                copy !== record && copy.removal == nil && isFixedItself(copy) && CatalogCommit.digest(of: copy) == digest
+            }
         }
     }
 

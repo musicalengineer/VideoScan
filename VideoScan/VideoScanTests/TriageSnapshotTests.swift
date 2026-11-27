@@ -407,6 +407,16 @@ struct TriageSnapshotModelTests {
 
     private func makeModel(_ count: Int = 200) -> VideoScanModel {
         let model = VideoScanModel()
+        // These tests COUNT projections, so nothing from outside the test may
+        // start one. The model's volume observers do: any mount or unmount on
+        // the machine (a disk image another lane attaches, Time Machine)
+        // republishes `scanTargets` → `noteCatalogMutated` → a second
+        // projection inside `settle()`. Seen in the 2026-11-27 Ultra nightly
+        // (aBurstOfMutations…: projections 2 right after appearing) and
+        // reproduced locally with -test-iterations 10 (3 of 10 rounds of
+        // aQueryChange… red); a captured stack named
+        // installVolumeMountObservers → notifyTargetsChanged. Not GH #528.
+        model.notificationObservers.removeAll()
         model.triageReachability = TriageFixture.reachable
         model.records = TriageFixture.records(count)
         return model

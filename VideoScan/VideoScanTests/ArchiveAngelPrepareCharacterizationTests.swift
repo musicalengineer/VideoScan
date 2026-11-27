@@ -23,8 +23,8 @@
 //   losslessFine lossless on, a preservation-safe format → not needed
 //   noCenter     the operations center went away → "cannot prepare"
 //
-// Normalized: step timings and the batch folder's timestamp; paths are the
-// last component. Re-record only on purpose: delete the golden, run twice.
+// Normalized: step timings, the batch folder's timestamp and the clip's
+// size in KB (the encoder's, 2026-11-27); paths are the last component. Re-record only on purpose: delete the golden, run twice.
 // Re-recorded 2026-11-11 on main's unsplit prepare (before the merge of the split):
 // the `verified` scenario only — its fixture now runs the real sound check.
 
@@ -103,6 +103,10 @@ struct ArchiveAngelPrepareCharacterizationTests {
         out = out.replacingOccurrences(of: #"\(\d+\.\d+ s, [^)]*\)"#, with: "(t s, size)", options: .regularExpression)
         out = out.replacingOccurrences(of: #"batch-\d{4}-\d\d-\d\dT\d\d-\d\d-\d\d"#, with: "batch-T", options: .regularExpression)
         out = out.replacingOccurrences(of: #"/[^ ]*/"#, with: "…/", options: .regularExpression)
+        // The clip's size is libx264's, not prepare's: Homebrew ffmpeg 9.0.2 → 9.1
+        // (2026-11-26) made the same 4 s clip 90 KB → 87 KB and turned this golden
+        // red with no change to the code. The score after it is still pinned.
+        out = out.replacingOccurrences(of: #"preparing \(\d+ KB, "#, with: "preparing (n KB, ", options: .regularExpression)
         return out
     }
 

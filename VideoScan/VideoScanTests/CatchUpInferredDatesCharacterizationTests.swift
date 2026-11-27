@@ -12,7 +12,8 @@ import VideoScanCore
 // a scoped refresh pass). Each run's result, every row's five date fields,
 // the "no date" memo and the log lines are snapshotted as text. The
 // goldens below were captured from the UNSPLIT function (`ebcd2f09`) and
-// were not edited after the move.
+// were not edited after the move (one deliberate edit since, 2026-11-27,
+// GH #523 / #528 — see Goldens).
 //
 // Five dimensions: logic (every branch, below); scale / media / isolation
 // are already covered by InferredDatePropagationTests and
@@ -63,6 +64,11 @@ struct CatchUpInferredDatesCharacterizationTests {
         r.partialMD5 = md5
         r.sizeBytes = size
         r.ocrDateCandidates = ocr
+        // GH #523: a date travels only between rows with the same WHOLE-FILE
+        // SHA-256, so a content-group row carries one (synthetic, derived from
+        // md5 + size, as a full hash in the app would leave it) — else rule 2
+        // has nothing to share and this file stops characterizing it.
+        FixtureDigest.stamp(r)
         return r
     }
 
@@ -131,7 +137,9 @@ struct CatchUpInferredDatesCharacterizationTests {
         // Rule 2: a group with no donor (both undated, no evidence, no folder year) → nothing.
         out.append(rec("r2_nodonor_a.mov", md5: "bbbb", size: 6_000))
         out.append(rec("r2_nodonor_b.mov", md5: "bbbb", size: 6_000))
-        // Archived: an archive copy is never written but still donates to its byte twin.
+        // Archived: an archive copy is never written. GH #528: its byte twin
+        // (same whole-file digest) is date-fixed too — the catalog keeps ONE
+        // date per content — so rule 2 writes nothing onto archived_twin.
         let archived = rec("archived_copy.mov", md5: "cccc", size: 7_000, ocr: [nv12OCR])
         archived.derivationKind = ArchivePromotion.derivationKind
         archived.derivedFrom = UUID()
@@ -260,9 +268,17 @@ struct CatchUpInferredDatesCharacterizationTests {
     }
 
     // MARK: - Goldens (captured from the unsplit function at ebcd2f09)
+    //
+    // Edited ONCE on purpose, 2026-11-27 (GH #523 / #528): the content-group
+    // fixtures now carry a whole-file digest (#523: no digest, no sharing),
+    // and with it the one remaining difference is #528's rule — a byte twin
+    // of archived content is date-fixed, so rule 2 no longer writes
+    // archived_twin (was: "propagated from <archived_settled.mov>", 1991;
+    // now: nil) and the propagated count drops by one in the whole-catalog
+    // and budget runs. Nothing else moved.
 
     static let goldenWholeFirst = """
-    result examined=9 alreadyClassified=0 deferred=0 own=4 propagated=2 folderYear=3 footageShared=1 retriangulated=3 cleared=3 truncated=false
+    result examined=9 alreadyClassified=0 deferred=0 own=4 propagated=1 folderYear=3 footageShared=1 retriangulated=3 cleared=3 truncated=false
     r1_own_ocr.mov: date=677505600 conf=0.750 range=nil src=catch-up reason=on-screen date 1991-06-21 ×1
     r1_legacy_own.mov: date=677505600 conf=0.750 range=nil src=nil reason=on-screen date 1991-06-21 ×1
     r1_legacy_catchup.mov: date=677505600 conf=0.750 range=nil src=catch-up reason=on-screen date 1991-06-21 ×1
@@ -280,7 +296,7 @@ struct CatchUpInferredDatesCharacterizationTests {
     r2_nodonor_b.mov: date=nil conf=nil range=nil src=nil reason=nil
     archived_copy.mov: date=nil conf=nil range=nil src=nil reason=nil
     archived_settled.mov: date=677505600 conf=0.750 range=nil src=nil reason=archived own date
-    archived_twin.mov: date=677505600 conf=0.750 range=nil src=propagated from <archived_settled.mov> reason=same bytes as archived_settled.mov: archived own date
+    archived_twin.mov: date=nil conf=nil range=nil src=nil reason=nil
     r2b_donor.mov: date=677505600 conf=0.750 range=nil src=catch-up reason=on-screen date 1991-06-21 ×1
     r2b_twin.mov: date=677505600 conf=0.750 range=nil src=footage-shared from <r2b_donor.mov> reason=shared from r2b_donor.mov (same footage): on-screen date 1991-06-21 ×1
     r2b_possible_donor.mov: date=677505600 conf=0.750 range=nil src=catch-up reason=on-screen date 1991-06-21 ×1
@@ -288,7 +304,7 @@ struct CatchUpInferredDatesCharacterizationTests {
     r3_folder_year.mov: date=536500800 conf=0.300 range=InferredDateRange(startYear: 1987, endYear: 1987) src=folder-year reason=bare-year folder '1987' — a placeholder any real evidence replaces
     r3_embedded.mov: date=nil conf=nil range=nil src=nil reason=nil
     noDateMemo=["r1_no_date.mov", "r1_had_date_now_none.mov"]
-    log: date inference: 13 records caught up (4 from own evidence, 2 propagated, 1 footage-shared, 3 re-triangulated, 3 folder-year prior; 9 examined, <ms> ms, test)
+    log: date inference: 12 records caught up (4 from own evidence, 1 propagated, 1 footage-shared, 3 re-triangulated, 3 folder-year prior; 9 examined, <ms> ms, test)
     log: date triangulation: 1 took their footage group's date, 3 re-triangulated with a written reason, 3 cleared (test)
     """
 
@@ -311,7 +327,7 @@ struct CatchUpInferredDatesCharacterizationTests {
     r2_nodonor_b.mov: date=nil conf=nil range=nil src=nil reason=nil
     archived_copy.mov: date=nil conf=nil range=nil src=nil reason=nil
     archived_settled.mov: date=677505600 conf=0.750 range=nil src=nil reason=archived own date
-    archived_twin.mov: date=677505600 conf=0.750 range=nil src=propagated from <archived_settled.mov> reason=same bytes as archived_settled.mov: archived own date
+    archived_twin.mov: date=nil conf=nil range=nil src=nil reason=nil
     r2b_donor.mov: date=677505600 conf=0.750 range=nil src=catch-up reason=on-screen date 1991-06-21 ×1
     r2b_twin.mov: date=677505600 conf=0.750 range=nil src=footage-shared from <r2b_donor.mov> reason=shared from r2b_donor.mov (same footage): on-screen date 1991-06-21 ×1
     r2b_possible_donor.mov: date=677505600 conf=0.750 range=nil src=catch-up reason=on-screen date 1991-06-21 ×1
@@ -322,7 +338,7 @@ struct CatchUpInferredDatesCharacterizationTests {
     """
 
     static let goldenBudget = """
-    result examined=2 alreadyClassified=0 deferred=7 own=1 propagated=1 folderYear=5 footageShared=0 retriangulated=1 cleared=2 truncated=true
+    result examined=2 alreadyClassified=0 deferred=7 own=1 propagated=0 folderYear=5 footageShared=0 retriangulated=1 cleared=2 truncated=true
     r1_own_ocr.mov: date=677505600 conf=0.750 range=nil src=catch-up reason=on-screen date 1991-06-21 ×1
     r1_legacy_own.mov: date=677505600 conf=0.750 range=nil src=nil reason=on-screen date 1991-06-21 ×1
     r1_legacy_catchup.mov: date=489024000 conf=0.750 range=nil src=catch-up reason=nil
@@ -340,7 +356,7 @@ struct CatchUpInferredDatesCharacterizationTests {
     r2_nodonor_b.mov: date=nil conf=nil range=nil src=nil reason=nil
     archived_copy.mov: date=nil conf=nil range=nil src=nil reason=nil
     archived_settled.mov: date=677505600 conf=0.750 range=nil src=nil reason=archived own date
-    archived_twin.mov: date=677505600 conf=0.750 range=nil src=propagated from <archived_settled.mov> reason=same bytes as archived_settled.mov: archived own date
+    archived_twin.mov: date=nil conf=nil range=nil src=nil reason=nil
     r2b_donor.mov: date=nil conf=nil range=nil src=nil reason=nil
     r2b_twin.mov: date=978350400 conf=0.300 range=InferredDateRange(startYear: 2001, endYear: 2001) src=folder-year reason=bare-year folder '2001' — a placeholder any real evidence replaces
     r2b_possible_donor.mov: date=nil conf=nil range=nil src=nil reason=nil
@@ -348,7 +364,7 @@ struct CatchUpInferredDatesCharacterizationTests {
     r3_folder_year.mov: date=536500800 conf=0.300 range=InferredDateRange(startYear: 1987, endYear: 1987) src=folder-year reason=bare-year folder '1987' — a placeholder any real evidence replaces
     r3_embedded.mov: date=nil conf=nil range=nil src=nil reason=nil
     noDateMemo=[]
-    log: date inference: 8 records caught up (1 from own evidence, 1 propagated, 1 re-triangulated, 5 folder-year prior; 2 examined, limit 2 hit — more next pass, <ms> ms, budget)
+    log: date inference: 7 records caught up (1 from own evidence, 0 propagated, 1 re-triangulated, 5 folder-year prior; 2 examined, limit 2 hit — more next pass, <ms> ms, budget)
     log: date triangulation: 0 took their footage group's date, 1 re-triangulated with a written reason, 2 cleared (budget)
     """
 
