@@ -8,7 +8,7 @@ entry test_pc_clean.mp4 status ready failure - nomination -
   log Archive Angel: preparing 1 of 1 selected record(s)
   log Archive Angel pick 1/1 [105] test_pc_clean.mp4 — You rated it better (★★) · Has date, rating · Dated 1995 (yours)
   log Archive Angel: considered 1, 1 picked, 0 rejected, 0 more would qualify
-  log Archive Angel [1/1] test_pc_clean.mp4 — preparing (90 KB, score 105)
+  log Archive Angel [1/1] test_pc_clean.mp4 — preparing (n KB, score 105)
   log Archive Angel [1/1] test_pc_clean.mp4 — verify audio: done — Both channels carry the same sound — already balanced. (t s)
   log Archive Angel [1/1] test_pc_clean.mp4 — balanced audio: skipped — Already balanced — both channels carry the same sound. (t s)
   log Archive Angel [1/1] test_pc_clean.mp4 — access copy: starting archival → test_pc_clean.vs.archive.mov
@@ -26,7 +26,7 @@ entry test_pc_mono.mp4 status ready failure - nomination -
   log Archive Angel: preparing 1 of 1 selected record(s)
   log Archive Angel pick 1/1 [105] test_pc_mono.mp4 — You rated it better (★★) · Has date, rating · Dated 1995 (yours)
   log Archive Angel: considered 1, 1 picked, 0 rejected, 0 more would qualify
-  log Archive Angel [1/1] test_pc_mono.mp4 — preparing (60 KB, score 105)
+  log Archive Angel [1/1] test_pc_mono.mp4 — preparing (n KB, score 105)
   log Archive Angel [1/1] test_pc_mono.mp4 — verify audio: done — Mono audio — one channel; it plays on both sides, nothing to balance. (t s)
   log Archive Angel [1/1] test_pc_mono.mp4 — balanced audio: skipped — Mono audio — one channel; it plays on both sides, nothing to balance. (t s)
   log Archive Angel [1/1] test_pc_mono.mp4 — access copy: starting archival → test_pc_mono.vs.archive.mov
@@ -44,7 +44,7 @@ entry test_pc_silent.mp4 status ready failure - nomination -
   log Archive Angel: preparing 1 of 1 selected record(s)
   log Archive Angel pick 1/1 [105] test_pc_silent.mp4 — You rated it better (★★) · Has date, rating · Dated 1995 (yours)
   log Archive Angel: considered 1, 1 picked, 0 rejected, 0 more would qualify
-  log Archive Angel [1/1] test_pc_silent.mp4 — preparing (22 KB, score 105)
+  log Archive Angel [1/1] test_pc_silent.mp4 — preparing (n KB, score 105)
   log Archive Angel [1/1] test_pc_silent.mp4 — verify audio: skipped — No audio track (t s)
   log Archive Angel [1/1] test_pc_silent.mp4 — balanced audio: skipped — No audio track (t s)
   log Archive Angel [1/1] test_pc_silent.mp4 — access copy: starting archival → test_pc_silent.vs.archive.mov
@@ -62,7 +62,7 @@ entry test_pc_verified.mp4 status ready failure - nomination -
   log Archive Angel: preparing 1 of 1 selected record(s)
   log Archive Angel pick 1/1 [105] test_pc_verified.mp4 — You rated it better (★★) · Has date, rating · Dated 1995 (yours)
   log Archive Angel: considered 1, 1 picked, 0 rejected, 0 more would qualify
-  log Archive Angel [1/1] test_pc_verified.mp4 — preparing (90 KB, score 105)
+  log Archive Angel [1/1] test_pc_verified.mp4 — preparing (n KB, score 105)
   log Archive Angel [1/1] test_pc_verified.mp4 — verify audio: skipped — Already verified: ok (t s)
   log Archive Angel [1/1] test_pc_verified.mp4 — balanced audio: skipped — Already balanced — both channels carry the same sound. (t s)
   log Archive Angel [1/1] test_pc_verified.mp4 — access copy: starting archival → test_pc_verified.vs.archive.mov
@@ -80,7 +80,7 @@ entry test_pc_left.mov status ready failure - nomination -
   log Archive Angel: preparing 1 of 1 selected record(s)
   log Archive Angel pick 1/1 [105] test_pc_left.mov — You rated it better (★★) · Has date, rating · Dated 1995 (yours)
   log Archive Angel: considered 1, 1 picked, 0 rejected, 0 more would qualify
-  log Archive Angel [1/1] test_pc_left.mov — preparing (90 KB, score 105)
+  log Archive Angel [1/1] test_pc_left.mov — preparing (n KB, score 105)
   log Archive Angel [1/1] test_pc_left.mov — verify audio: done — One-sided audio — left channel only (t s)
   log Archive Angel [1/1] test_pc_left.mov — balanced audio: done — Audio balanced (leftOnly) (t s)
   log Archive Angel [1/1] test_pc_left.mov — access copy: starting archival → test_pc_left.vs.archive.mov
@@ -98,7 +98,7 @@ entry test_pc_reuse.mp4 status ready failure - nomination -
   log Archive Angel: preparing 1 of 1 selected record(s)
   log Archive Angel pick 1/1 [105] test_pc_reuse.mp4 — You rated it better (★★) · Has date, rating · Dated 1995 (yours)
   log Archive Angel: considered 1, 1 picked, 0 rejected, 0 more would qualify
-  log Archive Angel [1/1] test_pc_reuse.mp4 — preparing (90 KB, score 105)
+  log Archive Angel [1/1] test_pc_reuse.mp4 — preparing (n KB, score 105)
   log Archive Angel [1/1] test_pc_reuse.mp4 — verify audio: done — Both channels carry the same sound — already balanced. (t s)
   log Archive Angel: test_pc_reuse.mp4 — using existing balanced copy test_pc_reuse_balanced.mp4
   log Archive Angel [1/1] test_pc_reuse.mp4 — balanced audio: done — Using existing balanced copy test_pc_reuse_balanced.mp4 (t s)
@@ -117,7 +117,7 @@ entry test_pc_nom.mp4 status ready failure - nomination test_pc_nom_balanced.mp4
   log Archive Angel: preparing 1 of 1 selected record(s)
   log Archive Angel pick 1/1 [105] test_pc_nom.mp4 — You rated it better (★★) · Has date, rating · Dated 1995 (yours)
   log Archive Angel: considered 1, 1 picked, 0 rejected, 0 more would qualify
-  log Archive Angel [1/1] test_pc_nom.mp4 — preparing (90 KB, score 105)
+  log Archive Angel [1/1] test_pc_nom.mp4 — preparing (n KB, score 105)
   log Archive Angel [1/1] test_pc_nom.mp4 — verify audio: done — Both channels carry the same sound — already balanced. (t s)
   log Archive Angel: test_pc_nom.mp4 — an existing balanced copy may exist: test_pc_nom_balanced.mp4 — not used (no Balance Audio link to this original)
   log Archive Angel [1/1] test_pc_nom.mp4 — balanced audio: skipped — Already balanced — both channels carry the same sound. (t s)
@@ -136,7 +136,7 @@ entry test_pc_losslessRisk.mp4 status ready failure - nomination -
   log Archive Angel: preparing 1 of 1 selected record(s)
   log Archive Angel pick 1/1 [120] test_pc_losslessRisk.mp4 — You rated it better (★★) · Has date, rating · Dated 1995 (yours)
   log Archive Angel: considered 1, 1 picked, 0 rejected, 0 more would qualify
-  log Archive Angel [1/1] test_pc_losslessRisk.mp4 — preparing (90 KB, score 120)
+  log Archive Angel [1/1] test_pc_losslessRisk.mp4 — preparing (n KB, score 120)
   log Archive Angel [1/1] test_pc_losslessRisk.mp4 — verify audio: done — Both channels carry the same sound — already balanced. (t s)
   log Archive Angel [1/1] test_pc_losslessRisk.mp4 — balanced audio: skipped — Already balanced — both channels carry the same sound. (t s)
   log Archive Angel [1/1] test_pc_losslessRisk.mp4 — access copy: starting archival → test_pc_losslessRisk.vs.archive.mov
@@ -155,7 +155,7 @@ entry test_pc_losslessFine.mp4 status ready failure - nomination -
   log Archive Angel: preparing 1 of 1 selected record(s)
   log Archive Angel pick 1/1 [105] test_pc_losslessFine.mp4 — You rated it better (★★) · Has date, rating · Dated 1995 (yours)
   log Archive Angel: considered 1, 1 picked, 0 rejected, 0 more would qualify
-  log Archive Angel [1/1] test_pc_losslessFine.mp4 — preparing (90 KB, score 105)
+  log Archive Angel [1/1] test_pc_losslessFine.mp4 — preparing (n KB, score 105)
   log Archive Angel [1/1] test_pc_losslessFine.mp4 — verify audio: done — Both channels carry the same sound — already balanced. (t s)
   log Archive Angel [1/1] test_pc_losslessFine.mp4 — balanced audio: skipped — Already balanced — both channels carry the same sound. (t s)
   log Archive Angel [1/1] test_pc_losslessFine.mp4 — access copy: starting archival → test_pc_losslessFine.vs.archive.mov
@@ -173,7 +173,7 @@ entry test_pc_nocenter.mp4 status failed failure preparation stopped before Veri
   log Archive Angel: preparing 1 of 1 selected record(s)
   log Archive Angel pick 1/1 [105] test_pc_nocenter.mp4 — You rated it better (★★) · Has date, rating · Dated 1995 (yours)
   log Archive Angel: considered 1, 1 picked, 0 rejected, 0 more would qualify
-  log Archive Angel [1/1] test_pc_nocenter.mp4 — preparing (90 KB, score 105)
+  log Archive Angel [1/1] test_pc_nocenter.mp4 — preparing (n KB, score 105)
   log Archive Angel [1/1] test_pc_nocenter.mp4 — cannot prepare: the operations center or catalog went away
   log Archive Angel [1/1] test_pc_nocenter.mp4 — not ready: preparation stopped before Verify Audio ran — nothing was checked or made after that; prepare it again in a later batch.
   log Archive Angel: 0 ready to review · 0 rejected · 0 more would qualify

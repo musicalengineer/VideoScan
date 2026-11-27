@@ -733,7 +733,13 @@ extension VideoScanModel {
     /// content has a master copy — the source lives outside the archive and
     /// keeps its ordinary rules. O(1): a string compare and a prefix test.
     func isArchiveElement(_ record: VideoRecord) -> Bool {
-        isArchiveCopy(record) || isInsideMasterArchive(path: record.fullPath)
+        Self.isArchiveElement(record, root: masterArchiveRootPath)
+    }
+
+    /// The same rule with the root captured (a pass that asks it per row
+    /// reads the root once — `DateReadOnlyRule`).
+    static func isArchiveElement(_ record: VideoRecord, root: String?) -> Bool {
+        record.derivationKind == ArchivePromotion.derivationKind || isInsideMasterArchive(path: record.fullPath, root: root)
     }
 
     /// True when `path` lies inside the Master Archive root — canonical,

@@ -826,11 +826,14 @@ extension VideoScanModel {
         }
         let scopeFootage: Set<UUID>? = scope.map { rows in Set(rows.compactMap { $0.footage?.groupID }) }
         pass.byID.reserveCapacity(records.count)
+        // The date seam, hoisted: one root read and one index check for the
+        // walk, not one per row (2026-11-27, DateReviewF2Tests' budget).
+        let readOnly = dateReadOnlyRule()
         for rec in records where Self.isEligibleForDateInference(rec) {
             pass.byID[rec.id] = rec
             // 2026-10-10: also every Archived-stage row — Dossier now gives
             // them evidence, and that must never come back as a date.
-            if isDateReadOnly(rec) { pass.archived.insert(rec.id) }
+            if readOnly.isDateReadOnly(rec) { pass.archived.insert(rec.id) }
             if let key = Self.contentGroupKey(rec), scopeKeys?.contains(key) ?? true {
                 pass.groups[key, default: []].append(rec)
             }

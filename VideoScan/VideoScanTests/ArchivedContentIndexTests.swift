@@ -62,11 +62,15 @@ struct ArchivedContentIndexTests {
             rows.append(r)
         }
         model.records = rows
+        // 2026-11-27: the seam hoisted for one pass (the catch-up bucketing walk)
+        // answers exactly as the per-row seam.
+        let rule = model.dateReadOnlyRule()
         for r in rows {
             let scan = InspectorDateEdit.archivedCopy(fixing: r, in: rows, isReadOnly: model.isDateReadOnlyItself)
             let indexed = model.archivedCopyFixingDate(of: r)
             #expect(scan === indexed, "\(r.filename): scan \(scan?.filename ?? "nil") vs index \(indexed?.filename ?? "nil")")
             #expect(model.isDateReadOnly(r) == (scan != nil))
+            #expect(rule.isDateReadOnly(r) == (scan != nil), "\(r.filename): the pass rule disagrees with the seam")
             if let indexed { #expect(model.isDateReadOnlyItself(indexed), "the fixing row is archived ITSELF") }
         }
         #expect(model.archivedContentIndex.rebuildCount == 1, "one rebuild for \(rows.count * 2) lookups")
@@ -136,6 +140,9 @@ struct ArchivedContentIndexTests {
         sb.model.records = [inside, twin, extra]
         #expect(sb.model.archivedCopyFixingDate(of: twin) === inside)
         #expect(sb.model.archivedCopyFixingDate(of: inside) === inside)
+        // The pass rule reads the same root: inside (in the root) and its twin fixed, extra not.
+        let rule = sb.model.dateReadOnlyRule()
+        #expect(rule.isDateReadOnly(inside) && rule.isDateReadOnly(twin) && !rule.isDateReadOnly(extra))
         _ = sb.model.applyHumanMetadataInheritance(from: extra, to: twin)
         func logged() -> Bool {
             sb.model.dashboard.consoleLines.contains {
@@ -233,6 +240,14 @@ struct ArchivedContentIndexTests {
         let budget = PerformanceLane.debugCeiling(.milliseconds(1_500))
         print("[ArchivedContentIndexTests] seam over 100k: \(seam), fixed \(fixed)")
         #expect(seam < budget, "seam over 100k took \(seam) (budget \(budget))")
+        var ruleFixed = 0
+        let hoisted = clock.measure {
+            let rule = model.dateReadOnlyRule()
+            for r in rows where rule.isDateReadOnly(r) { ruleFixed += 1 }
+        }
+        print("[ArchivedContentIndexTests] pass rule over 100k: \(hoisted) (per-row seam \(seam))")
+        #expect(ruleFixed == fixed && model.archivedContentIndex.rebuildCount == 1, "\(ruleFixed)")
+        #expect(hoisted < budget, "pass rule over 100k took \(hoisted) (budget \(budget))")
 
         let twin = rows[1]                     // digest 1, shares with row 50_001 — neither archived
         rows[50_001].lifecycleStage = .archived
