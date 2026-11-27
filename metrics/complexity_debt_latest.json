@@ -1,8 +1,8 @@
 {
  "overrides_recent": [],
  "overrides_total": 0,
- "ts": "2026-11-26T14:36:42Z",
- "sha": "f2b8b56b",
+ "ts": "2026-11-27T14:30:48Z",
+ "sha": "97a527a6",
  "thresholds": {
   "ccn": 15,
   "nloc": 80
