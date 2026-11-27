@@ -428,6 +428,28 @@ extension InspectorPanel {
         }
     }
 
+    // GH #478 (DECISIONS 2026-11-27): a rescan found a different file at this
+    // path and copied Rick's values onto it — say so, and offer the one undo.
+    // Parses one record's notes (O(lines)), never the catalog.
+    @ViewBuilder
+    func carrySection(_ rec: VideoRecord) -> some View {
+        if let carry = RescanCarryNote.active(in: rec.notes) {
+            inspectorSection("Copied From an Earlier File", systemImage: "exclamationmark.arrow.triangle.2.circlepath") {
+                Text(carry.sentence)
+                    .font(.system(size: 12))
+                    .foregroundColor(.orange)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let onUndoCarry {
+                    Button("Undo Carry") { onUndoCarry(rec.id) }
+                        .controlSize(.small)
+                        .help("Take the copied date, place, tags, notes, people and stars off this file. Anything you changed since stays as you set it. The earlier file's record keeps its values in the catalog's history.")
+                        .accessibilityIdentifier("inspector.undoCarry")
+                }
+            }
+        }
+    }
+
     // MARK: - Duplicates
 
     /// "Same footage as (possible): b.mov (H.264, MOV)  [Same] [Not the same]".

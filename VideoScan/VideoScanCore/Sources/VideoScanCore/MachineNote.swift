@@ -194,6 +194,7 @@ public enum MachineNote {
         "Migrate":       Author.scan.rawValue,
         "Confirm":       Author.scan.rawValue,
         "Promote":       Author.promote.rawValue,
+        "Carry":         Author.scan.rawValue,     // GH #478: a rescan's carry onto a different file (history, not a probe line)
     ]
 
     // MARK: Internals

@@ -398,6 +398,7 @@ struct ArchivedDateReadOnlyTests {
         "Archive/VideoScanModel+ArchiveUpdate.swift": "Update… — the one door (Rick 2026-09-27)",
         "ArchiveAngel/Promote/ArchiveAngelFamilyFacts.swift": "restore — undo of the Angel's own stamp on a promote that did not land",
         "Catalog/VideoScanModel+RescanPreservation.swift": "puts the record's OWN preserved values back after a rescan",
+        "Catalog/RescanCarryWithNote.swift": "GH #478 — a carry onto a different file at a known path puts a copy of archived content back to its filed date (archivedCopyFixingDate); Undo Carry never writes a date isDateReadOnly fixes",
         // New records (not an existing row) and value types.
         "MediaOps/TrimJob.swift": "new trim record",
         "MediaOps/BalanceAudioJob.swift": "new balanced record",

@@ -52,6 +52,9 @@ struct InspectorPanel: View {
     var repairCopy: VideoRecord?
     /// One-click confirm for the selected awaiting-confirmation repair.
     var onConfirmRepair: ((UUID) -> Void)?
+    /// GH #478: "Undo Carry" on a record a rescan carried Rick's values onto
+    /// (RescanCarryWithNote.undoCarry, routed by the host). nil = no button.
+    var onUndoCarry: ((UUID) -> Void)?
     /// Master Archive (2026-08-15), resolved by the CALLER (memoized
     /// reverse index + O(1) id lookup — no O(records) work here).
     /// `masterCopy` = the archive copy promoted from this record;
@@ -96,6 +99,7 @@ struct InspectorPanel: View {
 
                     Divider().padding(.horizontal, 16)
 
+                    carrySection(rec)            // only after a rescan carried values onto a different file
                     generalSection(rec)
                     videoSection(rec)
                     audioSection(rec)

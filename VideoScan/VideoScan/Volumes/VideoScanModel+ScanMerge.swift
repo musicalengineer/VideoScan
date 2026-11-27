@@ -80,6 +80,11 @@ struct ScanMergeOutcome: Equatable {
     /// fresh record because the file is proven unchanged (GH #434) — never
     /// queued for Fill In Full Hashes.
     var hashesKept = 0
+    /// GH #478 (DECISIONS 2026-11-27 (1)): re-seen paths where a DIFFERENT
+    /// file now sits and the earlier record held Rick's values — carried onto
+    /// the new record with a provenance note, the earlier record kept as
+    /// `replacedAtPath` history (`RescanCarryWithNote`).
+    var carriedWithNote = 0
     /// Fresh records that took the LIVE record's preserved values at the
     /// last moment before replacement (`reconcileLivePreservedFieldsBeforeReplacement`).
     /// A count only; said on the merge's summary line (adversarial 2026-10-19).
@@ -585,8 +590,14 @@ extension VideoScanModel {
         // set, and cross-root candidates aren't under the root at all.
         // A `replacedAtPath` history row beside its successor is not the
         // file the scan re-saw: it stays (see `historyRowsKeptAtReseenPaths`).
+        // GH #478: nor is an earlier record whose path now holds a DIFFERENT
+        // file — its values ride onto the fresh record with a note and it
+        // stays as history (`RescanCarryWithNote`).
         let gonePaths = Set(genuinelyGone.map(\.fullPath))
-        let keptHistory = Self.historyRowsKeptAtReseenPaths(records, root: root, newPaths: newPaths)
+        let adoptedPaths = Set(adoptions.keys)
+        let keptHistory = keptAtReseenPaths(root: root, newPaths: newPaths,
+                                            fresh: targetRecords.filter { !adoptedPaths.contains($0.fullPath) },
+                                            outcome: &outcome)
         let leaving: (VideoRecord) -> Bool = {
             PathScope.contains($0.fullPath, within: root)
                 && (newPaths.contains($0.fullPath) || gonePaths.contains($0.fullPath))
@@ -728,7 +739,7 @@ extension VideoScanModel {
         // edited during the scan, and the fixity verdict).
         (outcome.liveValuesApplied, outcome.hashesKept) = reconcileLivePreservedFieldsBeforeReplacement(
             root: root, targetRecords: targetRecords, stampsNow: stampsNow)
-        let keptHistory = Self.historyRowsKeptAtReseenPaths(records, root: root, newPaths: newPaths)
+        let keptHistory = keptAtReseenPaths(root: root, newPaths: newPaths, fresh: targetRecords, outcome: &outcome)
         let leaving: (VideoRecord) -> Bool = {
             PathScope.contains($0.fullPath, within: root) && newPaths.contains($0.fullPath)
                 && !keptHistory.contains(ObjectIdentifier($0))
@@ -834,6 +845,20 @@ extension VideoScanModel {
             if let replacement = byPath[old.fullPath], replacement != old.id { out[old.id] = replacement }
         }
         return out
+    }
+
+    /// Every row at a re-seen path under `root` that a merge KEEPS instead of
+    /// replacing: the `replacedAtPath` history beside its successor, plus
+    /// (GH #478) an earlier record whose path now holds a different file,
+    /// carried onto the fresh record with a note and stamped as history by
+    /// `RescanCarryWithNote`. Both merges ask this one question.
+    func keptAtReseenPaths(root: String, newPaths: Set<String>, fresh: [VideoRecord],
+                           outcome: inout ScanMergeOutcome) -> Set<ObjectIdentifier> {
+        let history = Self.historyRowsKeptAtReseenPaths(records, root: root, newPaths: newPaths)
+        let carry = RescanCarryWithNote(model: self).carry(root: root, newPaths: newPaths, fresh: fresh,
+                                                            alreadyKept: history)
+        outcome.carriedWithNote = carry.carried
+        return history.union(carry.kept)
     }
 
     static func historyRowsKeptAtReseenPaths(_ records: [VideoRecord], root: String,
