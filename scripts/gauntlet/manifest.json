@@ -36837,6 +36837,10 @@
         "test_a_stale_manifest_makes_the_lane_red_and_says_how_to_refresh",
         "test_a_test_added_to_an_existing_file_without_a_manifest_edit_is_an_error",
         "test_a_torn_fragment_that_fits_two_sensors_or_one_already_judged_is_not_guessed",
+        "test_a_torn_last_line_is_green_when_the_result_bundle_says_passed",
+        "test_a_torn_last_line_stays_red_when_the_result_bundle_is_missing_or_unreadable",
+        "test_a_torn_last_line_stays_red_when_the_result_bundle_says_failed",
+        "test_a_torn_last_line_stays_red_when_the_sensor_is_not_in_the_result_bundle",
         "test_a_torn_pass_line_never_hides_a_failure_printed_the_other_way",
         "test_an_empty_run_is_never_green",
         "test_braces_in_strings_and_comments_do_not_break_spans",
@@ -36847,8 +36851,10 @@
         "test_known_source_scan_sensors_are_found_both_ways",
         "test_parameterised_and_xctest_identifiers",
         "test_the_app_half_runs_its_test_host_in_a_sealed_home",
+        "test_the_app_half_writes_a_fresh_result_bundle_into_the_log_dir",
         "test_the_core_half_builds_under_the_real_home_then_tests_sealed",
         "test_the_lane_is_a_slice_not_the_suite",
+        "test_the_result_bundle_never_overrules_a_console_verdict",
         "test_the_sensor_that_stayed_red_eleven_nights_is_in_the_lane",
         "test_this_checkouts_manifest_is_current"
       ]

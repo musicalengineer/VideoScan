@@ -57,6 +57,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -485,8 +486,73 @@ def _sensor_key(name: str) -> str:
     return name.replace(".", "/") if "/" not in name else name
 
 
-def _verdicts(log: str, expected: Sequence[str]) -> Tuple[int, List[str], List[str]]:
-    """(torn passes recovered, torn failures recovered (sensor names), sensors with no verdict) — see TORN_VERDICT_RE."""
+# GH #526 (2026-11-26/27): xcodebuild sometimes tears the run's LAST result line mid-name
+# ("Test case 'HallieShellCLITests/playItAfterADe" and then "** TEST SUCCEEDED **"; 4 runs of 4
+# on one tree, and under load) — no "passed on" survives, so no fragment can be recovered and the
+# lane went RED with "no verdict line" though the result bundle said 0 failures. A sensor with no
+# console verdict is now looked up in the run's result bundle (-resultBundlePath, in the lane's
+# log dir): Passed counts as passed, Failed is RED by name, Skipped / Expected Failure are verdicts
+# (not counted as passed, as on the console). Absent from the bundle, "unknown", or a bundle that
+# cannot be read: still RED, by name. The console verdict, where there is one, always wins — the
+# bundle only fills a gap, it never overrules a line that said failed.
+XCRESULTTOOL: Tuple[str, ...] = ("xcrun", "xcresulttool")
+APP_BUNDLE_NAME = "sensor-lane-app.xcresult"
+_BUNDLE_VERDICTS = ("Passed", "Failed", "Skipped", "Expected Failure")
+
+
+def xcresult_outcomes(bundle: Optional[Path], tool: Sequence[str] = ()) -> Optional[Dict[str, str]]:
+    """{sensor key ('Suite/f'): result} from `xcresulttool get test-results tests` on `bundle`, or None
+    when there is no bundle or it cannot be read. A test that appears more than once, or has Arguments /
+    Repetition children, is "Failed" if ANY of its nodes failed, else its node's own result; a
+    non-verdict ("unknown", empty) is dropped, so that sensor stays without a verdict.
+    Memory: the tool's JSON for one lane run (~900 test nodes, a few hundred KB) and this dict."""
+    if bundle is None or not Path(bundle).is_dir():
+        return None
+    try:
+        p = subprocess.run(list(tool or XCRESULTTOOL) + ["get", "test-results", "tests", "--path", str(bundle), "--compact"],
+                           capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
+        if p.returncode != 0:
+            return None
+        tree = json.loads(p.stdout)
+    except (OSError, ValueError, TypeError, subprocess.TimeoutExpired):
+        return None
+    if not isinstance(tree, dict):
+        return None
+    out: Dict[str, str] = {}
+    todo = list(tree.get("testNodes") or [])
+    while todo:
+        n = todo.pop()
+        if not isinstance(n, dict):
+            continue
+        if n.get("nodeType") == "Test Case":
+            ident = str(n.get("nodeIdentifier") or "")
+            if not ident:
+                continue
+            results = [str(n.get("result") or "")]
+            sub = list(n.get("children") or [])
+            while sub:                                # Arguments, Repetition, … : any failure is a failure
+                c = sub.pop()
+                if isinstance(c, dict):
+                    if c.get("result"):
+                        results.append(str(c.get("result")))
+                    sub.extend(c.get("children") or [])
+            key = _sensor_key(ident)
+            if "Failed" in results or out.get(key) == "Failed":
+                out[key] = "Failed"
+            elif results[0] in _BUNDLE_VERDICTS and key not in out:
+                out[key] = results[0]
+            continue
+        todo.extend(n.get("children") or [])
+    return out
+
+
+NO_VERDICT = "no verdict line in the log"
+
+
+def _verdicts(log: str, expected: Sequence[str],
+              bundle: Optional[Dict[str, str]] = None) -> Tuple[int, List[str], List[str]]:
+    """(torn passes recovered, torn failures recovered (sensor names), sensors with no verdict) — see TORN_VERDICT_RE.
+    `bundle` (xcresult_outcomes): where a sensor still has no console verdict, its result there (GH #526)."""
     want = {_sensor_key(e): e[len("VideoScanTests/"):] if e.startswith("VideoScanTests/") else e for e in expected}
     seen = {_sensor_key(n) for n in PAR_VERDICT_RE.findall(log)}
     seen |= {_sensor_key(e) for m in FAILING_BLOCK_RE.finditer(log) for e in m.group(1).splitlines() if e.strip()}
@@ -502,15 +568,31 @@ def _verdicts(log: str, expected: Sequence[str]) -> Tuple[int, List[str], List[s
             passes += 1
         elif m.group(2) == "failed":
             fails.append(want[fits[0]])
-    missing = sorted(f"{want[k]}: no verdict line in the log" for k in want if k not in seen)
+    missing: List[str] = []
+    for k in sorted(want, key=lambda k: want[k]):
+        if k in seen:
+            continue
+        result = (bundle or {}).get(k)
+        if result == "Passed":
+            passes += 1
+        elif result == "Failed":
+            fails.append(f"{want[k]}: failed (from the result bundle; {NO_VERDICT})")
+        elif result in ("Skipped", "Expected Failure"):
+            pass                                      # a verdict, not a pass — as on the console
+        elif bundle is not None:
+            missing.append(f"{want[k]}: {NO_VERDICT}, nor in the result bundle")
+        else:
+            missing.append(f"{want[k]}: {NO_VERDICT}")
     return passes, fails, missing
 
 
-def count(log: str, expected: Optional[Sequence[str]] = None) -> Tuple[int, int, List[str]]:
+def count(log: str, expected: Optional[Sequence[str]] = None,
+          bundle: Optional[Dict[str, str]] = None) -> Tuple[int, int, List[str]]:
     """(passed, failed, failing names) from an xcodebuild / swift test log.
     `expected` (the app half's sensor ids): recover a torn verdict line where
     exactly one sensor fits, and count a sensor with no verdict as failed,
-    named "<id>: no verdict line in the log" (GH #454).
+    named "<id>: no verdict line in the log" (GH #454) — unless `bundle`
+    (xcresult_outcomes of the same run) has its verdict (GH #526).
     With parallel testing xcodebuild reports EVERY test (XCTest and Swift
     Testing) as "Test case '<Suite>/<f>()' passed|failed on '<Mac> (pid)'";
     without it, Swift Testing prints "✔/✘ Test …" and XCTest "Test Case '-[…]'".
@@ -551,7 +633,7 @@ def count(log: str, expected: Optional[Sequence[str]] = None) -> Tuple[int, int,
             if entry.strip():
                 names.add(entry.strip())
     if expected:
-        torn_passes, torn_fails, missing = _verdicts(log, expected)
+        torn_passes, torn_fails, missing = _verdicts(log, expected, bundle)
         passed += torn_passes
         names.update(torn_fails)
         names.update(missing)
@@ -581,8 +663,22 @@ def run_app(sensors: List[Sensor], log_dir: Path, dd: Path) -> Tuple[int, int, L
             "-parallel-testing-enabled", "YES",
             "CODE_SIGN_IDENTITY=-", "CODE_SIGNING_REQUIRED=NO", "CODE_SIGN_ENTITLEMENTS=",
             "ONLY_ACTIVE_ARCH=YES"]
+    # GH #526: the run's result bundle, read only for a sensor whose console verdict line was torn.
+    # One bundle per log dir (a few MB for ~900 source scans), replaced every run — xcodebuild refuses
+    # an existing path, and a stale bundle must never vouch for this run — and freed when the half is clean.
+    bundle = log_dir / APP_BUNDLE_NAME
+    _remove_bundle(bundle)
+    args += ["-resultBundlePath", str(bundle)]
     args += [f"-only-testing:{s.xcode_id}" for s in sensors]
-    return _run([sealed(args)], log_dir / "sensor-lane-app.log", [s.xcode_id for s in sensors])
+    return _run([sealed(args)], log_dir / "sensor-lane-app.log", [s.xcode_id for s in sensors], bundle)
+
+
+def _remove_bundle(bundle: Path) -> None:
+    """Free this lane's own regenerable result bundle (a link is unlinked, never followed)."""
+    if bundle.is_symlink() or bundle.is_file():
+        bundle.unlink()
+    elif bundle.is_dir():
+        shutil.rmtree(bundle)
 
 
 def run_core(sensors: List[Sensor], log_dir: Path) -> Tuple[int, int, List[str], int, float]:
@@ -594,10 +690,11 @@ def run_core(sensors: List[Sensor], log_dir: Path) -> Tuple[int, int, List[str],
     return _run([build, sealed(test, plain=True)], log_dir / "sensor-lane-core.log")
 
 
-def _run(cmds: List[List[str]], log_path: Path,
-         expected: Optional[Sequence[str]] = None) -> Tuple[int, int, List[str], int, float]:
+def _run(cmds: List[List[str]], log_path: Path, expected: Optional[Sequence[str]] = None,
+         bundle: Optional[Path] = None) -> Tuple[int, int, List[str], int, float]:
     """Each command in turn into one log, stopping at the first that fails.
-    `expected`: the sensor ids every one of which must end with a verdict (count)."""
+    `expected`: the sensor ids every one of which must end with a verdict (count).
+    `bundle`: the run's result bundle, consulted only when a sensor has no console verdict (GH #526)."""
     t0 = time.monotonic()
     rc = 0
     with open(log_path, "w") as fh:
@@ -609,6 +706,15 @@ def _run(cmds: List[List[str]], log_path: Path,
     elapsed = time.monotonic() - t0
     log = log_path.read_text(errors="replace")
     passed, failed, names = count(log, expected)
+    if expected and bundle is not None and any(n.endswith(NO_VERDICT) for n in names):
+        outcomes = xcresult_outcomes(bundle)
+        if outcomes is None:
+            print(f"  (result bundle {bundle} missing or unreadable: a sensor with no console verdict stays RED)",
+                  flush=True)
+        else:
+            passed, failed, names = count(log, expected, outcomes)
+    if bundle is not None and failed == 0 and rc == 0:
+        _remove_bundle(bundle)
     return passed, failed, names, rc, elapsed
 
 

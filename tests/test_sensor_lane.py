@@ -209,6 +209,119 @@ def test_a_torn_fragment_that_fits_two_sensors_or_one_already_judged_is_not_gues
     assert sl.count(judged) == (1, 0, [])
 
 
+# ---- GH #526: the LAST result line torn mid-name; the result bundle has the verdict ----
+
+# What xcodebuild printed 4 runs of 4 on one tree: the last sensor's line cut mid-name, then success.
+TORN_LAST = "\n".join([
+    "Test case 'A/one()' passed on 'My Mac - VideoScan (1)' (0.001 seconds)",
+    "Test case 'P/each(_:)' passed on 'My Mac - VideoScan (1)' (0.001 seconds)",
+    "Test case 'HallieShellCLITests/eileensChil",
+    "** TEST SUCCEEDED **",
+])
+HALLIE = "HallieShellCLITests/eileensChildrenAndTimsParents()"
+BUNDLE = "sensor-lane-app.xcresult"
+
+
+def _bundle_json(results: dict, args: dict = None) -> dict:
+    """xcresulttool's `get test-results tests` shape: plan > bundle > suite > Test Case (> Arguments)."""
+    suites: dict = {}
+    for ident, res in results.items():
+        suite, name = ident.rsplit("/", 1)
+        node = {"nodeType": "Test Case", "name": name, "nodeIdentifier": ident, "result": res}
+        if args and ident in args:
+            node["children"] = [{"nodeType": "Arguments", "name": f"arg {i}", "result": r} for i, r in enumerate(args[ident])]
+        suites.setdefault(suite, []).append(node)
+    return {"testNodes": [{"nodeType": "Test Plan", "name": "VideoScan", "children": [
+        {"nodeType": "Unit test bundle", "name": "VideoScanTests", "children": [
+            {"nodeType": "Test Suite", "name": s, "children": c} for s, c in suites.items()]}]}]}
+
+
+def _lane_run(monkeypatch, tmp_path, log: str, tree, expected=EXPECTED, bundle_exists=True, tool_rc=0):
+    """sl._run on a fake xcodebuild that prints `log`, with a fake xcresulttool printing `tree` (JSON)."""
+    (tmp_path / "log.txt").write_text(log + "\n")
+    (tmp_path / "tree.json").write_text(json.dumps(tree))
+    fake = tmp_path / "fake_xcresulttool.py"
+    fake.write_text("import sys\nsys.stdout.write(open(%r).read())\nsys.exit(%d)\n" % (str(tmp_path / "tree.json"), tool_rc))
+    monkeypatch.setattr(sl, "XCRESULTTOOL", (sys.executable, str(fake)), raising=False)
+    bundle = tmp_path / BUNDLE
+    if bundle_exists:
+        bundle.mkdir()
+    cmd = [sys.executable, "-c", "import sys; sys.stdout.write(open(%r).read())" % str(tmp_path / "log.txt")]
+    p, f, names, rc, _ = sl._run([cmd], tmp_path / "sensor-lane-app.log", expected, bundle)
+    return p, f, names, rc
+
+
+def test_a_torn_last_line_is_green_when_the_result_bundle_says_passed(monkeypatch, tmp_path):
+    """RED first (GH #526): 0 failures in the bundle, yet RED with 'no verdict line in the log'."""
+    tree = _bundle_json({"A/one()": "Passed", "P/each(_:)": "Passed", HALLIE: "Passed"})
+    assert _lane_run(monkeypatch, tmp_path, TORN_LAST, tree) == (3, 0, [], 0)
+    assert not (tmp_path / BUNDLE).exists(), "a clean half frees its bundle"
+
+
+def test_a_torn_last_line_stays_red_when_the_result_bundle_says_failed(monkeypatch, tmp_path):
+    tree = _bundle_json({"A/one()": "Passed", "P/each(_:)": "Passed", HALLIE: "Failed"})
+    p, f, names, rc = _lane_run(monkeypatch, tmp_path, TORN_LAST, tree)
+    assert (p, f) == (2, 1)
+    assert names == [f"{HALLIE}: failed (from the result bundle; no verdict line in the log)"]
+    assert (tmp_path / BUNDLE).exists(), "a red half keeps its bundle to look at"
+    # a parameterized sensor with ONE failed argument is failed, whatever its node says
+    tree = _bundle_json({"A/one()": "Passed", "P/each(_:)": "Passed", HALLIE: "Passed"},
+                        args={HALLIE: ["Passed", "Failed"]})
+    (tmp_path / BUNDLE).rmdir()
+    p, f, names, rc = _lane_run(monkeypatch, tmp_path, TORN_LAST, tree)
+    assert (p, f) == (2, 1) and names[0].startswith(HALLIE + ": failed")
+
+
+def test_a_torn_last_line_stays_red_when_the_sensor_is_not_in_the_result_bundle(monkeypatch, tmp_path):
+    tree = _bundle_json({"A/one()": "Passed", "P/each(_:)": "Passed"})
+    p, f, names, rc = _lane_run(monkeypatch, tmp_path, TORN_LAST, tree)
+    assert (p, f) == (2, 1)
+    assert names == [f"{HALLIE}: no verdict line in the log, nor in the result bundle"]
+    # "unknown" (it never ran) is not a verdict either
+    (tmp_path / BUNDLE).rmdir()
+    tree = _bundle_json({"A/one()": "Passed", "P/each(_:)": "Passed", HALLIE: "unknown"})
+    assert _lane_run(monkeypatch, tmp_path, TORN_LAST, tree)[:3] == (2, 1, names)
+
+
+def test_a_torn_last_line_stays_red_when_the_result_bundle_is_missing_or_unreadable(monkeypatch, tmp_path):
+    tree = _bundle_json({HALLIE: "Passed"})
+    no_verdict = [f"{HALLIE}: no verdict line in the log"]
+    for d in ("absent", "tool-failed", "not-json"):
+        (tmp_path / d).mkdir()
+    assert _lane_run(monkeypatch, tmp_path / "absent", TORN_LAST, tree, bundle_exists=False)[:3] == (2, 1, no_verdict)
+    assert _lane_run(monkeypatch, tmp_path / "tool-failed", TORN_LAST, tree, tool_rc=1)[:3] == (2, 1, no_verdict)
+    assert _lane_run(monkeypatch, tmp_path / "not-json", TORN_LAST, "not a tree")[:3] == (2, 1, no_verdict)
+
+
+def test_the_result_bundle_never_overrules_a_console_verdict(monkeypatch, tmp_path):
+    """Never weaken: a sensor the console says FAILED stays failed though the bundle says Passed."""
+    log = "\n".join([
+        "Test case 'A/one()' failed on 'My Mac - VideoScan (1)' (0.001 seconds)",
+        "Test case 'P/each(_:)' passed on 'My Mac - VideoScan (1)' (0.001 seconds)",
+        "Test case 'HallieShellCLITests/eileensChil",
+        "** TEST FAILED **",
+    ])
+    tree = _bundle_json({"A/one()": "Passed", "P/each(_:)": "Passed", HALLIE: "Passed"})
+    p, f, names, rc = _lane_run(monkeypatch, tmp_path, log, tree)
+    assert (p, f, names) == (2, 1, ["A/one()"])
+    # skipped / expected failure in the bundle: a verdict, never counted as passed
+    (tmp_path / BUNDLE).rmdir()
+    for res in ("Skipped", "Expected Failure"):
+        tree = _bundle_json({HALLIE: res})
+        assert _lane_run(monkeypatch, tmp_path, TORN_LAST, tree) == (2, 0, [], 0)
+
+
+def test_the_app_half_writes_a_fresh_result_bundle_into_the_log_dir(monkeypatch, tmp_path):
+    calls = _capture_runs(monkeypatch)
+    stale = tmp_path / BUNDLE
+    (stale / "Data").mkdir(parents=True)
+    sl.run_app(APP[:2], tmp_path, tmp_path / "dd")
+    (cmd,) = calls
+    i = cmd.index("-resultBundlePath")
+    assert cmd[i + 1] == str(stale)
+    assert not stale.exists(), "a stale bundle must never vouch for this run (and xcodebuild refuses an existing path)"
+
+
 def test_an_empty_run_is_never_green(monkeypatch, tmp_path, capsys):
     # The app half "ran" zero tests (a filter that matched nothing): red.
     monkeypatch.setattr(sl, "manifest_check", lambda *a, **k: ([], 0.0))
