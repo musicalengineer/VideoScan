@@ -119,6 +119,12 @@ public enum CatalogWriter: String, Sendable {
     /// `row_knowledge.source` = "app:import carry" (the values came from the
     /// October import's row, not a fresh edit).
     case importCarry = "import carry"
+    /// GH #520: Rick chose Apply… on the launch notice of a quit rescue copy
+    /// — the rescued records the catalog had not changed since the copy was
+    /// made. Its own door so the audit trail says the values came from the
+    /// rescue copy, not a fresh edit: `generation_history.writer` = "rescue
+    /// apply", `row_knowledge.source` = "app:rescue apply".
+    case rescueApply = "rescue apply"
 }
 
 // MARK: - What a body sees
@@ -203,6 +209,10 @@ public protocol CatalogLiveReading {
     // Cutover B2.1 (v1.8)
     /// Every `pending_rows` row (new records waiting for a whole-file digest), by id.
     func pendingRows(_ visit: (CatalogRow.PendingRow) throws -> Void) throws
+    /// GH #520: the `pending_rows` payload of ONE id, verbatim, and whether
+    /// it is tombstoned in `pending_purges` (nil when the id holds none).
+    /// Unlike `pendingRows`, a tombstoned payload is returned (flagged).
+    func pendingRow(id: String) throws -> CatalogRow.HeldPayload?
     /// The revisions of `fileID`'s tombstones, ascending.
     func tombstoneRevisions(fileID: String) throws -> [Int]
 }

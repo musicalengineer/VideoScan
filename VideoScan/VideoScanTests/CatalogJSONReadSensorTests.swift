@@ -15,6 +15,9 @@
 //     never opens its own catalog (QA r1 F2).
 //   • CatalogStore — the JSON store itself (its own load and decoder; slice
 //     3 moves the tests off it).
+//   • CatalogRescueApply (GH #520) — Apply… decodes a quit rescue copy
+//     (catalog.recovery-*.json, the JSON format), never catalog.json; what it
+//     applies goes through the per-record check and the commit door.
 //   (Person Finder's catalog prefilter read the frozen catalog.json through
 //   CatalogStore.readRecordsWithoutAdopting; it reads the live records since
 //   0005b81ee, and that reader was retired 2026-10-21.)
@@ -46,7 +49,10 @@ struct CatalogJSONReadSensorTests {
         // Verify's audited-file source (Import to SQLite's phase 2) read
         // catalog.json with no caller left; retired 2026-10-21.
         #"decodeCatalogFile\("#: ["Catalog/CatalogStore.swift": 2],
-        #"CatalogSnapshot(\.self|\s*=\s*try\b)"#: ["Catalog/CatalogStore.swift": 1],
+        // GH #520: Apply… reads a quit RESCUE copy (catalog.recovery-*.json,
+        // never catalog.json); its records reach memory only after the
+        // record-by-record check against catalog.sqlite, through the commit door.
+        #"CatalogSnapshot(\.self|\s*=\s*try\b)"#: ["Catalog/CatalogStore.swift": 1, "App/CatalogRescueApply.swift": 1],
         // The retired live dossier reload (a 30 s poll merging catalog.json
         // into the records) must not come back.
         #"startLiveDossierReload|pollAndMergeDossierFromDisk|mergeDossierFields"#: [:],

@@ -4382,6 +4382,7 @@
       "tests": [
         "intermediateRevisionsLand",
         "pendingRowHeldThenStored",
+        "pendingRowReadsOneHeldPayload",
         "pendingRowsAtLoad",
         "peopleConflictSurvivesUnrelatedEdit",
         "purgeTombstonesAndLoadSkips",
@@ -11616,6 +11617,44 @@
         "rescueThatCannotBeWrittenKeepsVideoScanOpen",
         "roleFlipWithAcceptedEditAsksThenRescuesTheDelta",
         "viewerQuitSavesNothingAndSaysNothing"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogRescueApplyTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogRescueApplyTests",
+        "CatalogRescueApplyLogicTests",
+        "CatalogRescueApplySensorTests"
+      ],
+      "tests": [
+        "applyUsesTheOneDoors",
+        "backupFailureAppliesNothing",
+        "bothQuitWritersRecordTheBasis",
+        "commitAfterTheBackupRefuses",
+        "conflictIsListedAndLeft",
+        "conflictedRecordIsLeft",
+        "digestCoversConflicts",
+        "discardMovesToTheTrash",
+        "discardRefusesTheCatalog",
+        "editInsideTheDebounceWindowWins",
+        "everyReason",
+        "heldRecordChangedSinceIsLeft",
+        "heldRecordUnchangedIsApplied",
+        "newRecordIsApplied",
+        "newRecordSharingContentIsLeft",
+        "noConflictAppliesAllAfterTheBackup",
+        "offeredUntilAppliedOrDiscarded",
+        "oldCopyWithoutBasisAppliesNothing",
+        "pairAppliedOnBothOrNeither",
+        "pairAppliedTogether",
+        "quitAndLaunchWiring",
+        "readOnlySessionRefusesApply",
+        "roundTwoReasons",
+        "scale",
+        "words",
+        "writeHoldRefusesApply"
       ]
     },
     {
@@ -43934,9 +43973,9 @@
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 1207,
+      "expected_floor": 1233,
       "name": "regression",
-      "package_expected_floor": 409,
+      "package_expected_floor": 410,
       "package_selectors": [
         "VideoScanCoreTests.GRDBCatalogRepositoryTests",
         "VideoScanCoreTests.GRDBCatalogRepositoryLedgerTests",
@@ -44066,6 +44105,9 @@
         "VideoScanTests/CatalogPurgeDoorSensorTests",
         "VideoScanTests/CatalogPurgeMarkerTests",
         "VideoScanTests/CatalogQuitCornerTests",
+        "VideoScanTests/CatalogRescueApplyTests",
+        "VideoScanTests/CatalogRescueApplyLogicTests",
+        "VideoScanTests/CatalogRescueApplySensorTests",
         "VideoScanTests/CatalogRescanRefusedReplacementTests",
         "VideoScanTests/CatalogRestoreFromBackupSensorTests",
         "VideoScanTests/CatalogRestoreFromBackupTests",

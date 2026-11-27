@@ -106,6 +106,20 @@ struct CatalogCommitB21Tests {
         }
     }
 
+    @Test("GH #520: pendingRow(id:) reads ONE held payload verbatim and whether a purge tombstoned it; nil for a files row or an unknown id")
+    func pendingRowReadsOneHeldPayload() async throws {
+        let s = try await CommitScene.make(); defer { s.remove() }
+        let loaded = try await s.load()
+        let fresh = try FreshRecord.copy(try #require(loaded.records[healthyID]), path: "/Volumes/Fixture/New/held4.mov")
+        _ = try await s.commit([fresh])
+        let json: String = try #require(try s.scalar("SELECT json FROM pending_rows WHERE id = ?", [fresh.id.uuidString]))
+        #expect(try await s.pendingRow(fresh.id.uuidString) == CatalogRow.HeldPayload(json: json, purged: false))
+        _ = try await s.commit([], purges: [fresh.id])
+        #expect(try await s.pendingRow(fresh.id.uuidString) == CatalogRow.HeldPayload(json: json, purged: true))
+        #expect(try await s.pendingRow(healthyID) == nil)
+        #expect(try await s.pendingRow(UUID().uuidString) == nil)
+    }
+
     // MARK: - Gap 3: purges
 
     @Test("gap 3: a purge tombstones the row (never a DELETE), the load skips it, a second purge is a no-op")
@@ -253,6 +267,25 @@ extension CommitScene {
             let snapshot = try await CatalogLoad.read(repository)
             await repository.close()
             return snapshot
+        } catch {
+            await repository.close()
+            throw error
+        }
+    }
+}
+
+private extension CommitScene {
+    /// GH #520: `pendingRow(id:)` through the repository's own read.
+    func pendingRow(_ id: String) async throws -> CatalogRow.HeldPayload? {
+        let repository = GRDBCatalogRepository(host: "commit-test", durability: .volatileForTests)
+        guard await repository.open(at: scene.databaseURL) == .readWrite else {
+            await repository.close()
+            throw FixtureFailure(words: "could not open")
+        }
+        do {
+            let row = try await repository.read { try $0.pendingRow(id: id) }
+            await repository.close()
+            return row
         } catch {
             await repository.close()
             throw error
