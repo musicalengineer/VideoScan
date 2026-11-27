@@ -767,7 +767,7 @@ enum CatalogRescueApply {
             }
             let text = launchText(name: newest.lastPathComponent, savedAt: file?.savedAt, count: file?.records.count,
                                   readProblem: problem, olderCopies: copies.count - 1)
-            let note: (String) -> Void = { [weak model] in model?.catalogQuitNote("rescue copy — " + $0) }
+            let note: (String) -> Void = { model.catalogQuitNote("rescue copy — " + $0) }   // the Task already holds model strongly
             switch askAtLaunch(title: launchTitle(file?.records.count), text: text) {
             case .later:
                 note("Later — \(newest.lastPathComponent) is kept; nothing was applied; the next launch asks again")
