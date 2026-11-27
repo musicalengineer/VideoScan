@@ -30,8 +30,13 @@
 //     (`CatalogStore.recoveryCopyWriter`), published with AtomicFilePublish
 //     (`.fullFsync`), off the main actor and BOUNDED: a stalled volume
 //     cannot hang the quit; past the bound the copy counts as failed.
-//   * Never merged: the next launch says the copy is there (console +
-//     catalog.log + videoscan.log) and how to use it; nothing reads it back.
+//   * Never merged by itself: the next launch says the copy is there
+//     (console + catalog.log + videoscan.log) and offers Apply… / Discard… /
+//     Later (GH #520, CatalogRescueApply.swift). Under catalog.sqlite the
+//     copy's header also carries `rescueBasis` — what catalog.sqlite held
+//     for each rescued record (CatalogRescueBasis), read in one bounded
+//     snapshot before the copy is written; a basis that cannot be read
+//     never stops the copy (Apply then leaves every record as it is).
 //   * A READ-ONLY session (a viewer, or a launch that opened the catalog
 //     read-only) saves nothing by design, so its quit writes NO copy
 //     (M5 viewer, 2026-10-21: every viewer quit wrote an 80 MB copy, because
@@ -156,7 +161,12 @@ enum CatalogQuitRecovery {
             return .recoveryCopy(earlier.url)
         }
         model.catalogQuitNote(startLine(model, rescued: rescued.count, because: because, target: target, sqlite: sqlite))
-        let write = model.catalogStore.recoveryCopyWriter(records: rescued, generation: model.catalogGenerationForStamp)
+        let basis = basisInputs(model, rescued).map {
+            CatalogRescueBasis.readBlocking($0.ids, expecting: $0.generation, from: $0.repository,
+                                            within: min(seconds, CatalogRescueBasis.quitBound))
+        }
+        let write = model.catalogStore.recoveryCopyWriter(records: rescued, generation: model.catalogGenerationForStamp,
+                                                          basis: settled(basis, model))
         let box = ResultBox()
         let done = DispatchSemaphore(value: 0)
         DispatchQueue.global(qos: .userInitiated).async {
@@ -181,8 +191,29 @@ enum CatalogQuitRecovery {
     nonisolated static func useWords(sqlite: Bool) -> String {
         sqlite
             ? "It holds the changes that did not reach catalog.sqlite, in the older JSON catalog format; "
-                + "catalog.sqlite is the catalog, so do NOT rename it to catalog.json — compare it, then move it away."
+                + "catalog.sqlite is the catalog, so do NOT rename it to catalog.json — the next launch offers Apply… or Discard…."
             : "To use it: quit, move catalog.json aside, rename the copy to catalog.json."
+    }
+
+    /// GH #520: what the basis read needs — the store, the rescued ids and
+    /// the generation they were based on. nil under the JSON authority (no
+    /// committer: nothing to compare with, and Apply refuses there).
+    private static func basisInputs(_ model: VideoScanModel, _ rescued: [VideoRecord])
+        -> (repository: any CatalogRepository, ids: [UUID], generation: Int)? {
+        guard let committer = model.catalogCutover.committer else { return nil }
+        return (committer.repository, rescued.map(\.id), model.catalogGenerationForStamp)
+    }
+
+    /// The basis as written: "unknown" when the session's generation moved
+    /// while it was read (a commit landed — the rows read are not the base
+    /// any more). One line through the quit's sink.
+    private static func settled(_ basis: CatalogRescueBasis?, _ model: VideoScanModel) -> CatalogRescueBasis? {
+        guard var basis else { return nil }
+        if basis.unknown == nil, basis.generation != model.catalogGenerationForStamp {
+            basis = .missing("the catalog saved generation \(model.catalogGenerationForStamp) while the copy was being written")
+        }
+        model.catalogQuitNote("recovery copy — \(basis.quitWords)")
+        return basis
     }
 
     /// GH #356: what the copy holds — under catalog.sqlite only the records
@@ -403,7 +434,15 @@ enum CatalogQuitRecovery {
         let sqlite = latchNamesSQLite(besideCatalog: catalogURL)
         let rescued = rescueRecords(model)
         model.catalogQuitNote(startLine(model, rescued: rescued.count, because: because, target: target, sqlite: sqlite))
-        let write = model.catalogStore.recoveryCopyWriter(records: rescued, generation: model.catalogGenerationForStamp)
+        var basis: CatalogRescueBasis?
+        if let inputs = basisInputs(model, rescued) {
+            basis = await CatalogRescueBasis.read(inputs.ids, expecting: inputs.generation, from: inputs.repository,
+                                                  within: min(seconds, CatalogRescueBasis.quitBound))
+        }
+        // From here to the writer: one main-actor turn (the payload and the
+        // fingerprints below are the same values).
+        let write = model.catalogStore.recoveryCopyWriter(records: rescued, generation: model.catalogGenerationForStamp,
+                                                          basis: settled(basis, model))
         let copy = RescueCopy(url: target, records: rescued)
         // (For Rick: a future fulfilled by a worker thread or by a timer,
         // whichever is first — `OnceResume.race`.)
@@ -527,7 +566,7 @@ enum CatalogQuitRecovery {
             + "\(names.count == 1 ? "is" : "are") beside the catalog: \(names.joined(separator: ", ")). "
             + "Nothing was merged. "
             + (sqlite ? "catalog.sqlite is the catalog: a copy holds changes that did not save, in the older JSON catalog "
-                        + "format — do NOT rename it to catalog.json; compare it, then move it away."
+                        + "format — do NOT rename it to catalog.json; the notice offers Apply… (catalog backed up first) or Discard…."
                       : "To use one: quit, move catalog.json aside, rename the copy to catalog.json; "
                         + "move the copy away once you have decided.")
     }

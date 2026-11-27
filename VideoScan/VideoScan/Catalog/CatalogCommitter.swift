@@ -398,6 +398,36 @@ final class CatalogCommitter {
         return saveRefusal() ?? ids.lazy.compactMap { self.baseline.waiting[$0]?.words }.first ?? "the rows could not be stored"
     }
 
+    /// GH #520, the launch notice's Apply…: the rescued records Rick chose to
+    /// apply, committed NOW through the commit door under its own writer
+    /// (`rescue apply`: the provenance lands in generation_history and
+    /// row_knowledge). Only these rows. nil = the commit ran (the caller
+    /// checks each row with `notDurable`); else the words, nothing written.
+    func commitRescued(ids: Set<UUID>) -> String? {
+        if let why = saveRefusal() { return why }
+        cancelTimer()
+        _ = commit(.rescueApply, owner: nil, scope: .only(ids))
+        return saveRefusal()
+    }
+
+    /// Of `ids`, the records whose current state is durable NOWHERE in
+    /// catalog.sqlite (changed since the baseline, or refused) — the same
+    /// rule as `unsavedRecords`, for these rows only (O(ids)).
+    func notDurable(_ ids: Set<UUID>) -> Set<UUID> {
+        let records = input().records.filter { ids.contains($0.id) }
+        let prints = CatalogChangeDetector.fingerprints(of: records.map(VideoRecordDTO.init))
+        let changed = CatalogChangeDetector.changed(records.map(\.id), fingerprints: prints, baseline: baseline.prints)
+            .filter { !baseline.isDurablyHeld(records[$0].id, at: prints[$0]) }
+            .map { records[$0].id }
+        return Set(changed).union(ids.subtracting(records.map(\.id)))
+    }
+
+    /// The store holds a row (or a held payload) for `id`.
+    func storesRow(_ id: UUID) -> Bool { baseline.holds(id) }
+
+    /// Why the store did not take `id` at its last commit, if it said.
+    func refusalWords(_ id: UUID) -> String? { baseline.waiting[id]?.words }
+
     /// GH #339 (Codex #385 #5): BEFORE a carry touches these records, the
     /// person's own pending edits on them (typed inside the 2 s debounce)
     /// are committed now through the ordinary save door — durable, and

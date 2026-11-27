@@ -69,6 +69,19 @@ extension CatalogRow {
         }
     }
 
+    /// GH #520: one id's `pending_rows` payload as stored, and whether a
+    /// purge tombstoned it (`pending_purges`) — what a quit rescue copy's
+    /// basis records for a held record, so Apply… can tell it changed.
+    public struct HeldPayload: Sendable, Equatable {
+        public var json: String
+        public var purged: Bool
+
+        public init(json: String, purged: Bool) {
+            self.json = json
+            self.purged = purged
+        }
+    }
+
     /// What `purgeFile` did to one id.
     public enum PurgeLanding: Sendable, Equatable {
         /// No `files` row (nor pending row) has this id.

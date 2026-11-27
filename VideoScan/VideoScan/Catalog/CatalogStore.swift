@@ -1564,6 +1564,11 @@ struct CatalogSnapshotDTO: Sendable {
     /// Master Archive designation — additive optional. Emitted only when
     /// set, so a catalog with no master archive carries no key.
     var masterArchive: MasterArchiveDesignation? = nil
+    /// GH #520: a quit rescue copy only — what catalog.sqlite held for each
+    /// rescued record when the copy was written (CatalogRescueBasis).
+    /// Additive optional, emitted only when set: catalog.json and every
+    /// snapshot are byte-identical; `CatalogSnapshot` ignores the key.
+    var rescueBasis: CatalogRescueBasis? = nil
 
     /// THE catalog.json serializer — the single place catalog bytes are
     /// produced. Top-level key order is fixed (see the type comment); the
@@ -1587,6 +1592,10 @@ struct CatalogSnapshotDTO: Sendable {
         if let masterArchive {
             header.append(contentsOf: Array(",\"masterArchive\":".utf8))
             header.append(try fragment(masterArchive))
+        }
+        if let rescueBasis {
+            header.append(contentsOf: Array(",\"rescueBasis\":".utf8))
+            header.append(try fragment(rescueBasis))
         }
         header.append(contentsOf: Array(",\"records\":".utf8))
 
@@ -1754,9 +1763,13 @@ extension CatalogStore {
     /// save: no hold, lock or generation check — it never touches catalog.json.
     /// `generation`: the header's stamp — the caller's catalog generation
     /// (catalog.sqlite's under the SQLite authority, QA r1 F3); nil = this
-    /// store's own.
-    func recoveryCopyWriter(records: [VideoRecord], generation: Int? = nil) -> @Sendable (URL) -> String? {
-        let payload = Self.makePayload(records: records, generation: generation ?? currentGeneration, masterArchive: masterArchive)
+    /// store's own. `basis` (GH #520): what catalog.sqlite held for each
+    /// rescued record, so Apply… can tell which the catalog changed since.
+    func recoveryCopyWriter(records: [VideoRecord], generation: Int? = nil,
+                            basis: CatalogRescueBasis? = nil) -> @Sendable (URL) -> String? {
+        var built = Self.makePayload(records: records, generation: generation ?? currentGeneration, masterArchive: masterArchive)
+        built.rescueBasis = basis
+        let payload = built
         return { url in
             do {
                 let encoder = JSONEncoder()
