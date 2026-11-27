@@ -238,6 +238,8 @@ Catalog schema and commit model for readers (replaces `database_design.md`; carr
 - (idea, Rick 2026-11-25, "I would LOVE LOVE that") **Automatic lip-sync check**: measure the audio/video offset of a talking face from the footage itself — e.g. SyncNet-style audio-visual sync models (mouth movement vs speech, offset in frames), run locally only (living family, rule 13). First use: the gate in auto-repair above ("sound and picture agree within N ms"); later a Check Media row. Research first: which local models exist, accuracy on SD/interlaced home video, cost per minute on the Ultra.
 - (idea, Rick 2026-11-25) **Catalog backup: show the off-site copy separately**: the backup button stays green from the automatic local backups, but only Rick knows when he last copied one to iCloud. Two indicators (or one larger button): local backup, and off-site/cloud copy — yellow after 14 days without an off-site copy, orange after 30 (red at 6 months probably overkill). Needs a way to know the off-site date (Rick marks it, or the app copies to iCloud itself; see the iCloud destination line).
 
+- (idea, Rick 2026-11-27) **Hallie answers provenance questions**: "show me media digitized in 2024", "what came off the Hi8 tapes" — from the digitizedOn / carrier / source assertions; missing values said as unknown.
+
 ## Parked from the issue triage of 2026-11-25 (each was a GH issue, closed into this line)
 - Dead-code sweep: TrimJob/TrimEngine, the two purge sheets, CatalogDuplicatesMenu, test-only files (#312).
 - Typecheck ratchet: fail a new function only after 2 consecutive nights over 500 ms, or with a margin (#246).
