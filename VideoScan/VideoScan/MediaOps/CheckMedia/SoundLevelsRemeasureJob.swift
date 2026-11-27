@@ -16,8 +16,12 @@
 //
 // Safety (data-risk: a catalog writer; follow-up Codex pass before merge):
 //   * READ-ONLY on media: ffprobe + an audio-only ffmpeg decode.
-//   * The ONLY write is the card's Sound row, `soundMeasuredSilent`, its
-//     `soundLevels` stamp and (when the row's verdict changed) the headline.
+//   * The ONLY writes are the card's Sound row, `soundMeasuredSilent`, its
+//     `soundLevels` stamp and (when the row's verdict changed) the headline —
+//     and, when the sound changes partway, a stored sound verdict "ok"
+//     withdrawn to "unverified" (GH #518) through `VerifyAudioJob.withdrawOK`,
+//     the one writer, in the same synchronous step and commit, one log line
+//     per copy.
 //   * Cards are stored per DIGEST (`media_checks`), so one content is ONE
 //     plan item. Its write is ONE synchronous main-actor step with no await
 //     inside (Codex closing pass, P0-1/P0-2): (a) find the content's copies
@@ -185,6 +189,8 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
         var cardsWritten = 0
         /// Of `changedMeanwhile`: contents whose copies' cards differ.
         var copiesDiffer = 0
+        /// Copies whose stored sound verdict "ok" was withdrawn (#518).
+        var verdictsWithdrawn = 0
         var withdrawn: Int { offline + notFound + changed + failed }
     }
 
@@ -443,23 +449,55 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
         case .unreadable(let why):
             return leftAlone(i, item, "the stored card for this content could not be read (\(why))")
         }
-        var before: [(VideoRecord, MediaReportCard, MediaReportCard)] = []
-        for copy in copies {
-            guard let old = copy.mediaReportCard else { continue }
-            let new = SoundLevelsRemeasureRules.rewrite(old, with: r, context: copy.soundPresenceContext)
-            guard new != old else { continue }
-            copy.mediaReportCard = new
-            before.append((copy, old, new))
-        }
+        let (before, withdrew) = Self.rewriteCopies(copies, with: r, at: now())
         if !before.isEmpty {
             guard commitRows(before.map(\.0.id), model: model) else {
+                // A withdrawal is NOT put back with the cards: in memory
+                // "unverified" never claims more than the store holds (the safe
+                // direction). If the store still says "ok", the card is set back
+                // to the stored one (`settle`), so the content stays a candidate
+                // and the next run withdraws again.
                 refusedCommit = RefusedCommit(item: item, copies: before)
                 return
             }
             savedCount += before.count
             totals.cardsWritten += before.count
         }
+        noteWithdrawals(withdrew, model: model)
         tally(SoundLevelsRemeasureRules.result(of: r), i, item, model: model)
+    }
+
+    /// One content's rewrite applied to every copy, in memory, synchronously:
+    /// the card as today's pass writes it and — when the sound changes
+    /// partway (GH #518) — a stored "ok" (only pre-#368 code could have
+    /// written it for this file) withdrawn to "unverified" through the one
+    /// writer, in the same step and so the same commit as the card. Returns
+    /// the copies that changed (with their card before and after) and those
+    /// whose verdict was withdrawn.
+    static func rewriteCopies(_ copies: [VideoRecord], with r: SoundLevelsRemeasureRules.Remeasured, at date: Date)
+        -> (written: [(VideoRecord, MediaReportCard, MediaReportCard)], withdrew: [VideoRecord]) {
+        let withdraw = SoundLevelsRemeasureRules.result(of: r) == .reconfigured
+        var written: [(VideoRecord, MediaReportCard, MediaReportCard)] = []
+        var withdrew: [VideoRecord] = []
+        for copy in copies {
+            guard let old = copy.mediaReportCard else { continue }
+            let new = SoundLevelsRemeasureRules.rewrite(old, with: r, context: copy.soundPresenceContext)
+            let statusWithdrawn = withdraw && VerifyAudioJob.withdrawOK(onto: copy, at: date)
+            if statusWithdrawn { withdrew.append(copy) }
+            guard new != old || statusWithdrawn else { continue }
+            copy.mediaReportCard = new
+            written.append((copy, old, new))
+        }
+        return (written, withdrew)
+    }
+
+    /// One line per copy whose verdict was withdrawn, through the one sink.
+    private func noteWithdrawals(_ withdrew: [VideoRecord], model: VideoScanModel) {
+        for copy in withdrew {
+            totals.verdictsWithdrawn += 1
+            note("\(copy.fullPath) — stored sound verdict \"ok\" withdrawn to \"unverified\": the sound changes partway, so the earlier check did not cover it (#518)",
+                 model: model)
+        }
     }
 
     /// Commit exactly these rows now, synchronously: the committer's scoped
@@ -643,6 +681,7 @@ final class SoundLevelsRemeasureJob: @MainActor MediaFileOperationJob {
         if t.changed > 0 { why.append("changed on disk \(t.changed)") }
         if t.failed > 0 { why.append("could not measure \(t.failed)") }
         parts.append("withdrawn \(t.withdrawn)" + (why.isEmpty ? "" : " (\(why.joined(separator: ", ")))"))
+        if t.verdictsWithdrawn > 0 { parts.append("sound verdict \"ok\" withdrawn \(t.verdictsWithdrawn)") }
         if t.copiesDiffer > 0 { parts.append("\(t.copiesDiffer) file\(t.copiesDiffer == 1 ? "" : "s") left alone: their copies' cards differ") }
         let meanwhile = t.changedMeanwhile - t.copiesDiffer
         if meanwhile > 0 { parts.append("changed meanwhile \(meanwhile)") }

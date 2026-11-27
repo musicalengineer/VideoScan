@@ -86,6 +86,12 @@
 -- row per digest current, no row = private (VideoScanCore/Store/CatalogPublicMarksSchema.swift,
 -- migration `v11_public_marks`, which raises catalog_state.schema_version to 16). ADDITIVE: one new
 -- table, one index, two append-only triggers; no earlier table, trigger, index or CHECK changed.
+-- Revision 17 (v1.16, 2026-11-27, GH #518 + orange rows; Rick approved one migration 2026-11-27): §21 —
+-- the stored audio verdict (`media_checks.status`, kind 'audio') gains 'attention' and 'unverified'
+-- (VideoScanCore/Store/CatalogAudioStatusSchema.swift, migration `v12_audio_status`, which raises
+-- catalog_state.schema_version to 17). ADDITIVE IN EFFECT: §6b's audio CHECK is widened IN PLACE
+-- here; SQLite changes a CHECK only by rebuilding the table, so the migration copies every row
+-- verbatim into the widened table (§21 says how); no value changes, no other object changes.
 --
 -- THE ONE RULE (§10): identity is the whole-file SHA-256 (64 lowercase hex), never the path and
 -- never the sampled `v1:` contentHash. Knowledge (people, dates, places, stars, captions,
@@ -914,7 +920,7 @@ CREATE TABLE media_checks (                -- Verify Audio / Verify Video / Chec
   checked_at  INTEGER,
   card        TEXT CHECK (card IS NULL OR json_valid(card)),   -- MediaReportCard, reportCard only
   provenance  TEXT NOT NULL DEFAULT 'bound' CHECK (provenance = 'bound'),   -- F9
-  CHECK (kind <> 'audio'      OR status IN ('ok','damaged')),
+  CHECK (kind <> 'audio'      OR status IN ('ok','damaged','attention','unverified')),   -- v1.16: 'attention' = reference movie / needs rebuilding (orange; refused like damaged); 'unverified' = an "ok" withdrawn by a re-measure
   CHECK (kind <> 'video'      OR status IN ('ok','warning','broken')),
   CHECK (kind <> 'reportCard' OR (status IN ('quick','full') AND card IS NOT NULL)),
   PRIMARY KEY (digest, kind)
@@ -1854,3 +1860,27 @@ CREATE TRIGGER public_marks_no_update BEFORE UPDATE ON public_marks
 BEGIN SELECT RAISE(ABORT, 'public_marks is append-only history'); END;
 CREATE TRIGGER public_marks_no_delete BEFORE DELETE ON public_marks
 BEGIN SELECT RAISE(ABORT, 'public_marks is append-only history'); END;
+-- ---------------------------------------------------------------------------------------------
+-- 21. STORED AUDIO STATUS (v1.16, 2026-11-27, migration `v12_audio_status`; Rick approved one
+--     additive migration 2026-11-27, DECISIONS "#518 + orange rows"). The audio verdict gains:
+--       'attention'  — a QuickTime reference movie, or sound that needs rebuilding (an old codec
+--                      ffmpeg decodes in full). Not usable as it stands: every gate (Promote's
+--                      readiness, Archive Angel, the keeper choice, Repair…) refuses it EXACTLY as
+--                      it refuses 'damaged'. Not damage: its row is orange, never red. Rows stored
+--                      as 'damaged' for these before v1.16 stay as stored until verified again.
+--       'unverified' — an "ok" stored by code older than the #368 fix, WITHDRAWN when a re-measure or
+--                      a new Verify finds the sound pass's filter graph rebuilt mid-stream (GH #518).
+--                      Read as never verified. A BOUND row, so it outranks the occurrence's imported
+--                      value in derived_unverified at every load (bound beats unverified, kind by
+--                      kind): deleting the row instead would let an imported "ok" come back.
+--     The CHECK is §6b's, widened in place. SQLite cannot alter a CHECK, so the migration rebuilds
+--     the table in one transaction (not a CREATE of a new object, so it is written here as a
+--     comment — §6b shows its result). Nothing references media_checks (no foreign key, trigger or
+--     view names it), so the rename rewrites nothing else:
+--       ALTER TABLE media_checks RENAME TO media_checks_v16;
+--       CREATE TABLE media_checks (… §6b …) STRICT, WITHOUT ROWID;
+--       INSERT INTO media_checks (digest, kind, status, note, checked_at, card, provenance)
+--         SELECT digest, kind, status, note, checked_at, card, provenance FROM media_checks_v16;
+--       -- the store compares count(*) before and after and throws (rolling back) on any difference
+--       DROP TABLE media_checks_v16;
+--       UPDATE catalog_state SET schema_version = 17 WHERE singleton = 1; PRAGMA user_version = 17.

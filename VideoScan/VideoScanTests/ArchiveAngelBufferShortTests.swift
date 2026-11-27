@@ -98,7 +98,8 @@ struct ArchiveAngelBalanceNoteTests {
         #expect(job.contains("standing: ArchiveReadiness.assess(record: rec).sound)"))
         #expect(!job.contains("!rec.audioVerifyStatus.isEmpty, let cached"), "no second copy of the rule in the job")
         let outcome = try String(contentsOf: dir.appendingPathComponent("VideoScan/ArchiveAngel/Prepare/ArchiveAngelAudioOutcome.swift"), encoding: .utf8)
-        #expect(outcome.contains("guard !storedStatus.isEmpty, standing != .notChecked, let cached else { return nil }"))
+        // A stored VERDICT (ok / damaged / attention) — "unverified" (#518) and unreadable words are not one.
+        #expect(outcome.contains("guard StoredAudioStatus(storedStatus).isMeasuredVerdict, standing != .notChecked, let cached else { return nil }"))
         #expect(!job.contains("note: \"Audio OK — nothing to fix\")"), "the bare fallthrough is gone")
         // Audit #5: a failed plan save stops the loop and success cannot overwrite it.
         #expect(job.contains("if stopRequested || planSaveFailed { break }"))

@@ -661,12 +661,16 @@ public class VideoRecord: Identifiable, Decodable {
     /// Swift's `Bool = false` ≈ C++ in-class member initializer.
     public var workspaceActive: Bool = false
 
-    /// Verify Audio verdict (GH #128): "" = never verified, "ok" = the
-    /// audio checked out (or had a non-damage finding — see the note),
-    /// "damaged" = the sound is not usable as it stands: real damage
-    /// (audio much shorter than video), a reference movie (its media is in
-    /// other files), or an old codec that needs rebuilding. All three
-    /// render RED in the catalog table; the note says which. Additive — legacy catalogs decode
+    /// Verify Audio verdict (GH #128; words = `CatalogDDL.AudioCheckStatus`,
+    /// read in the app only through `StoredAudioStatus`): "" = never
+    /// verified, "ok" = the audio checked out (or had a non-damage finding —
+    /// see the note), "damaged" = real damage (audio much shorter than
+    /// video; RED), "attention" = a reference movie or an old codec that
+    /// needs rebuilding (schema v1.16, 2026-11-27: ORANGE, refused by every
+    /// gate exactly like "damaged"; rows stored "damaged" for these before
+    /// then stay so until verified again), "unverified" = a pre-fix "ok"
+    /// withdrawn by a re-measure (GH #518; read as never verified — stored,
+    /// so the imported catalog.json value cannot come back). Additive — legacy catalogs decode
     /// as "" (never verified), and the DTO encodes the key only when
     /// non-empty, so old catalog.json files round-trip byte-identical
     /// (the tags/userNotes migration pattern, a769988).

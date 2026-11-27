@@ -475,7 +475,7 @@ struct VerifyAudioFindingsCompositionTests {
             findings: [.referenceMovie(referencedPaths: ["a"])],
             shape: shape(), balanceAnalysis: nil)
         #expect(!damaged.isHealthy)
-        #expect(damaged.persistedStatus == "damaged")
+        #expect(damaged.persistedStatus == "attention", "a reference movie: refused like damage, stored 'attention' (v1.16)")
         #expect(damaged.persistedNote == "Reference movie — the picture and sound are stored in other files, so this file alone does not play")
         #expect(damaged.levelsPass == .notNeeded && damaged.verdict == .damaged)
 

@@ -309,7 +309,7 @@ struct VerifyAudioSheet: View {
         // Headline when the verdict marks the record red, so the red
         // catalog row has an obvious source — in its own words: only real
         // damage says "damaged" (Rick 2026-11-25).
-        if diagnosis.persistedStatus == "damaged", let trouble = diagnosis.trouble {
+        if diagnosis.verdict == .damaged, let trouble = diagnosis.trouble {
             Label {
                 Text(trouble.sheetHeadline)
                     .font(.body.weight(.medium))

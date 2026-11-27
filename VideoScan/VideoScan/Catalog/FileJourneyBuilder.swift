@@ -312,7 +312,7 @@ enum FileJourneyBuilder {
                 : "The machine transcribed the speech."))
         }
         if let (at, status, note) = family.first({ r in
-            r.audioVerifyStatus.isEmpty ? nil : ok(r.audioVerifyDate).map { ($0, r.audioVerifyStatus, r.audioVerifyNote) }
+            r.audioVerifyStatus.isEmpty ? nil : ok(r.audioVerifyDate).map { ($0, StoredAudioStatus(r.audioVerifyStatus).journeyWord, r.audioVerifyNote) }
         }) {
             out.append(event(.analysis, at: at, verifyWords("Sound check", status: status, note: note)))
         }

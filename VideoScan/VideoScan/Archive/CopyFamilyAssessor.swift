@@ -450,7 +450,10 @@ enum CopyFamilyAssessor {
             if a.isArchiveCopy != b.isArchiveCopy { return a.isArchiveCopy }
             let aAnchor = anchors.contains(a.id), bAnchor = anchors.contains(b.id)
             if aAnchor != bAnchor { return !aAnchor }
-            let aAudio = a.audioVerifyStatus == "ok", bAudio = b.audioVerifyStatus == "ok"
+            // Only a stored "ok" counts ("unverified" — withdrawn, #518 — and
+            // anything unreadable are never verified; StoredAudioStatus).
+            let aAudio = StoredAudioStatus(a.audioVerifyStatus).isVerifiedOK
+            let bAudio = StoredAudioStatus(b.audioVerifyStatus).isVerifiedOK
             if aAudio != bAudio { return !aAudio }
             if provenIdentical {
                 if a.volumeScore != b.volumeScore { return a.volumeScore < b.volumeScore }
@@ -695,8 +698,9 @@ extension CopyFamilyAssessor {
         // Rick to fix audio he had ALREADY balanced).
         var audioNeedsWork = false
         let hasAudio = m.contains { $0.streamType == .videoAndAudio || $0.streamType == .audioOnly }
-        let verified = m.contains { $0.audioVerifyStatus == "ok" }
-        let damagedAudio = m.contains { $0.audioVerifyStatus == "damaged" }
+        let verified = m.contains { StoredAudioStatus($0.audioVerifyStatus).isVerifiedOK }
+        // "attention" (reference movie / needs rebuilding) is refused exactly as damage.
+        let damagedAudio = m.contains { StoredAudioStatus($0.audioVerifyStatus).refusesLikeDamage }
         let repaired = reps.first { $0.role == .repairedCopy }
         if let repaired {
             cautions.append("Audio was already repaired into \(repaired.instances.first?.filename ?? "a repaired copy") — promote it together with the original (the original keeps its history; the repaired copy is the one to watch).")

@@ -108,9 +108,9 @@ struct CatalogDatabaseInfoReaderTests {
 
         let after = CatalogDatabaseInfoReader.read(at: fixture.url)
         let (pragma, state) = try Self.pragmaAndState(fixture.url)
-        #expect(pragma == 16 && state == 16)   // 13 → v9 (14) → v10_sound_attempts (15) → v11_public_marks (16)
-        #expect(after.schemaVersion == .known(16))
-        #expect(after.userVersion == .known(16))
+        #expect(pragma == 17 && state == 17)   // 13 → v9 (14) → v10_sound_attempts (15) → v11_public_marks (16) → v12_audio_status (17)
+        #expect(after.schemaVersion == .known(17))
+        #expect(after.userVersion == .known(17))
         #expect(after.schemaLayout.value?.matches == true)
     }
 

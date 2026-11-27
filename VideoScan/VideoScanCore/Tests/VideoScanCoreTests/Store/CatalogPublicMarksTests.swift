@@ -308,8 +308,8 @@ struct CatalogPublicMarksTests {
              try Int.fetchOne(db, sql: "SELECT count(*) FROM provenance_roles"),
              try String.fetchAll(db, sql: "PRAGMA integrity_check"))
         }
-        #expect(after.0 == 16)
-        #expect(after.1 == 16)
+        #expect(after.0 == GRDBCatalogRepository.currentSchemaVersion)   // 16, then v12_audio_status → 17
+        #expect(after.1 == GRDBCatalogRepository.currentSchemaVersion)
         #expect(after.2 == 3)
         #expect(after.3 == 1, "the role Rick set is untouched")
         #expect(after.4 == ["ok"])
@@ -326,7 +326,8 @@ struct CatalogPublicMarksTests {
                 return String(describing: error)
             }
         }
-        #expect(words?.contains("schema version 16 is newer than this build understands (15) — open it with a newer VideoScan") == true, "\(words ?? "nil")")
+        // A fresh fixture is at the CURRENT version (17 since v12_audio_status); the gate's words are the same.
+        #expect(words?.contains("schema version \(GRDBCatalogRepository.currentSchemaVersion) is newer than this build understands (15) — open it with a newer VideoScan") == true, "\(words ?? "nil")")
     }
 
     // MARK: - Read-only

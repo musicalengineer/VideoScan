@@ -81,11 +81,14 @@ struct CatalogDataSchemaTests {
                                CatalogPendingRowsSchema.migrationID, CatalogCommitB22Schema.migrationID,
                                CatalogFolderKindSchema.migrationID, CatalogDecisionTablesSchema.migrationID,
                                CatalogProvenanceRolesSchema.migrationID, CatalogProvenanceAssertionsSchema.migrationID,
-                               CatalogSoundAttemptsSchema.migrationID, CatalogPublicMarksSchema.migrationID])
+                               CatalogSoundAttemptsSchema.migrationID, CatalogPublicMarksSchema.migrationID,
+                               CatalogAudioStatusSchema.migrationID])
         let version = try count(try rawQueue(fixture), "SELECT schema_version FROM catalog_state")
-        #expect(version == CatalogPublicMarksSchema.schemaVersion)
+        #expect(version == CatalogAudioStatusSchema.schemaVersion)
     }
 
+    /// `CatalogAudioStatusSchema` is not in the order: it REBUILDS §6b's
+    /// media_checks under the same name (v1.16), it adds no table.
     @Test func theSwiftSchemaIsSplitByTableInDocumentOrder() throws {
         let documented = try SchemaDocument.ddl().tableNames.filter { !["catalog_state", "generations", "generation_history"].contains($0) }
         let swiftOrder = (CatalogDataSchema.statements + CatalogLiveWritesSchema.statements + CatalogPendingRowsSchema.statements

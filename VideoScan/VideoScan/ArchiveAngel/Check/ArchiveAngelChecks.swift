@@ -460,10 +460,12 @@ final class ArchiveAngelChecks: ObservableObject {
     /// The finished job's word: what the record says now.
     nonisolated static func verdictOutcome(_ verdict: (status: String, note: String)?) -> ArchiveAngelCheckOutcome {
         guard let v = verdict else { return .failed(reason: "the record left the catalog") }
-        switch v.status {
-        case "ok": return .ok(note: v.note)
-        case "damaged": return .damaged(note: v.note)
-        default: return .failed(reason: "no verdict was recorded")
+        switch StoredAudioStatus(v.status) {
+        case .ok: return .ok(note: v.note)
+        // "attention" is refused exactly as damage; its note names its trouble.
+        case .damaged, .attention: return .damaged(note: v.note)
+        case .unverified: return .failed(reason: "the stored ok was withdrawn (the sound changes partway); no verdict was recorded")
+        case .neverVerified, .unreadable: return .failed(reason: "no verdict was recorded")
         }
     }
 

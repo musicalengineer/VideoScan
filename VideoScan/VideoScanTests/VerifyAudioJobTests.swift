@@ -96,7 +96,7 @@ struct VerifyAudioJobLogicTests {
             Issue.record("expected finished, got \(job.state)")
             return
         }
-        #expect(rec.audioVerifyStatus == "damaged")
+        #expect(rec.audioVerifyStatus == "attention", "a reference movie is stored 'attention' (v1.16): refused like damage, orange")
         #expect(summary == rec.audioVerifyNote,
                 "the MFO row summary carries the same verdict note the catalog persists")
         #expect(rec.audioVerifyNote == VerifyAudioRules.referenceMovieNote,
@@ -303,7 +303,7 @@ struct VerifyAudioCenterDispatchTests {
 
         #expect(center.jobs.compactMap { $0 as? RebuildAudioJob }.isEmpty,
                 "reference-movie damage must not chain a rebuild — there is no essence to repair")
-        #expect(rec.audioVerifyStatus == "damaged", "the verdict still persists")
+        #expect(rec.audioVerifyStatus == "attention", "the verdict still persists (a reference movie: 'attention', v1.16)")
     }
 }
 

@@ -178,7 +178,7 @@ enum ArchiveAngelStatusWords {
         // tracks") reaches us as .verifiedProblem(note) but IS verified —
         // Prepare skips it ("Already verified: ok"), so calling it a need
         // left the file stuck. The sheet shows the note as information.
-        if f.audioVerifyStatus == "damaged" {
+        if StoredAudioStatus(f.audioVerifyStatus).refusesLikeDamage {   // "damaged" or "attention"
             out.append(.audioRepair(note: f.audioVerifyNote))
         } else {
             switch f.soundStanding {
