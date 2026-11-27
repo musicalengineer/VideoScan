@@ -80,6 +80,46 @@ struct ProvenanceFieldsLogicTests {
         #expect(ProvenanceFields.current(fromRowsOfOneSubject: confirmed).carrier == "VHS")
     }
 
+    // Codex round 2 (2026-11-27) P0/P1: ONE reading of a content's carrier for
+    // every reader — Rick's newest row decides; his clear rejects the FIELD,
+    // so no machine value comes back after it (here and in the estimate).
+    @Test("P1 (Codex r2): inferred VHS → Rick confirms → corrects → clears ⇒ the tape is unknown in BOTH readings, the badge's too")
+    func clearAfterCorrectionLeavesUnknownEverywhere() {
+        let signer = ProvenanceEstimateRule.signer
+        let rows = [row(1, "role", "master", state: "inferred", by: signer), row(2, "carrier", "VHS", state: "inferred", by: signer),
+                    row(3, "role", "master"), row(4, "carrier", "VHS"),
+                    row(5, "carrier", "Cape 1994", state: "corrected"), row(6, "carrier", "Cape 1994", state: "rejected")]
+        #expect(ProvenanceFields.current(fromRowsOfOneSubject: rows).carrier == nil)
+        let estimate = ProvenanceResolver.estimate(fromRowsOfOneSubject: rows.shuffled())
+        #expect(estimate?.role == .master)
+        #expect(estimate?.carrier == nil, "the machine's older VHS never comes back after Rick cleared the tape")
+        #expect(estimate?.isVHSMaster == false, "no tape glyph")
+        // A later machine proposal of another value does not override the clear either.
+        let reproposed = rows + [row(7, "carrier", "Hi8", state: "inferred", by: signer)]
+        #expect(ProvenanceResolver.estimate(fromRowsOfOneSubject: reproposed)?.carrier == nil)
+        #expect(ProvenanceFields.current(fromRowsOfOneSubject: reproposed).carrier == nil)
+        // Rick typing again is a new decision: it stands in both.
+        let retyped = reproposed + [row(8, "carrier", "VHS")]
+        #expect(ProvenanceResolver.estimate(fromRowsOfOneSubject: retyped)?.carrier == "VHS")
+        #expect(ProvenanceFields.current(fromRowsOfOneSubject: retyped).carrier == "VHS")
+    }
+
+    @Test("P0 (Codex r2): confirmed VHS → cleared ⇒ unknown in both readings; a role rejection still leaves the machine's next role (unchanged)")
+    func clearOfConfirmedCarrier() {
+        let signer = ProvenanceEstimateRule.signer
+        let rows = [row(1, "role", "master", state: "inferred", by: signer), row(2, "carrier", "VHS", state: "inferred", by: signer),
+                    row(3, "carrier", "VHS"), row(4, "carrier", "VHS", state: "rejected")]
+        #expect(ProvenanceFields.current(fromRowsOfOneSubject: rows).carrier == nil)
+        #expect(ProvenanceResolver.estimate(fromRowsOfOneSubject: rows)?.carrier == nil)
+        // The one reading: wherever Rick decided, both readers agree on the carrier.
+        for cut in 3...rows.count {
+            let prefix = Array(rows.prefix(cut))
+            let fields = ProvenanceFields.current(fromRowsOfOneSubject: prefix).carrier
+            let resolver = ProvenanceResolver.estimate(fromRowsOfOneSubject: prefix)?.carrier
+            #expect(fields == resolver, "cut \(cut)")
+        }
+    }
+
     @Test("ISOLATION: rows of other fields, other writers and unknown states change nothing")
     func poisonedRowsAreIgnored() {
         let rows = [row(1, "role", "master"), row(2, "era.fused", "1990-1995", state: "inferred", by: "machine:era@r1"),
@@ -307,9 +347,35 @@ struct NewContentFinderTests {
     @Test("LOGIC: re-seen and moved files are not strangers; a new path is")
     func strangers() {
         let reseen = record("/V/a.mov"), moved = record("/V/renamed.mov"), new = record("/V/new.mov")
-        let ids = NewContentFinder.strangers(targetRecords: [reseen, moved, new], existingPaths: ["/V/a.mov", "/V/b.mov"],
-                                             adoptedNewPaths: ["/V/renamed.mov"])
-        #expect(ids == [new.id])
+        let found = NewContentFinder.strangers(targetRecords: [reseen, moved, new], existingPaths: ["/V/a.mov", "/V/b.mov"],
+                                               adoptedNewPaths: ["/V/renamed.mov"])
+        #expect(found.ids == [new.id])
+    }
+
+    // Codex round 2 (2026-11-27) P2: path membership must not hide new bytes.
+    @Test("P2 (Codex r2): new bytes at a known path are offered once hashed — decided by digest novelty; a touched file with the same bytes is not")
+    func replacedBytesAtTheSamePath() {
+        let old = record("/V/clip.mov", digest: hex(1), contentHash: "v1:old")
+        let changed = record("/V/clip.mov", contentHash: "v1:new")             // the stamp moved: no hash kept
+        let keptHash = record("/V/same.mov", digest: hex(2), contentHash: "v1:same")
+        let oldSame = record("/V/same.mov", digest: hex(2), contentHash: "v1:same")
+        let neverHashedOld = record("/V/n.mov", contentHash: "v1:n-old"), neverHashedNew = record("/V/n.mov", contentHash: "v1:n-new")
+        let sampledSameOld = record("/V/s.mov", contentHash: "v1:s"), sampledSameNew = record("/V/s.mov", contentHash: "v1:s")
+        let found = NewContentFinder.strangers(targetRecords: [changed, keptHash, neverHashedNew, sampledSameNew],
+                                               existingPaths: ["/V/clip.mov", "/V/same.mov", "/V/n.mov", "/V/s.mov"],
+                                               adoptedNewPaths: [], replaced: [old, oldSame, neverHashedOld, sampledSameOld])
+        #expect(found.ids == [changed.id, neverHashedNew.id], "a kept hash and an unchanged sample are the same file")
+        #expect(found.priorDigests == [hex(1)], "what the path held before is known content")
+
+        // After Full Hashes: genuinely new bytes are offered …
+        changed.contentFixity = record("/x", digest: hex(9)).contentFixity
+        var out = NewContentFinder.evaluate(records: [changed, keptHash], pending: [changed.id], offered: found.priorDigests)
+        #expect(out.newContents.map(\.digest) == [hex(9)])
+        // … the same bytes under a moved stamp are not.
+        changed.contentFixity = record("/x", digest: hex(1)).contentFixity
+        out = NewContentFinder.evaluate(records: [changed, keptHash], pending: [changed.id], offered: found.priorDigests)
+        #expect(out.newContents.isEmpty)
+        #expect(out.copiesOfKnown == 1)
     }
 }
 

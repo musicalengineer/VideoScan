@@ -22,7 +22,15 @@
 // catalog.sqlite, every time the selection or `revision` changes. `byDigest`
 // is a projection for the Catalog search and the review list's first paint,
 // loaded when catalog.sqlite becomes the authority and corrected from each
-// save's own read-back.
+// save's own read-back. A load that a save overtakes keeps its snapshot and
+// lays the save's read-back over it.
+//
+// The shared `carrier` (the tape here, the estimate's "VHS" there) has ONE
+// reading (Core ProvenanceFields.rickDecision): Rick's newest row decides and
+// his clear leaves the field unknown everywhere. Every save posts the
+// content's read-back on the session's ProvenanceAssertionsFeed; the
+// estimates fold it (their projection, Inspector line and glyph re-read), and
+// this store folds Confirm Provenance's posts the same way.
 //
 // Search: each content's words ("digitized 2024-07", "tape …", "source …")
 // reach the Catalog search index as a layer of its own beside the machine
@@ -61,6 +69,39 @@ enum ProvenanceFieldsWords {
     static let skipButton = "Skip"
 }
 
+/// One content's `provenance_assertions` rows changed: the writer posts the
+/// content's whole read-back (taken inside its own transaction) and every
+/// listener folds what it shows from those rows — synchronously, on the main
+/// actor, so no reader shows a withdrawn value after the save returns.
+/// THE one notification the provenance stores share (Codex round 2,
+/// 2026-11-27, P0): the session's committer owns one; a listener is held
+/// weakly and is never called for its own post.
+/// (For Rick: an observer list — std::vector<std::pair<std::weak_ptr<T>, std::function<…>>>.)
+@MainActor
+final class ProvenanceAssertionsFeed {
+
+    typealias Listener = (_ digest: String, _ rows: [CatalogRow.ProvenanceAssertionReading]) -> Void
+
+    private struct Entry {
+        weak var owner: AnyObject?
+        let listener: Listener
+    }
+
+    private var entries: [Entry] = []
+
+    /// `owner` hears every later post but its own; listening again replaces its listener.
+    func listen(_ owner: AnyObject, _ listener: @escaping Listener) {
+        entries.removeAll { $0.owner == nil || $0.owner === owner }
+        entries.append(Entry(owner: owner, listener: listener))
+    }
+
+    /// `digest`'s rows are now `rows` (the poster's read-back).
+    func changed(digest: String, rows: [CatalogRow.ProvenanceAssertionReading], by poster: AnyObject) {
+        entries.removeAll { $0.owner == nil }
+        for entry in entries where entry.owner !== poster { entry.listener(digest, rows) }
+    }
+}
+
 /// The catalog side of the store: reads through the repository, writes
 /// through the session's committer (the one door). Mirrors
 /// ProvenanceEstimateCatalogBacking.
@@ -72,10 +113,14 @@ final class ProvenanceFieldsCatalogBacking {
     let repository: any CatalogRepository
     private let commit: Commit
     let writeRefusal: () -> String?
+    /// The session's one rows-changed signal (shared with the estimates).
+    let feed: ProvenanceAssertionsFeed
 
-    init(repository: any CatalogRepository, writeRefusal: @escaping () -> String?, commit: @escaping Commit) {
+    init(repository: any CatalogRepository, writeRefusal: @escaping () -> String?,
+         feed: ProvenanceAssertionsFeed = ProvenanceAssertionsFeed(), commit: @escaping Commit) {
         self.repository = repository
         self.writeRefusal = writeRefusal
+        self.feed = feed
         self.commit = commit
     }
 
@@ -83,7 +128,7 @@ final class ProvenanceFieldsCatalogBacking {
         self.init(repository: committer.repository, writeRefusal: { [weak committer] in
             guard let committer else { return "the catalog is closed" }
             return committer.sideTableWriteRefusal
-        }, commit: { [weak committer] what, body in
+        }, feed: committer.provenanceAssertions, commit: { [weak committer] what, body in
             guard let committer else { return "the catalog is closed" }
             return committer.commitSideTables(what, via: .provenanceFields, body)
         })
@@ -133,8 +178,13 @@ final class ProvenanceFieldsStore: ObservableObject {
     private var records: () -> [VideoRecord] = { [] }
     private var mutations: AnyCancellable?
     private var pendingJoin: Task<Void, Never>?
-    /// Bumped by every save and attach: a load snapshot begun before is stale.
+    /// Bumped by every attach: a load snapshot begun before belongs to another catalog.
     private var epoch = 0
+    /// Contents whose values changed (a save, another store's post) while a
+    /// load was reading: their read-back is newer than the snapshot, so it is
+    /// laid over it — the rest of the snapshot is kept (Codex round 2, P2).
+    private var changedDuringLoad: [String: ProvenanceFieldValues] = [:]
+    private var loadsInFlight = 0
 
     // MARK: Attach / load
 
@@ -142,12 +192,28 @@ final class ProvenanceFieldsStore: ObservableObject {
         self.backing = backing
         self.records = records
         byDigest = [:]
+        changedDuringLoad = [:]
         epoch &+= 1
         revision &+= 1
         // A path change (rescan, relocate) moves the search words with it.
         mutations = NotificationCenter.default.publisher(for: .videoScanCatalogMutated)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in MainActor.assumeIsolated { self?.scheduleSearchJoin() } }
+        // Another writer of these rows (Confirm Provenance writes Rick's
+        // carrier): fold its read-back so the tape shown is the table's.
+        backing.feed.listen(self) { [weak self] digest, rows in
+            guard let self else { return }
+            self.adopt(digest, ProvenanceFields.current(fromRowsOfOneSubject: rows))
+            self.scheduleSearchJoin()
+        }
+    }
+
+    /// One content's values are now `values` (a read-back): the projection,
+    /// the overlay of a load in flight, the readers' revision.
+    private func adopt(_ key: String, _ values: ProvenanceFieldValues) {
+        if values.isEmpty { byDigest.removeValue(forKey: key) } else { byDigest[key] = values }
+        if loadsInFlight > 0 { changedDuringLoad[key] = values }
+        revision &+= 1
     }
 
     /// Read every content's fields off the main actor and replace the map.
@@ -156,9 +222,19 @@ final class ProvenanceFieldsStore: ObservableObject {
     func load() async -> String? {
         guard let backing else { return "the catalog is not open" }
         let started = epoch
+        loadsInFlight += 1
+        defer {
+            loadsInFlight -= 1
+            if loadsInFlight == 0 { changedDuringLoad = [:] }
+        }
         do {
-            let all = try await backing.repository.read { try ProvenanceFields.all(in: $0) }
-            guard started == epoch else { return nil }      // a save landed meanwhile: its read-back is newer
+            var all = try await backing.repository.read { try ProvenanceFields.all(in: $0) }
+            guard started == epoch else { return nil }      // attached to another catalog meanwhile
+            // A save (or another store's post) landed meanwhile: its read-back
+            // is newer for ITS content; the rest of the snapshot stands.
+            for (key, values) in changedDuringLoad {
+                if values.isEmpty { all.removeValue(forKey: key) } else { all[key] = values }
+            }
             byDigest = all
             revision &+= 1
             publishSearch()
@@ -211,6 +287,7 @@ final class ProvenanceFieldsStore: ObservableObject {
         let seconds = Int64(now.timeIntervalSince1970.rounded(.down))
         var changed: [String] = []
         var after = ProvenanceFieldValues()
+        var readBack: [CatalogRow.ProvenanceAssertionReading] = []
         let refusal = backing.write("save provenance fields for \(scope)") { tx in
             changed = []
             let rows = try tx.provenanceAssertions(subjectKind: ProvenanceAssertionSubject.content, subjectID: key)
@@ -225,13 +302,14 @@ final class ProvenanceFieldsStore: ObservableObject {
                 case .storeRefused(let words): throw ProvenanceFieldNotLanded(description: "the catalog refused the \(draft.field) row (\(words))")
                 }
             }
-            after = ProvenanceFields.current(fromRowsOfOneSubject:
-                try tx.provenanceAssertions(subjectKind: ProvenanceAssertionSubject.content, subjectID: key))
+            readBack = try tx.provenanceAssertions(subjectKind: ProvenanceAssertionSubject.content, subjectID: key)
+            after = ProvenanceFields.current(fromRowsOfOneSubject: readBack)
         }
         if let refusal { return refuse(refusal, scope) }
-        epoch &+= 1
-        if after.isEmpty { byDigest.removeValue(forKey: key) } else { byDigest[key] = after }
-        revision &+= 1
+        adopt(key, after)
+        // Every other reader of these rows — the estimate's carrier, its
+        // Inspector line, the archive glyph — folds the same read-back now.
+        if !changed.isEmpty { backing.feed.changed(digest: key, rows: readBack, by: self) }
         guard !changed.isEmpty else {
             note("OUTCOME save provenance fields for \(scope) — nothing changed")
             return .unchanged
@@ -275,7 +353,9 @@ final class ProvenanceFieldsStore: ObservableObject {
         guard !values.isEmpty else { return [:] }
         var terms: [String: CatalogSearchIndex.ObservationTerms] = [:]
         var made: [String: CatalogSearchIndex.ObservationTerms] = [:]
-        for rec in records {
+        // LIVE records only: a retained history row at the same path (a file
+        // replaced there) never lends its words to the live one (Codex round 2).
+        for rec in records where rec.removal == nil {
             // Cheap probe first (the fixities' own digests); the identity rule only on a hit.
             let hit = (rec.contentFixity.map { values[$0.digest.lowercased()] != nil } ?? false)
                 || (rec.archiveFixity.map { values[$0.digest.lowercased()] != nil } ?? false)

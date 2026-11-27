@@ -117,14 +117,47 @@ public enum NewContentFinder {
         return nil
     }
 
-    /// The scan merge's genuine strangers: fresh records at a path no record
-    /// under the root held before, and not a moved file's new path (that one
-    /// keeps its old record). `existingPaths` = the paths under the root
-    /// before the merge; `adoptedNewPaths` = the move matcher's new paths.
-    public static func strangers(targetRecords: [VideoRecord], existingPaths: Set<String>,
-                                 adoptedNewPaths: Set<String>) -> [UUID] {
-        targetRecords.compactMap { rec in
-            existingPaths.contains(rec.fullPath) || adoptedNewPaths.contains(rec.fullPath) ? nil : rec.id
+    /// What a scan merge brought in: the record ids to wait for a full hash,
+    /// and the digests the re-seen paths held before (known content — a file
+    /// whose stamp moved but whose bytes did not is never "new").
+    public struct Strangers: Equatable, Sendable {
+        public var ids: [UUID] = []
+        public var priorDigests: Set<String> = []
+
+        public init(ids: [UUID] = [], priorDigests: Set<String> = []) {
+            self.ids = ids
+            self.priorDigests = priorDigests
         }
+    }
+
+    /// The scan merge's arrivals, decided by DIGEST NOVELTY later, never by
+    /// path alone (Codex round 2, 2026-11-27):
+    ///   * a fresh record at a path no record under the root held before,
+    ///     not a moved file's new path (that one keeps its old record) → waits;
+    ///   * a fresh record at a RE-SEEN path that did not keep the old record's
+    ///     whole-file hash (its stamp moved) → waits too when its bytes may
+    ///     differ: the old record had a digest (that digest becomes known
+    ///     content, so the same bytes settle quietly once hashed), or both
+    ///     have a sampled identity and they differ. With nothing to compare
+    ///     it is not called new (refuse rather than guess).
+    /// `existingPaths` = the paths under the root before the merge;
+    /// `adoptedNewPaths` = the move matcher's new paths; `replaced` = the
+    /// records the merge took out (a re-seen path's old record).
+    public static func strangers(targetRecords: [VideoRecord], existingPaths: Set<String>,
+                                 adoptedNewPaths: Set<String>, replaced: [VideoRecord] = []) -> Strangers {
+        var oldAt: [String: VideoRecord] = [:]
+        for rec in replaced where oldAt[rec.fullPath] == nil || rec.removal == nil { oldAt[rec.fullPath] = rec }
+        var out = Strangers()
+        for rec in targetRecords where !adoptedNewPaths.contains(rec.fullPath) {
+            guard existingPaths.contains(rec.fullPath) else { out.ids.append(rec.id); continue }
+            guard CatalogCommit.digest(of: rec) == nil, let old = oldAt[rec.fullPath] else { continue }
+            if let prior = CatalogCommit.digest(of: old) {
+                out.ids.append(rec.id)
+                out.priorDigests.insert(prior)
+            } else if let was = sampledKey(old), let now = sampledKey(rec), was != now {
+                out.ids.append(rec.id)
+            }
+        }
+        return out
     }
 }

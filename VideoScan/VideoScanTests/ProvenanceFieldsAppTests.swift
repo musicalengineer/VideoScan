@@ -32,7 +32,9 @@
 //              evaluates after its save; the flip attaches the stores.
 //
 // Suites (filter by SUITE): ProvenanceFieldsStoreAppTests · ProvenanceFieldsSearchAppTests ·
-// NewMediaProvenanceAppTests · NewMediaProvenanceScaleAppTests · ProvenanceFieldsSensorAppTests
+// NewMediaProvenanceAppTests · NewMediaProvenanceScaleAppTests · ProvenanceFieldsSensorAppTests ·
+// ProvenanceFieldsRound2AppTests (Codex round 2: one carrier reading for every reader; history rows
+// out of search; resumed Full Hashes; notice ids across a rescan; new bytes at a known path; load vs save)
 // Synthetic names only.
 
 import CryptoKit
@@ -339,9 +341,11 @@ private func scan(_ model: VideoScanModel, _ dir: URL, previous: [CatalogScanTar
 private func hashAll(_ model: VideoScanModel) {
     for rec in model.records where rec.contentFixity == nil {
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: rec.fullPath)) else { continue }
+        // The file's REAL stamp, hashed NOW (as the job records it): an unchanged file keeps its hash across a rescan.
         rec.contentFixity = ContentFixity(digest: sha(data), byteCount: Int64(data.count),
-                                          stamp: FileIdentityStamp(device: 1, inode: 1, size: Int64(data.count), mtimeNs: 1),
-                                          computedAt: savedAt)
+                                          stamp: FileIdentityStamp.capture(path: rec.fullPath)
+                                              ?? FileIdentityStamp(device: 1, inode: 1, size: Int64(data.count), mtimeNs: 1),
+                                          computedAt: Date().addingTimeInterval(2))
     }
 }
 
@@ -379,12 +383,17 @@ struct NewMediaProvenanceAppTests {
         #expect(store.pending.isEmpty)
 
         // NOT SHOWN for a scan with no new media: a rescan re-sees everything.
+        // (A re-seen file whose stored hash its stamp no longer vouches for —
+        // the rename moved test_a's ctime — waits for its hash and then
+        // settles quietly by digest: Codex round 2, digest novelty, not path.)
         store.skip()
         _ = await scan(model, dir, previous: targets)
-        #expect(store.pending.isEmpty)
+        let renamed = try #require(model.records.first { $0.filename == "test_a_renamed.mov" && $0.removal == nil })
+        #expect(store.pending.isSubset(of: [renamed.id]), "only a file whose hash must be taken again may wait")
         hashAll(model)
         store.evaluate(records: model.records)
         #expect(store.notice == nil, "no notice for zero new files")
+        #expect(store.pending.isEmpty)
     }
 
     @Test("a re-seen file that was still waiting keeps waiting under its fresh record")
@@ -540,6 +549,199 @@ struct NewMediaProvenanceScaleAppTests {
     }
 }
 
+// MARK: - Codex round 2 (2026-11-27): red first, each with Codex's input
+
+/// Seed the provenance estimate's machine rows (inferred master + VHS) for `digest`.
+@MainActor
+private func seedMachineVHS(_ model: VideoScanModel, _ digest: String) throws {
+    let committer = try #require(model.catalogCutover.committer)
+    let drafts = [("role", "master"), ("carrier", "VHS")].map { field, value in
+        CatalogRow.ProvenanceAssertionDraft(subjectKind: "content", subjectID: digest, field: field, value: value,
+                                            state: "inferred", by: ProvenanceEstimateRule.signer, at: 1,
+                                            confidence: 0.9, evidenceJSON: "{}")
+    }
+    #expect(committer.commitSideTables("seed a machine estimate", via: .provenanceEstimates) { tx in
+        for draft in drafts { _ = try tx.appendProvenanceAssertion(draft) }
+    } == nil)
+}
+
+/// Every reader of the content's carrier: the estimate's projection (the
+/// archive badge), the badge itself, the estimate's Inspector line read from
+/// catalog.sqlite, the fields' projection and the fields' Inspector reading.
+@MainActor
+private func carrierEverywhere(_ model: VideoScanModel, _ digest: String) async -> [String: String] {
+    var out: [String: String] = [:]
+    let estimates = model.provenanceEstimates, roles = model.provenanceRoles
+    out["estimate projection"] = estimates.estimate(of: digest)?.carrier ?? "unknown"
+    let badge = ProvenanceEstimateMark.judged(estimates.estimate(of: digest), rickRole: roles.role(of: digest), captured: nil,
+                                              symbol: ProvenanceEstimateMark.tapeSymbol)
+    out["badge"] = badge?.help ?? "none"
+    let reading = await estimates.readCurrent(digest: digest)
+    out["estimate inspector"] = ProvenanceEstimateMark.inspectorLine(digest: digest, reading: reading, rickRole: roles.role(of: digest),
+                                                                     year: nil, captured: nil, technical: nil)?.text ?? "none"
+    out["fields projection"] = model.provenanceFields.values(of: digest).carrier ?? "unknown"
+    if case .values(_, let v) = await model.provenanceFields.readCurrent(digest: digest) { out["fields inspector"] = v.carrier ?? "unknown" }
+    return out
+}
+
+@Suite("Provenance fields — Codex round 2 (one carrier reading, search, new media, load)")
+@MainActor
+struct ProvenanceFieldsRound2AppTests {
+
+    @Test("P0: confirmed VHS → Rick clears the tape ⇒ unknown EVERYWHERE — the estimate's line, its projection and the archive badge too; also after relaunch")
+    func clearOfConfirmedVHSReachesEveryReader() async throws {
+        let scene = try CutoverScene.make("pf_r2_p0"); defer { scene.cleanup() }
+        let ids = try await launch(scene)
+        try seedMachineVHS(scene.model, ids.healthy)
+        #expect(await scene.model.provenanceEstimates.load() == nil)
+        #expect(await scene.model.provenanceRoles.load() == nil)
+        #expect(scene.model.provenanceEstimates.confirm(digests: [ids.healthy], now: savedAt) == .confirmed(contents: 1, skipped: 0))
+        #expect(scene.model.provenanceFields.values(of: ids.healthy).carrier == "VHS", "the fields hear Confirm's carrier row")
+        let fieldsRevision = scene.model.provenanceFields.revision
+        let estimatesRevision = scene.model.provenanceEstimates.revision
+        #expect(scene.model.provenanceFields.save(digest: ids.healthy, typed: ProvenanceFieldValues(), enteredIn: "inspector",
+                                                  now: savedAt.addingTimeInterval(60)) == .saved(changed: 1))
+        #expect(scene.model.provenanceEstimates.revision > estimatesRevision, "the estimate's readers re-read (Inspector line, badge)")
+        #expect(scene.model.provenanceFields.revision > fieldsRevision)
+        let now = await carrierEverywhere(scene.model, ids.healthy)
+        #expect(now["estimate projection"] == "unknown", "\(now)")
+        #expect(now["badge"] == "none", "\(now)")
+        #expect(now["estimate inspector"].map { !$0.contains("VHS") } == true, "\(now)")
+        #expect(now["fields projection"] == "unknown" && now["fields inspector"] == "unknown", "\(now)")
+
+        let fresh = try await relaunch(scene, from: scene.model)
+        #expect(await fresh.provenanceEstimates.load() == nil)
+        #expect(await fresh.provenanceRoles.load() == nil)
+        let after = await carrierEverywhere(fresh, ids.healthy)
+        #expect(after["estimate projection"] == "unknown" && after["badge"] == "none", "\(after)")
+        #expect(after["estimate inspector"].map { !$0.contains("VHS") } == true, "\(after)")
+        if let c = fresh.catalogCutover.committer { await c.repository.close() }
+    }
+
+    @Test("P1: inferred VHS → confirm → correct to 'Cape 1994' → clear ⇒ unknown everywhere, never the machine's VHS again; also after relaunch")
+    func clearAfterCorrectionNeverResurrects() async throws {
+        let scene = try CutoverScene.make("pf_r2_p1"); defer { scene.cleanup() }
+        let ids = try await launch(scene)
+        try seedMachineVHS(scene.model, ids.healthy)
+        #expect(await scene.model.provenanceEstimates.load() == nil)
+        #expect(await scene.model.provenanceRoles.load() == nil)
+        #expect(scene.model.provenanceEstimates.confirm(digests: [ids.healthy], now: savedAt) == .confirmed(contents: 1, skipped: 0))
+        let fields = scene.model.provenanceFields
+        #expect(fields.save(digest: ids.healthy, typed: ProvenanceFieldValues(carrier: "Cape 1994"), enteredIn: "inspector",
+                            now: savedAt.addingTimeInterval(60)) == .saved(changed: 1))
+        let corrected = await carrierEverywhere(scene.model, ids.healthy)
+        #expect(corrected["estimate projection"] == "Cape 1994" && corrected["badge"] == "none", "\(corrected)")
+        #expect(corrected["estimate inspector"].map { $0.contains("Cape 1994") } == true, "\(corrected)")
+        #expect(fields.save(digest: ids.healthy, typed: ProvenanceFieldValues(), enteredIn: "inspector",
+                            now: savedAt.addingTimeInterval(120)) == .saved(changed: 1))
+        let cleared = await carrierEverywhere(scene.model, ids.healthy)
+        #expect(Set(cleared.filter { $0.key.contains("projection") || $0.key == "fields inspector" }.values) == ["unknown"], "\(cleared)")
+        #expect(cleared["badge"] == "none", "\(cleared)")
+        #expect(cleared["estimate inspector"].map { !$0.contains("VHS") && !$0.contains("Cape") } == true, "\(cleared)")
+
+        let fresh = try await relaunch(scene, from: scene.model)
+        #expect(await fresh.provenanceEstimates.load() == nil)
+        #expect(await fresh.provenanceRoles.load() == nil)
+        let after = await carrierEverywhere(fresh, ids.healthy)
+        #expect(Set(after.filter { $0.key.contains("projection") || $0.key == "fields inspector" }.values) == ["unknown"], "\(after)")
+        #expect(after["badge"] == "none", "\(after)")
+        #expect(after["estimate inspector"].map { !$0.contains("VHS") } == true, "\(after)")
+        if let c = fresh.catalogCutover.committer { await c.repository.close() }
+    }
+
+    @Test("P2 search: a retained history row's provenance words never reach a LIVE row at the same path")
+    func historyRowWordsStayOut() {
+        let history = VideoRecord(), live = VideoRecord()
+        for r in [history, live] { r.fullPath = "/V/clip.mov"; r.filename = "clip.mov"; r.sizeBytes = 64 }
+        history.contentFixity = ContentFixity(digest: hex(1), byteCount: 64, stamp: FileIdentityStamp(device: 1, inode: 1, size: 64, mtimeNs: 1), computedAt: savedAt)
+        history.removal = .removedFromCatalog(at: savedAt, reason: .userRemoved)
+        live.contentFixity = ContentFixity(digest: hex(2), byteCount: 64, stamp: FileIdentityStamp(device: 1, inode: 2, size: 64, mtimeNs: 2), computedAt: savedAt)
+        let values = [hex(1): ProvenanceFieldValues(carrier: "Cape 1994")]
+        #expect(ProvenanceFieldsStore.join(records: [history, live], values: values)["/V/clip.mov"] == nil)
+        #expect(ProvenanceFieldsStore.join(records: [live, history], values: values)["/V/clip.mov"] == nil, "order does not matter")
+        let both = [hex(1): ProvenanceFieldValues(carrier: "Cape 1994"), hex(2): ProvenanceFieldValues(carrier: "Tape 2")]
+        #expect(ProvenanceFieldsStore.join(records: [live, history], values: both)["/V/clip.mov"]?.words
+                == CatalogSearchIndex.ObservationTerms(words: ["tape Tape 2"], years: nil).words)
+    }
+
+    @Test("P2 resume: Full Hashes run after a crash between the hash checkpoint and the evaluation still offers the already-hashed new file")
+    func resumedJobEvaluatesAlreadyHashedFiles() async throws {
+        let sb = try ShowAgainSandbox.make("newmedia_resume"); defer { sb.cleanup() }
+        let fresh = try sb.record("fresh_r.mov", bytes: 5_000, stage: .none)
+        let data = try Data(contentsOf: URL(fileURLWithPath: fresh.fullPath))
+        // The checkpoint landed (the digest is on the record), then the app died before `evaluate`.
+        fresh.contentFixity = ContentFixity(digest: sha(data), byteCount: Int64(data.count),
+                                            stamp: FileIdentityStamp.capture(path: fresh.fullPath) ?? FileIdentityStamp(device: 1, inode: 1, size: 5_000, mtimeNs: 1),
+                                            computedAt: savedAt)
+        let store = sb.model.newMediaProvenance
+        store.register([fresh.id], why: "scan of test")
+        let job = FullHashBackfillJob(model: sb.model, marker: nil)
+        job.volumeOnline = { _ in true }
+        job.tickMilliseconds = 20
+        job.start()
+        await job.task?.value
+        #expect(store.notice?.contents.first?.recordIDs == [fresh.id], "the waiting file is decided on resume")
+        #expect(store.pending.isEmpty)
+    }
+
+    @Test("P2 rescan: an open notice's record ids follow a rescan's replacements, so Review still finds the file")
+    func noticeFollowsReplacements() {
+        let a = VideoRecord()
+        a.fullPath = "/V/test_a.mov"; a.filename = "test_a.mov"; a.sizeBytes = 64
+        a.contentFixity = ContentFixity(digest: hex(1), byteCount: 64, stamp: FileIdentityStamp(device: 1, inode: 1, size: 64, mtimeNs: 1), computedAt: savedAt)
+        let store = NewMediaProvenanceStore()
+        store.register([a.id], why: "scan of test")
+        store.evaluate(records: [a])
+        #expect(store.notice?.contents.first?.recordIDs == [a.id])
+        let b = VideoRecord()
+        b.fullPath = a.fullPath; b.filename = a.filename; b.sizeBytes = 64; b.contentFixity = a.contentFixity
+        store.followReplacements([a.id: b.id])
+        #expect(store.notice?.contents.first?.recordIDs == [b.id])
+        let items = ProvenanceReviewItem.make(contents: store.notice?.contents ?? [], record: { $0 == b.id ? b : nil }, dateLocked: { _ in false })
+        #expect(items.map(\.filename) == ["test_a.mov"], "Review produces the row")
+    }
+
+    @Test("P2 same path, new bytes: a known file replaced in place is offered once Full Hashes shows content never seen; an untouched one is not")
+    func newBytesAtAKnownPath() async throws {
+        let dir = try makeTempDir("samepath"); defer { try? FileManager.default.removeItem(at: dir) }
+        try bytes(11).write(to: dir.appendingPathComponent("test_p.mov"))
+        try bytes(12).write(to: dir.appendingPathComponent("test_q.mov"))
+        let model = pipelineModel()
+        let store = model.newMediaProvenance
+        var targets = await scan(model, dir, previous: [])
+        hashAll(model)
+        store.evaluate(records: model.records)
+        store.skip()
+        try bytes(13).write(to: dir.appendingPathComponent("test_p.mov"))      // same path, new bytes
+        targets = await scan(model, dir, previous: targets)
+        let p = try #require(model.records.first { $0.filename == "test_p.mov" && $0.removal == nil })
+        #expect(store.pending == [p.id], "the replaced file waits for its hash; the untouched one does not")
+        hashAll(model)
+        store.evaluate(records: model.records)
+        #expect(store.notice?.contents.map(\.recordIDs) == [[p.id]])
+        _ = targets
+    }
+
+    @Test("P2 load: a save during the initial load does not throw the whole snapshot away — the other contents stay searchable")
+    func saveDuringInitialLoadKeepsTheSnapshot() async throws {
+        let scene = try CutoverScene.make("pf_r2_load"); defer { scene.cleanup() }
+        let ids = try await launch(scene)
+        let committer = try #require(scene.model.catalogCutover.committer)
+        // Rows the store has not seen yet (another session's, before this load).
+        let draft = CatalogRow.ProvenanceAssertionDraft(subjectKind: "content", subjectID: ids.other, field: "carrier", value: "Tape A",
+                                                        state: "confirmed", by: "rick", at: 1, confidence: nil, evidenceJSON: "{}")
+        #expect(committer.commitSideTables("seed", via: .provenanceFields) { tx in _ = try tx.appendProvenanceAssertion(draft) } == nil)
+        let store = scene.model.provenanceFields
+        #expect(store.values(of: ids.other).isEmpty)
+        let loading = Task { await store.load() }
+        await Task.yield()
+        #expect(store.save(digest: ids.healthy, typed: ProvenanceFieldValues(carrier: "Tape C"), enteredIn: "inspector", now: savedAt) == .saved(changed: 1))
+        _ = await loading.value
+        #expect(store.values(of: ids.other).carrier == "Tape A", "the snapshot's other contents are kept")
+        #expect(store.values(of: ids.healthy).carrier == "Tape C", "the save's read-back wins for its own content")
+    }
+}
+
 // MARK: - SENSOR
 
 @Suite("Provenance fields — sensors")
@@ -566,7 +768,8 @@ struct ProvenanceFieldsSensorAppTests {
         #expect(merge.components(separatedBy: "newMediaProvenance.register(NewContentFinder.strangers(").count == 3, "complete and partial merges")
         #expect(merge.components(separatedBy: "newMediaProvenance.followReplacements(replacedBy)").count == 3)
         let job = try SourceTree.appCode(named: "MediaOps/FullHashBackfillJob.swift")
-        #expect(job.contains("if storedCount > 0, !saveFailed { model.newMediaProvenance.evaluate(records: model.records) }"))
+        #expect(job.contains("if !saveFailed { model.newMediaProvenance.evaluate(records: model.records) }"),
+                "evaluated after every acknowledged save — also a resumed run that stored nothing new (Codex round 2)")
         let flip = try SourceTree.appCode(named: "Catalog/CatalogAuthorityFlip.swift")
         #expect(flip.contains("provenanceFields.attach(ProvenanceFieldsCatalogBacking(committer: committer)"))
         #expect(flip.contains("searchIndex.setObservations(layer, source: .provenance)"))

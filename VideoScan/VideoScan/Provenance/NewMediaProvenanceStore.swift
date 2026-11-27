@@ -22,11 +22,12 @@
 // holds is settled quietly. Never shown for zero.
 //
 // Persistence: `new-media-provenance.json` beside the catalog — the waiting
-// record ids and the offered digests (bookkeeping only, never a fact shown as
+// record ids, the offered digests and the digests a changed path held before
+// (bookkeeping only, never a fact shown as
 // truth; a lost file means at most one notice fewer or one offered again).
 // Written atomically after each change; a session without a catalog folder
 // keeps it in memory. Worst case: 100k waiting ids (~4 MB) plus 100k offered
-// digests (~7 MB).
+// and 100k known digests (~7 MB each).
 //
 // Logging: one line per change through the one sink (`note`): files queued,
 // the decision (new / copies / still waiting), the notice shown, skipped,
@@ -77,6 +78,9 @@ final class NewMediaProvenanceStore: ObservableObject {
     private(set) var pending: Set<UUID> = []
     /// Digests ever offered (reviewed or skipped) — never offered again.
     private(set) var offered: Set<String> = []
+    /// Digests a re-seen path held before its file changed: content the
+    /// catalog has seen, never "new" (bounded by the catalog's contents).
+    private(set) var known: Set<String> = []
     /// The one log sink.
     var note: (String) -> Void = { _ in }
     private var fileURL: URL?
@@ -85,6 +89,8 @@ final class NewMediaProvenanceStore: ObservableObject {
         var version = 1
         var pending: [UUID]
         var offered: [String]
+        /// Added 2026-11-27 (round 2); absent in an older file.
+        var known: [String]?
     }
 
     // MARK: Attach
@@ -99,6 +105,7 @@ final class NewMediaProvenanceStore: ObservableObject {
             let stored = try JSONDecoder().decode(Persisted.self, from: Data(contentsOf: url))
             pending.formUnion(stored.pending)
             offered.formUnion(stored.offered)
+            known.formUnion(stored.known ?? [])
         } catch {
             note("New media: \(Self.fileName) could not be read (\(error)) — starting an empty queue; at most a notice is lost")
         }
@@ -116,9 +123,31 @@ final class NewMediaProvenanceStore: ObservableObject {
              + "their provenance is offered once Fill In Full Hashes gives them a full SHA-256")
     }
 
+    /// A scan merge's arrivals: the ids wait; the digests their re-seen paths
+    /// held before are KNOWN content, so the same bytes under a moved stamp
+    /// settle quietly while genuinely new bytes are offered (Codex round 2).
+    func register(_ arrivals: NewContentFinder.Strangers, why: String) {
+        let unseen = arrivals.priorDigests.subtracting(known)
+        if !unseen.isEmpty {
+            known.formUnion(unseen)
+            persist()
+        }
+        register(arrivals.ids, why: why)
+    }
+
     /// A rescan replaced re-seen records with fresh instances (old id → new
     /// id): a waiting file keeps waiting under its new id.
+    /// The open notice follows too, so Review still finds each file (Codex round 2).
     func followReplacements(_ replacedBy: [UUID: UUID]) {
+        guard !replacedBy.isEmpty else { return }
+        if var shown = notice {
+            var touched = false
+            for i in shown.contents.indices {
+                let ids = shown.contents[i].recordIDs.map { replacedBy[$0] ?? $0 }
+                if ids != shown.contents[i].recordIDs { shown.contents[i].recordIDs = ids; touched = true }
+            }
+            if touched { notice = shown }
+        }
         let moved = replacedBy.filter { pending.contains($0.key) }
         guard !moved.isEmpty else { return }
         for (old, new) in moved {
@@ -133,7 +162,7 @@ final class NewMediaProvenanceStore: ObservableObject {
     @discardableResult
     func evaluate(records: [VideoRecord]) -> NewContentFinder.Outcome {
         guard !pending.isEmpty else { return NewContentFinder.Outcome() }
-        let out = NewContentFinder.evaluate(records: records, pending: pending, offered: offered)
+        let out = NewContentFinder.evaluate(records: records, pending: pending, offered: known.isEmpty ? offered : offered.union(known))
         guard !out.settled.isEmpty else { return out }
         pending.subtract(out.settled)
         offered.formUnion(out.newContents.map(\.digest))
@@ -166,7 +195,8 @@ final class NewMediaProvenanceStore: ObservableObject {
 
     private func persist() {
         guard let fileURL else { return }
-        let stored = Persisted(pending: pending.sorted { $0.uuidString < $1.uuidString }, offered: offered.sorted())
+        let stored = Persisted(pending: pending.sorted { $0.uuidString < $1.uuidString }, offered: offered.sorted(),
+                               known: known.isEmpty ? nil : known.sorted())
         do {
             try JSONEncoder().encode(stored).write(to: fileURL, options: .atomic)
         } catch {

@@ -149,6 +149,11 @@ final class CatalogCommitter {
     static let unpurgedLinesPerCommit = 10
 
     let repository: any CatalogRepository
+    /// The one "this content's provenance_assertions rows changed" signal of
+    /// this session: every provenance store that writes those rows posts its
+    /// read-back here, and every store that shows them hears it (Codex round
+    /// 2, 2026-11-27 — a carrier write refreshes every reader).
+    let provenanceAssertions = ProvenanceAssertionsFeed()
     private let input: () -> Input
     private let sink: (String) -> Void
     /// After curated fields were copied onto other copies of a content.

@@ -625,13 +625,14 @@ extension VideoScanModel {
         purgeCatalogRows(ids: replacedIDs, reason: "rescan of \(root): replaced by a fresh record or gone from disk",
                          replacedBy: replacedBy)
         // New media (DECISIONS 2026-11-27): the genuine strangers — not
-        // re-seen at their path, not a moved file that kept its record —
+        // re-seen at their path, not a moved file that kept its record — and
+        // a re-seen path whose file changed (decided by digest once hashed)
         // wait for a whole-file hash; then their provenance is offered once.
         // A re-seen file still waiting keeps waiting under its fresh record.
         newMediaProvenance.followReplacements(replacedBy)
         newMediaProvenance.register(NewContentFinder.strangers(targetRecords: targetRecords,
                                                                existingPaths: Set(existingUnderRoot.map(\.fullPath)),
-                                                               adoptedNewPaths: adoptedNewPaths),
+                                                               adoptedNewPaths: adoptedNewPaths, replaced: leavingRecords),
                                     why: "scan of \(volName)")
         scanMergeLog.info("Scan merge for \(volName, privacy: .public): +\(targetRecords.count) upserted (\(outcome.refreshed) refreshed, \(outcome.liveValuesApplied) took live values), \(genuinelyGone.count) pruned, \(adoptions.count) moved, \(retainedInvisible.count) retained-invisible under \(root, privacy: .public)")
         appLog.write("Catalog merge (\(volName)): \(targetRecords.count) upserted (\(outcome.refreshed) refreshed, \(outcome.liveValuesApplied) took the catalog's live values, \(outcome.hashesKept) kept their whole-file hash — file unchanged), \(genuinelyGone.count) pruned, \(adoptions.count) moved (followed their files), \(retainedInvisible.count) retained (files on disk, invisible to scan options)")
@@ -754,7 +755,7 @@ extension VideoScanModel {
         newMediaProvenance.followReplacements(replacedBy)
         newMediaProvenance.register(NewContentFinder.strangers(targetRecords: targetRecords,
                                                                existingPaths: Set(existingUnderRoot.map(\.fullPath)),
-                                                               adoptedNewPaths: []),
+                                                               adoptedNewPaths: [], replaced: leavingRecords),
                                     why: "partial scan of \(volName)")
         let pairsCarried = rewirePairCarryover(pairCarry, targetRecords: targetRecords)
         if pairsCarried > 0 {

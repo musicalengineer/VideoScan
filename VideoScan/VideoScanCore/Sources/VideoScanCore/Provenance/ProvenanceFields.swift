@@ -8,9 +8,11 @@
 // PURE: no I/O, no clock, no SQL (one streamed read helper over the reader
 // protocol at the bottom). Four parts —
 //   1. `current(fromRowsOfOneSubject:)` — what stands per field: Rick's NEWEST
-//      row of that field; `confirmed` / `corrected` → its value, `rejected`
-//      → unknown (Rick cleared it; an older value never comes back). Machine
-//      rows are never read here: a missing field is unknown, never guessed.
+//      row of that field (`rickDecision`); `confirmed` / `corrected` → its
+//      value, `rejected` → unknown (Rick cleared the FIELD; no older value of
+//      his and no machine value ever comes back — ProvenanceResolver reads
+//      the shared `carrier` through the same `rickDecision`). Machine rows
+//      are never read here: a missing field is unknown, never guessed.
 //   2. `normalize(_:_:)` — what may be stored: trimmed, one line, bounded;
 //      a digitization date is `YYYY`, `YYYY-MM` or `YYYY-MM-DD` (a real
 //      calendar day), never anything looser.
@@ -102,18 +104,36 @@ public enum ProvenanceFields {
 
     // MARK: 1. Rows → what stands
 
-    /// Per field: Rick's newest row. confirmed / corrected → its value;
-    /// rejected → unknown. Rows of other fields and machine rows are ignored.
-    public static func current(fromRowsOfOneSubject rows: [CatalogRow.ProvenanceAssertionReading]) -> ProvenanceFieldValues {
-        var newest: [ProvenanceField: CatalogRow.ProvenanceAssertionReading] = [:]
-        for row in rows where row.by == owner {
-            guard let field = ProvenanceField(rawValue: row.field) else { continue }
-            if let seen = newest[field], seen.seq > row.seq { continue }
-            newest[field] = row
+    /// Rick's decision on one field: his NEWEST confirmed / corrected /
+    /// rejected row of it. `.cleared` (a rejected newest row) rejects the
+    /// FIELD, not only the value it names: nothing — no older value of his,
+    /// no machine row, before or after — stands until he decides again.
+    public enum RickDecision: Equatable, Sendable {
+        case value(String)
+        case cleared
+    }
+
+    /// THE ONE READING of Rick's word on `field` (Codex round 2, 2026-11-27):
+    /// this fold and ProvenanceResolver.standing both use it, so the tape the
+    /// Inspector's lines show, the estimate's carrier and the archive glyph
+    /// can never disagree about a clear. nil = he never decided.
+    public static func rickDecision(_ rows: [CatalogRow.ProvenanceAssertionReading], field: String) -> RickDecision? {
+        var newest: CatalogRow.ProvenanceAssertionReading?
+        for row in rows where row.by == owner && row.field == field
+            && (row.state == "confirmed" || row.state == "corrected" || row.state == "rejected") {
+            if let seen = newest, seen.seq > row.seq { continue }
+            newest = row
         }
+        guard let newest else { return nil }
+        return newest.state == "rejected" ? .cleared : .value(newest.value)
+    }
+
+    /// Per field: Rick's decision (`rickDecision`). A value → it; a clear or
+    /// no decision → unknown. Machine rows are never read here.
+    public static func current(fromRowsOfOneSubject rows: [CatalogRow.ProvenanceAssertionReading]) -> ProvenanceFieldValues {
         var out = ProvenanceFieldValues()
-        for (field, row) in newest where row.state == "confirmed" || row.state == "corrected" {
-            out[field] = row.value
+        for field in ProvenanceField.allCases {
+            if case .value(let v)? = rickDecision(rows, field: field.stored) { out[field] = v }
         }
         return out
     }
