@@ -21,7 +21,7 @@ struct AVSyncMediaMatrixTests {
         let source = try AVSyncFixtures.makeSource(in: dir, seconds: Self.seconds, seed: 0x3A7)
         let original = try await AVSyncFixtures.encodeOriginal(source, format: format, in: dir)
         let processed = try await AVSyncFixtures.process(original, change: .soundLate(ms: 100), format: format, in: dir)
-        let report = try await AVSyncFixtures.measure(original: original, processed: processed, seconds: Self.seconds)
+        let report = try await AVSyncFixtures.analyzePair(original: original, processed: processed, seconds: Self.seconds)
         AVSyncFixtures.note("matrix \(format.rawValue), sound 100 ms later", expected: "-100 ms", report: report)
         guard case let .offset(shift) = report.verdict else {
             Issue.record("\(format): expected an offset: \(AVSyncFixtures.describe(report))")
@@ -37,7 +37,7 @@ struct AVSyncMediaMatrixTests {
         let source = try AVSyncFixtures.makeSource(in: dir, seconds: Self.seconds, seed: 0x70BA2)
         let original = try await AVSyncFixtures.encodeOriginal(source, format: .movProRes, in: dir)
         let processed = try await AVSyncFixtures.process(original, change: .none, format: .mp4H264, in: dir)
-        let report = try await AVSyncFixtures.measure(original: original, processed: processed, seconds: Self.seconds)
+        let report = try await AVSyncFixtures.analyzePair(original: original, processed: processed, seconds: Self.seconds)
         AVSyncFixtures.note("ProRes original vs H.264 copy", expected: "0 ms, in sync", report: report)
         #expect(report.verdict.isInSync, "\(AVSyncFixtures.describe(report))")
         #expect(abs(report.medianShiftMs ?? 99) <= 5, "\(AVSyncFixtures.describe(report))")

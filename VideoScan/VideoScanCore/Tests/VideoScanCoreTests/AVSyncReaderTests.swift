@@ -116,7 +116,7 @@ struct AVSyncReaderTests {
         #expect(before == after, "the reader writes nothing beside its inputs")
     }
 
-    @Test("a cancelled read returns promptly (the ffmpeg children are killed)")
+    @Test("a cancelled read returns promptly (the ffmpeg children are killed)", .tags(.quietMachine))
     func cancellation() async throws {
         let dir = try TestScratch.unique("test_avsync_cancel_")
         let source = try AVSyncFixtures.makeSource(in: dir, seconds: 600, seed: 21)
@@ -145,7 +145,7 @@ struct AVSyncReaderTests {
         try await AVSyncFixtures.run(["-nostdin", "-v", "error", "-i", original.path, "-itsoffset", "0.5",
                                       "-i", original.path, "-map", "0:v", "-map", "1:a", "-c", "copy", "-y",
                                       shifted.path])
-        let report = try await AVSyncFixtures.measure(original: original, processed: shifted, seconds: 60)
+        let report = try await AVSyncFixtures.analyzePair(original: original, processed: shifted, seconds: 60)
         AVSyncFixtures.note("sound stream starts 0.5 s into the container", expected: "-500 ms", report: report)
         guard case let .offset(shift) = report.verdict else {
             Issue.record("expected 500 ms late: \(AVSyncFixtures.describe(report))")

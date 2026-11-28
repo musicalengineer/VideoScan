@@ -258,7 +258,7 @@ enum AVSyncFixtures {
     // MARK: Measure
 
     /// Read both files through the real reader and analyse.
-    static func measure(original: URL, processed: URL, seconds: Double,
+    static func analyzePair(original: URL, processed: URL, seconds: Double,
                         policy: AVSyncPolicy = .default) async throws -> AVSyncReport {
         let reader = AVSyncSignalReader()
         async let o = reader.read(path: original.path, expectedDurationSeconds: seconds)

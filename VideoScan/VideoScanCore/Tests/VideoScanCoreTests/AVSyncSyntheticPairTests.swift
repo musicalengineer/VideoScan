@@ -23,7 +23,7 @@ struct AVSyncSyntheticPairTests {
         let source = try AVSyncFixtures.makeSource(in: dir, seconds: seconds, seed: seed)
         let original = try await AVSyncFixtures.encodeOriginal(source, format: format, in: dir)
         let processed = try await AVSyncFixtures.process(original, change: change, format: format, in: dir)
-        return try await AVSyncFixtures.measure(original: original, processed: processed, seconds: seconds)
+        return try await AVSyncFixtures.analyzePair(original: original, processed: processed, seconds: seconds)
     }
 
     // MARK: Constant offsets −200…+200 ms (±5 ms)

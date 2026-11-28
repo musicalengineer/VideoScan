@@ -26,7 +26,7 @@ struct AVSyncHonestNegativeTests {
         } else {
             processed = try await AVSyncFixtures.process(original, change: .soundLate(ms: 80), format: .mp4H264, in: dir)
         }
-        return try await AVSyncFixtures.measure(original: original, processed: processed, seconds: seconds)
+        return try await AVSyncFixtures.analyzePair(original: original, processed: processed, seconds: seconds)
     }
 
     static func expectCouldNotMeasure(_ report: AVSyncReport, _ label: String) {
