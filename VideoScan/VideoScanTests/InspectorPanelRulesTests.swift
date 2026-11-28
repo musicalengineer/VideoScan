@@ -187,6 +187,7 @@ struct InspectorPanelSectionOrderTests {
 
     static let expected: [(builder: String, title: String?)] = [
         ("headerSection", nil),
+        ("carrySection", "Copied From an Earlier File"),   // GH #478 (2026-11-27): only after a rescan carry
         ("generalSection", "General"),
         ("videoSection", "Video"),
         ("audioSection", "Audio"),

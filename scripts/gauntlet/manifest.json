@@ -39973,6 +39973,77 @@
         "theLiveCatalogOpensWithEveryRowKept",
         "theRewoundCopyMigratesRowForRow"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/RescanCarryWithNoteTests.swift",
+      "stage": "regression",
+      "suites": [
+        "RescanCarryWithNoteTests"
+      ],
+      "tests": [
+        "archivedTwinKeepsItsFiledDate",
+        "dateTypedDuringTheScan",
+        "differentDigestIsADifferentFile",
+        "differentFingerprintNamesTheDigest",
+        "nothingCuratedNothingKept",
+        "partialMerge",
+        "reEncodedFileCarriesWithNote",
+        "sameOrUnknownCarriesQuietly",
+        "scale",
+        "secondRescanKeepsTheNoteAndTheHistory",
+        "storedThroughTheCommitter"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/RescanCarryUndoTests.swift",
+      "stage": "regression",
+      "suites": [
+        "RescanCarryUndoTests"
+      ],
+      "tests": [
+        "archivedTwinDateUntouchedByUndo",
+        "laterEditSurvives",
+        "noteGrammar",
+        "refusals",
+        "undoRestoresPriorValues",
+        "undoStoredThroughTheCommitter"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/RescanCarryRound2Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "RescanCarryRound2Tests"
+      ],
+      "tests": [
+        "completeScanKeepsTheHistoryRow",
+        "contentHeldValueIsNeverClaimed",
+        "missingEarlierRecordTakesTheCarryPath",
+        "missingNothingCuratedDropsTheMarker",
+        "newlineInTheFilename",
+        "noReceiptNoUndo",
+        "receiptSurvivesAnyNameAndValue",
+        "refusedHistoryMarkerDefersTheReplacement",
+        "setValuedGroupsCompareOrderInsensitively",
+        "undoComparesAgainstTheReceiptNotTheHistoryRow",
+        "undoKeepsAnotherCopysIndependentValue",
+        "unknownReceiptGroupRefusesUndo"
+      ]
+    },
+    {
+      "blocked_reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ProductionShapeRescanCarryTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ProductionShapeRescanCarryTests"
+      ],
+      "tests": [
+        "countAndCarryASample"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -44058,9 +44129,13 @@
         {
           "name": "VideoScan/VideoScanTests/ProductionShapeAudioStatusMigrationTests.swift",
           "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ProductionShapeRescanCarryTests.swift",
+          "reason": "confinement: the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home (Runner.swift prepareRoots/patch), so FileManager's Application Support is <run>/home/Library/Application Support, the live catalog.sqlite + catalog.cutover are absent, the suite's .enabled(if: LiveCatalogCopy.present) skips its test, and classify() fails the stage on any skip; runs in the nightly all-tests pass and scripts/run_catalog_tests.sh on Rick's Mac"
         }
       ],
-      "expected_floor": 1233,
+      "expected_floor": 1262,
       "name": "regression",
       "package_expected_floor": 410,
       "package_selectors": [
@@ -44357,7 +44432,10 @@
         "VideoScanTests/RescanKeepsKnownHashTests",
         "VideoScanTests/ArchivedTwinDateWritersTests",
         "VideoScanTests/WholeFileIdentityTests",
-        "VideoScanTests/AudioVerdictWithdrawal518Tests"
+        "VideoScanTests/AudioVerdictWithdrawal518Tests",
+        "VideoScanTests/RescanCarryWithNoteTests",
+        "VideoScanTests/RescanCarryUndoTests",
+        "VideoScanTests/RescanCarryRound2Tests"
       ]
     },
     {

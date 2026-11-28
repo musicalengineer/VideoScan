@@ -237,9 +237,7 @@ struct UpdateCatalogRowView: View {
                 Text("Applying…").font(.system(size: 11)).foregroundColor(.secondary)
             }
         case .applied(let s):
-            Text("Applied — \(s.moved) moved, \(s.new) new, \(s.pruned) pruned, \(s.unchanged) unchanged\(s.ambiguous > 0 ? ", \(s.ambiguous) ambiguous" : "")")
-                .font(.system(size: 11, weight: .medium))
-                .foregroundColor(.green)
+            appliedSummary(s)
         case .renamePending(let c):
             Text("\(c.oldVolumeName) is now \(c.newVolumeName) — \(c.matchingRecords) record\(c.matchingRecords == 1 ? "" : "s") will follow the rename")
                 .font(.system(size: 11))
@@ -248,6 +246,22 @@ struct UpdateCatalogRowView: View {
             Text("Rename applied").font(.system(size: 11, weight: .medium)).foregroundColor(.green)
         case .failed(let msg):
             Text(msg).font(.system(size: 11)).foregroundColor(.red)
+        }
+    }
+
+    /// What Apply did, and (GH #478) the files at known paths that had
+    /// changed — plain words; each file's Inspector has the note and Undo Carry.
+    @ViewBuilder
+    private func appliedSummary(_ s: UpdateCatalogApplySummary) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Applied — \(s.moved) moved, \(s.new) new, \(s.pruned) pruned, \(s.unchanged) unchanged\(s.ambiguous > 0 ? ", \(s.ambiguous) ambiguous" : "")")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundColor(.green)
+            if s.carriedWithNote > 0 {
+                Text(RescanCarryWithNote.summary(s.carriedWithNote))
+                    .font(.system(size: 11))
+                    .foregroundColor(.orange)
+            }
         }
     }
 

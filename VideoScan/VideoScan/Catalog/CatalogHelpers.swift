@@ -710,6 +710,9 @@ struct CatalogContent: View {
             onConfirmRepair: { id in
                 _ = model.confirmRepair(repairID: id)
             },
+            onUndoCarry: { id in
+                if let rec = model.record(forID: id) { RescanCarryWithNote(model: model).undoCarry(on: rec) }
+            },
             masterCopy: masterCopyOfSelected,
             promotionSource: promotionSourceOfSelected,
             angelEvidence: selectedAngelEvidence,
