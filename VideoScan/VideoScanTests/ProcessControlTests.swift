@@ -112,8 +112,12 @@ struct ProcessControlTests {
         let run = Task {
             await ProcessRunner.runProcess(
                 executable: "/bin/sh",
-                arguments: ["-c", "while true; do echo beat >&2; sleep 0.05; done"],
+                // Traps SIGTERM like ffmpeg: an untrapped sh dies on SIGTERM even
+                // while stopped, so only a trap shows SIGCONT was sent (review
+                // 2026-11-28). Grace 30 s: a stopped child would hold Stop for 30 s.
+                arguments: ["-c", "trap 'exit 1' TERM; while true; do echo beat >&2; sleep 0.05; done"],
                 stderrLine: { _ in beats.increment() },
+                killGraceSeconds: 30,
                 control: control
             )
         }
@@ -146,7 +150,7 @@ struct ProcessControlTests {
     private static func beatLoop(_ beats: BeatCounter, count: Int?, control: ProcessControl,
                                  killGraceSeconds: Double = ProcessRunner.defaultKillGraceSeconds) -> Task<ProcessRunner.Result, Never> {
         let loop = count.map { "i=0; while [ $i -lt \($0) ]; do echo beat >&2; i=$((i+1)); sleep 0.05; done" }
-            ?? "while true; do echo beat >&2; sleep 0.05; done"
+            ?? "trap 'exit 1' TERM; while true; do echo beat >&2; sleep 0.05; done"
         return Task {
             await ProcessRunner.runProcess(executable: "/bin/sh", arguments: ["-c", loop],
                                            stderrLine: { _ in beats.increment() },

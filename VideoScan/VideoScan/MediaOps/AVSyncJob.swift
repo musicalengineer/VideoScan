@@ -130,7 +130,8 @@ final class AVSyncJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnDe
     private let reader: Reader
     private let stat: Stat
     private let vouch: Vouch
-    private let gatesFor: (Pair) -> [MediaVolumeGate]
+    /// The volume gates for the paths about to be read (only the sides not kept).
+    private let gatesFor: ([String]) -> [MediaVolumeGate]
     private let cache: AVSyncEvidenceCache
     private let readerIdentity: String
     /// Read fraction of the current pair's original [0] and processed [1].
@@ -143,7 +144,7 @@ final class AVSyncJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnDe
     private(set) var task: Task<Void, Never>?
 
     init(pairs: [Pair], store: AVSyncResultStore, policy: AVSyncPolicy = .default,
-         gatesFor: @escaping (Pair) -> [MediaVolumeGate] = { _ in [] },
+         gatesFor: @escaping ([String]) -> [MediaVolumeGate] = { _ in [] },
          reader: @escaping Reader = AVSyncJob.realReader, stat: @escaping Stat = AVSyncJob.realStat,
          vouch: @escaping Vouch = AVSyncJob.realVouch,
          cache: AVSyncEvidenceCache = AVSyncEvidenceCache(), readerIdentity: String = AVSyncSignalReader().identity) {
@@ -309,9 +310,12 @@ final class AVSyncJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnDe
         let onProcessed: @Sendable (Double?) -> Void = { [weak self] f in
             self?.progress(index: index, part: 1, of: f, monitor: monitor)
         }
-        let evidence = try await withGates(gatesFor(pair)[...]) { [reader] in
+        let paths = [(pair.original.path, kept.0), (pair.processed.path, kept.1)].filter { $0.1 == nil }.map(\.0)
+        let gates = gatesFor(paths)
+        let together = Self.mayReadTogether(paths, gates: gates)
+        let evidence = try await withGates(gates[...]) { [reader] in
             await beginWatching()
-            return try await Self.readBoth(pair, kept: kept, reader: reader, control: control,
+            return try await Self.readBoth(pair, kept: kept, together: together, reader: reader, control: control,
                                            progress: (onOriginal, onProcessed))
         }
         var toKeep: [(AVSyncFileEvidence, AVSyncEvidenceCache.Key)] = []
@@ -345,16 +349,41 @@ final class AVSyncJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnDe
         }
     }
 
-    /// Read the sides not already kept, both at once. The first failure
-    /// cancels the other read (its ffmpeg children are killed) and is the one
-    /// reported, naming its side.
+    /// Two whole-file reads may run at once unless both files sit behind the
+    /// SAME volume gate — a gated volume is a spinning disk with one reader
+    /// slot ("two readers seeking against one spindle thrash it",
+    /// MediaVolumeGatePolicy; review 2026-11-28). Different drives, or
+    /// ungated (SSD, internal) volumes: together.
+    nonisolated static func mayReadTogether(_ paths: [String], gates: [MediaVolumeGate]) -> Bool {
+        guard paths.count == 2 else { return false }
+        let roots = paths.map { MediaVolumeGatePolicy.volumeRoot(forPath: $0) }
+        return !(roots[0] == roots[1] && gates.contains { $0.root == roots[0] })
+    }
+
+    /// Read the sides not already kept — both at once when `together`, else
+    /// the original then the processed file. The first failure cancels the
+    /// other read (its ffmpeg children are killed) and is the one reported,
+    /// naming its side.
     /// (For Rick: a throwing task group ≈ launching two std::async jobs and
     /// joining both, where the first exception cancels the sibling.)
-    nonisolated static func readBoth(_ pair: Pair, kept: (AVSyncFileEvidence?, AVSyncFileEvidence?), reader: @escaping Reader,
-                                     control: ProcessControl,
+    nonisolated static func readBoth(_ pair: Pair, kept: (AVSyncFileEvidence?, AVSyncFileEvidence?), together: Bool,
+                                     reader: @escaping Reader, control: ProcessControl,
                                      progress: (@Sendable (Double?) -> Void, @Sendable (Double?) -> Void))
         async throws -> Evidence {
-        try await withThrowingTaskGroup(of: (Int, AVSyncFileEvidence).self) { group in
+        if !together {
+            var original = kept.0, processed = kept.1
+            if original == nil {
+                original = try await read(pair.original, role: "the original", reader: reader,
+                                          control: control, progress: progress.0)
+            }
+            if processed == nil {
+                processed = try await read(pair.processed, role: "the processed file", reader: reader,
+                                           control: control, progress: progress.1)
+            }
+            guard let original, let processed else { throw CancellationError() }
+            return Evidence(original: original, processed: processed)
+        }
+        return try await withThrowingTaskGroup(of: (Int, AVSyncFileEvidence).self) { group in
             if kept.0 == nil {
                 group.addTask { (0, try await read(pair.original, role: "the original", reader: reader,
                                                    control: control, progress: progress.0)) }

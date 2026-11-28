@@ -419,6 +419,7 @@ struct AVSyncJobRunTests {
     @Test("both files of a pair are read at the same time")
     func bothSidesReadAtOnce() async throws {
         let center = MediaFileOperationsCenter()
+        center.mediaTechForPath = { _ in .ssd }   // an ungated drive: both reads may run at once
         let flight = AVSyncFlightRecorder()
         let evidence = AVSyncAppFixture.pair(soundLateMs: 0)
         let reader: AVSyncJob.Reader = { side, _, _ in
@@ -436,6 +437,7 @@ struct AVSyncJobRunTests {
     @Test("a failure on one side names that side and stops the other read at once")
     func oneSideFailsTheOtherIsCancelled() async throws {
         let center = MediaFileOperationsCenter()
+        center.mediaTechForPath = { _ in .ssd }   // an ungated drive: both reads may run at once
         let cancelled = AVSyncCallCounter()
         let reader: AVSyncJob.Reader = { side, _, _ in
             if side.filename.hasPrefix("proc") { throw AVSyncSignalReader.Failure.noPicture }
@@ -454,6 +456,7 @@ struct AVSyncJobRunTests {
     @Test("Stop while both files are being read cancels both reads")
     func stopCancelsBothReads() async throws {
         let center = MediaFileOperationsCenter()
+        center.mediaTechForPath = { _ in .ssd }   // an ungated drive: both reads may run at once
         let flight = AVSyncFlightRecorder()
         let cancelled = AVSyncCallCounter()
         let reader: AVSyncJob.Reader = { _, _, _ in
@@ -758,4 +761,85 @@ struct AVSyncJobMediaTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).sorted() == before,
                 "the job writes nothing beside the files it reads")
     }
+}
+
+// MARK: Volume gates and concurrency (review 2026-11-28)
+
+@MainActor
+extension AVSyncJobRunTests {
+
+    static func side(_ name: String, volume: String, digest: String) -> AVSyncSide {
+        AVSyncSide(recordID: UUID(), filename: name, path: "/Volumes/\(volume)/\(name)", sizeBytes: 1_000,
+                   durationSeconds: 60, digest: digest)
+    }
+
+    static func timedReader(_ flight: AVSyncFlightRecorder, paths: AVSyncPathLog? = nil) -> AVSyncJob.Reader {
+        let evidence = AVSyncAppFixture.pair(soundLateMs: 0)
+        return { side, _, _ in
+            paths?.add(side.path)
+            flight.enter()
+            defer { flight.leave() }
+            try await Task.sleep(for: .milliseconds(300))
+            return side.filename.hasPrefix("orig") ? evidence.0 : evidence.1
+        }
+    }
+
+    @Test("both files on ONE spinning disk are read one after the other (the volume gate's one-reader rule)")
+    func sameSpindleIsReadOneAtATime() async throws {
+        let center = MediaFileOperationsCenter()
+        center.mediaTechForPath = { _ in .hdd }          // /Volumes/Test: one root, one slot
+        #expect(center.gatePlan(forPaths: [pair().original.path, pair().processed.path]).count == 1)
+        let flight = AVSyncFlightRecorder()
+        let job = center.startAVSync(pairs: [pair()], reader: Self.timedReader(flight), stat: AVSyncAppFixture.steadyStat)
+        await job?.task?.value
+        guard case .finished? = job?.state else { Issue.record("expected finished, got \(String(describing: job?.state))"); return }
+        #expect(flight.peak == 1, "two whole-file reads ran at once on a one-slot (HDD) volume (peak \(flight.peak))")
+    }
+
+    @Test("files on two different spinning disks are read at the same time")
+    func twoSpindlesReadTogether() async throws {
+        let center = MediaFileOperationsCenter()
+        center.mediaTechForPath = { _ in .hdd }
+        let p = AVSyncJob.Pair(processed: Self.side("proc.mp4", volume: "DiskA", digest: AVSyncAppFixture.d1),
+                               original: Self.side("orig.mov", volume: "DiskB", digest: AVSyncAppFixture.d2))
+        let flight = AVSyncFlightRecorder()
+        let job = center.startAVSync(pairs: [p], reader: Self.timedReader(flight), stat: AVSyncAppFixture.steadyStat)
+        await job?.task?.value
+        #expect(flight.peak == 2, "different drives must not wait for each other (peak \(flight.peak))")
+    }
+
+    @Test("a pair whose original is kept waits only for the processed file's drive")
+    func keptSideTakesNoGate() async throws {
+        let center = MediaFileOperationsCenter()
+        center.mediaTechForPath = { _ in .hdd }
+        let original = Self.side("orig.mov", volume: "DiskB", digest: AVSyncAppFixture.d2)
+        let first = AVSyncJob.Pair(processed: Self.side("proc-a.mp4", volume: "DiskA", digest: AVSyncAppFixture.d1),
+                                   original: original)
+        let second = AVSyncJob.Pair(processed: Self.side("proc-b.mp4", volume: "DiskC", digest: AVSyncAppFixture.d3),
+                                    original: original)
+        await center.startAVSync(pairs: [first], reader: Self.timedReader(AVSyncFlightRecorder()),
+                                 stat: AVSyncAppFixture.steadyStat)?.task?.value
+        // Another job holds DiskB (the original's drive): the second pair must not wait for it.
+        let diskB = try #require(center.gatePlan(forPaths: [original.path]).first)
+        try await diskB.semaphore.wait()
+        let paths = AVSyncPathLog()
+        let job = try #require(center.startAVSync(pairs: [second], reader: Self.timedReader(AVSyncFlightRecorder(), paths: paths),
+                                                  stat: AVSyncAppFixture.steadyStat))
+        // Poll, never await the job here: a job queued on DiskB would wait
+        // for the signal below forever, and the test would hang, not fail.
+        for _ in 0..<100 where job.finishedAt == nil { try await Task.sleep(for: .milliseconds(50)) }
+        let finished = job.finishedAt != nil
+        await diskB.semaphore.signal()
+        if !finished { job.cancel() }
+        await job.task?.value
+        #expect(finished, "the job queued behind the kept original's drive")
+        #expect(paths.all == [second.processed.path])
+    }
+}
+
+final class AVSyncPathLog: @unchecked Sendable {   // guarded by `lock`
+    private let lock = NSLock()
+    private var paths: [String] = []
+    func add(_ path: String) { lock.lock(); paths.append(path); lock.unlock() }
+    var all: [String] { lock.lock(); defer { lock.unlock() }; return paths }
 }

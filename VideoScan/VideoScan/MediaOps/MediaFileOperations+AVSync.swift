@@ -27,9 +27,7 @@ extension MediaFileOperationsCenter {
             return nil
         }
         let job = AVSyncJob(pairs: fresh, store: avSyncResults,
-                            gatesFor: { [weak self] pair in
-                                self?.gatePlan(forPaths: [pair.original.path, pair.processed.path]) ?? []
-                            },
+                            gatesFor: { [weak self] paths in self?.gatePlan(forPaths: paths) ?? [] },
                             reader: reader ?? AVSyncJob.realReader, stat: stat ?? AVSyncJob.realStat,
                             vouch: vouch ?? AVSyncJob.realVouch, cache: avSyncEvidence)
         guard add(job) else { return nil }

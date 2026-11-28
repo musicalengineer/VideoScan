@@ -43,11 +43,19 @@ private let processRunnerLog = Logger(subsystem: "Rick-Breen.VideoScan",
 ///     control holds every live child (weakly) and pauses, resumes and
 ///     unfreezes-for-kill ALL of them; it once held only the last one
 ///     attached, so Pause left the others running (2026-11-28).
+///   - Its own books, not Foundation's: `Process.suspend()/resume()` keep a
+///     signed counter, so a resume sent to a child that was never stopped
+///     (Stop racing a launch while paused) left the NEXT stop unbalanced and
+///     the child frozen until SIGKILL (review 2026-11-28). The control keeps
+///     the set of children IT stopped, signals under its lock, and resumes
+///     only those — one stop, one continue, per child.
 public final class ProcessControl: @unchecked Sendable {
     private let lock = NSLock()
     /// Live children, held weakly (≈ a set of weak_ptr; a finished child
     /// drops out by itself). Touched only under `lock`.
     private let procs = NSHashTable<Process>.weakObjects()
+    /// The children this control stopped and has not continued. Under `lock`.
+    private let stopped = NSHashTable<Process>.weakObjects()
     private var wantsSuspended = false
     /// True while the child (or the pending wish) is suspended.
     public var isSuspended: Bool {
@@ -57,25 +65,34 @@ public final class ProcessControl: @unchecked Sendable {
 
     public init() {}
 
+    /// Under `lock`: stop `process` once.
+    private func stopLocked(_ process: Process) {
+        guard process.isRunning, !stopped.contains(process) else { return }
+        if process.suspend() { stopped.add(process) }
+    }
+
+    /// Under `lock`: continue `process` only if this control stopped it.
+    private func continueLocked(_ process: Process) {
+        guard stopped.contains(process) else { return }
+        stopped.remove(process)
+        if process.isRunning { _ = process.resume() }
+    }
+
     /// Runner-side: adopt a freshly launched child. Applies a pending
     /// suspend wish immediately so "pause between phases" holds.
     func attach(_ process: Process) {
-        lock.lock()
+        lock.lock(); defer { lock.unlock() }
         procs.add(process)
-        let applyNow = wantsSuspended
-        lock.unlock()
-        if applyNow { process.suspend() }
+        if wantsSuspended { stopLocked(process) }
     }
 
-    /// Suspend the live child (or remember the wish for the next one).
+    /// Suspend every live child (or remember the wish for the next one).
     @discardableResult
     public func suspend() -> Bool {
-        lock.lock()
-        guard !wantsSuspended else { lock.unlock(); return false }
+        lock.lock(); defer { lock.unlock() }
+        guard !wantsSuspended else { return false }
         wantsSuspended = true
-        let targets = procs.allObjects
-        lock.unlock()
-        for target in targets where target.isRunning { _ = target.suspend() }
+        for target in procs.allObjects { stopLocked(target) }
         return true
     }
 
@@ -89,28 +106,25 @@ public final class ProcessControl: @unchecked Sendable {
     }
     private var lastResumedAtValue: Date?
 
-    /// Resume the live child and clear any pending wish.
+    /// Resume every child this control stopped and clear any pending wish.
     @discardableResult
     public func resume() -> Bool {
-        lock.lock()
-        guard wantsSuspended else { lock.unlock(); return false }
+        lock.lock(); defer { lock.unlock() }
+        guard wantsSuspended else { return false }
         wantsSuspended = false
         lastResumedAtValue = Date()
-        let targets = procs.allObjects
-        lock.unlock()
-        for target in targets where target.isRunning { _ = target.resume() }
+        for target in stopped.allObjects { continueLocked(target) }
         return true
     }
 
     /// Runner-side, before any SIGTERM: continue a stopped child so the
     /// signal can actually be delivered. Keeps `wantsSuspended` — a job
     /// paused then cancelled must not flip its UI back to "running".
-    /// Only the child being killed: its paused siblings stay paused.
+    /// Only the child being killed, and only if this control stopped it:
+    /// its paused siblings stay paused, and a call before `attach` is a no-op.
     func resumeForKill(_ process: Process) {
-        lock.lock()
-        let paused = wantsSuspended
-        lock.unlock()
-        if paused, process.isRunning { _ = process.resume() }
+        lock.lock(); defer { lock.unlock() }
+        continueLocked(process)
     }
 }
 

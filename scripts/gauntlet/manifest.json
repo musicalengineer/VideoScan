@@ -1093,6 +1093,19 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ProcessControlKillRaceTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ProcessControlKillRaceTests"
+      ],
+      "tests": [
+        "killRacingAttachWhilePausedStillContinuesTheChild",
+        "killingOneChildLeavesItsPausedSiblingPaused",
+        "repeatedPauseResumeStaysBalanced"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Commit/CatalogChangeDetectorTests.swift",
       "stage": "unit",
       "suites": [
@@ -40212,6 +40225,7 @@
         "evictsLeastRecentlyUsed",
         "factsFromRecord",
         "inSync",
+        "keptSideTakesNoGate",
         "keptSignalsNeedTheSameStamp",
         "keyParts",
         "keyedByDigests",
@@ -40227,12 +40241,14 @@
         "readingStatus",
         "refusals",
         "refusedPair",
+        "sameSpindleIsReadOneAtATime",
         "sharedOriginalReadOnce",
         "staleStampIsRefused",
         "stop",
         "stopCancelsBothReads",
         "summary",
         "timingLine",
+        "twoSpindlesReadTogether",
         "watchdogAfterGates",
         "zeroDurationIsUnknown"
       ]
@@ -43052,9 +43068,9 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet \u2014 unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 4238,
+      "expected_floor": 4241,
       "name": "unit",
-      "package_expected_floor": 1086,
+      "package_expected_floor": 1089,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",
@@ -43190,7 +43206,8 @@
         "VideoScanCoreTests.AVSyncSignalsTests",
         "VideoScanCoreTests.AVSyncPairingTests",
         "VideoScanCoreTests.AVSyncReviewFindingsTests",
-        "VideoScanCoreTests.AVSyncReviewReaderTests"
+        "VideoScanCoreTests.AVSyncReviewReaderTests",
+        "VideoScanCoreTests.ProcessControlKillRaceTests"
       ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
