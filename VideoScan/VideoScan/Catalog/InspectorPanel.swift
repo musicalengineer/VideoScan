@@ -80,6 +80,10 @@ struct InspectorPanel: View {
     /// The file dossier's one door (FileDossierLoader.production), passed by
     /// the host; nil = no Dossier section (previews).
     var fileDossiers: FileDossierLoader?
+    /// Check A/V Sync's session results (MediaFileOperationsCenter.avSyncResults):
+    /// the "Sound & picture timing" line under Audio, shown only for a result
+    /// measured on this file's current digest. nil = no line (previews).
+    var avSyncResults: AVSyncResultStore?
 
     // The sections, top to bottom. Each builder lives in
     // InspectorPanel+Sections.swift and decides its own visibility through
@@ -112,6 +116,11 @@ struct InspectorPanel: View {
                     generalSection(rec)
                     videoSection(rec)
                     audioSection(rec)
+                    if let avSyncResults {
+                        AVSyncTimingLine(store: avSyncResults, digest: contentDigest, font: .caption)
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 6)
+                    }
                     familyTagsSection(rec)
                     workflowTagsSection(rec)
                     whenSection(rec)

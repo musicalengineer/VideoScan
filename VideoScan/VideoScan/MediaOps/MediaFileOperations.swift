@@ -526,6 +526,15 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
     static let findMovedCopies = Self("findMovedCopies", hasDetailView: false,
         style: .init(badge: "Moved Copies", logVerb: "find moved copies", fill: .init(0.45, 0.30, 0.45)))
 
+    // Check A/V Sync (2026-11-27, docs/design/av_sync_analysis.md) — violet:
+    // a reading verb that writes no media and no catalog row (results are
+    // session memory + videoscan.log until the evidence table is approved).
+    // Δ ≈ 0.38 from every other fill, contrast vs white ≥ 4.
+    /// "Analyze ▸ Check A/V Sync…": a processed file's sound-vs-picture
+    /// timing measured against its original. AVSyncJob.
+    static let checkAVSync = Self("checkAVSync", hasDetailView: true,
+        style: .init(badge: "A/V Sync", logVerb: "check a/v sync", fill: .init(0.60, 0.35, 1.00)))
+
     /// Every kind, in declaration order — what `CaseIterable.allCases` was.
     /// A new kind goes here too (MediaFileOperationKindTests.allPinsEveryKindInDeclarationOrder
     /// pins the list and count).
@@ -536,7 +545,7 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
         .findSimilarFootage, .bindFixity, .lockArchive, .compareFootage, .fingerprintBackfill,
         .showAgain, .checkCopies, .fillFullHashes, .cleanupTrash, .fingerprintSound, .auditCatalog,
         .verifyCatalog, .validateCatalog, .findMaster, .indexFrames, .estimateProvenance,
-        .remeasureSoundLevels, .findMovedCopies,
+        .remeasureSoundLevels, .findMovedCopies, .checkAVSync,
     ]
 
     /// Badge text — rendered in small caps by the row view.
@@ -958,6 +967,10 @@ final class MediaFileOperationsCenter: ObservableObject {
     /// All jobs, newest-first. Finished jobs linger (capped, see
     /// `finishedCap`) so Rick can read verdicts later.
     @Published private(set) var jobs: [any MediaFileOperationJob] = []
+
+    /// Check A/V Sync's results this session (the feature's store, #337 —
+    /// AVSyncResultStore.swift); Media Info and the Inspector read it.
+    let avSyncResults = AVSyncResultStore()
 
     /// Keep at most this many non-active jobs around.
     static let finishedCap = 50

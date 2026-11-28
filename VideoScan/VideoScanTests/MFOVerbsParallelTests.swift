@@ -97,6 +97,7 @@ enum MFOParallelInventory {
         "estimateProvenance": .parallelSafeWithIsolation,
         "remeasureSoundLevels": .parallelSafeWithIsolation,
         "findMovedCopies": .parallelSafe,
+        "checkAVSync": .parallelSafe,
     ]
 
     /// Verbs the concurrent test does not start, with the reason. Everything
@@ -308,8 +309,29 @@ enum MFOVerbFixtures {
     static func all() -> [MFOVerbScenario] {
         [compare(), transcode(), trim(4), reformat(), cleanup(), balanceAudio(), rebuildAudio(4), verifyAudio(), verifyVideo(),
          checkMedia(), repair(), fillFullHashes(), fingerprintSound(4), checkCopies(), showAgain(), findSimilarFootage(),
-         validateCatalog(), promote(), verifyArchive(), lockArchive(), deleteDuplicates()]
+         validateCatalog(), promote(), verifyArchive(), lockArchive(), deleteDuplicates(), checkAVSync()]
     }
+
+    /// Check A/V Sync reads two files and writes nothing. A 3 s pair is
+    /// shorter than one 20 s window, so the outcome is a fixed "could not
+    /// measure" sentence — the same alone and in the crowd. (Digests are
+    /// stated: the job keys results by them and never hashes.)
+    static func checkAVSync(_ len: Int = 3) -> MFOVerbScenario { MFOVerbScenario(kind: .checkAVSync) {
+        let sb = try sandbox("avsync")
+        let original = try media(.movProRes, in: sb.files, stem: "test_avs_orig", seconds: len)
+        let processed = try media(.mp4H264, in: sb.files, stem: "test_avs_proc", seconds: len)
+        func side(_ url: URL, _ digest: String) -> AVSyncSide {
+            AVSyncSide(recordID: UUID(), filename: url.lastPathComponent, path: url.path,
+                       sizeBytes: RepairFixtures.size(url), durationSeconds: Double(len), digest: digest)
+        }
+        let pair = AVSyncJob.Pair(processed: side(processed, String(repeating: "b", count: 64)),
+                                  original: side(original, String(repeating: "a", count: 64)))
+        let before = MFOVerbHarness.sha256(original.path)
+        return MFOVerbRun(start: { $0.startAVSync(pairs: [pair]) },
+                          facts: { MFOVerbHarness.state($0, root: sb.root)
+                                   + " | original same=\(MFOVerbHarness.sha256(original.path) == before)" },
+                          cleanup: sb.cleanup)
+    } }
 
     static func compare(_ len: Int = 2) -> MFOVerbScenario { MFOVerbScenario(kind: .compare) {
         let sb = try sandbox("compare")
