@@ -62,8 +62,21 @@ struct GedcomParseContentionSensorTests {
             // ×6 covers an efficiency core (slower clock = more CPU seconds)
             // and cache sharing; the key-path regression measured ×20–×160.
             // The 0.05 s floor keeps a very fast `alone` from making it noisy.
-            #expect(worst < max(alone, 0.05) * 6,
-                    "\(label): 8 concurrent parses cost \(worst) s CPU each vs \(alone) s alone — shared state is contended (\(TimingBudget.loadDescription()))")
+            //
+            // Judged as a relative BUDGET (expectRatio), not a bare #expect
+            // (GH #536): a busy host pushes some of the 8 threads onto the
+            // efficiency tier, and the M4 full suites of 11/23–11/27 failed it
+            // there with no code change (alone 0.145 s, worst 0.844 s = ×5.8
+            // even on the quiet re-run). A bare #expect was "not a budget
+            // judgement" to the Core lane, so it went RED at once; expectRatio
+            // writes `[quiet-budget]`, so a miss beside the other strands is
+            // run again ALONE (DECISIONS 2026-11-21): AMBER when it passes
+            // alone, RED when it fails alone too — which the key-path
+            // regression (×20–×160) still does. The limit is unchanged.
+            expectRatio(TimingBudget.judgeRelative(
+                "GEDCOM \(label) parse on 8 threads at once (worst thread CPU)",
+                measured: .seconds(worst), reference: .seconds(max(alone, 0.05)),
+                referenceName: "one parse alone (floor 0.05 s)", limit: 6))
         }
     }
 }

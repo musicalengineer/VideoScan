@@ -154,6 +154,9 @@ SERIAL_TAIL: Dict[str, str] = {
     # the M4 (16 cores, K=8), the nightly's on-demand run of 4fcf28776, Release, strict
     "ArchiveAngelBufferHygieneClearTests": TIMING_SEEN + " (Clear all over a 100k-record catalog, the synchronous part "
                                                         "under 400 ms; 2026-11-21 M4 run, beside 7 other hosts)",
+    "VerifyAudioPacketShapeTests": TIMING_SEEN + " (Verify Audio's diagnosis of a one-sample file under one pre-fix "
+                                                "levels pass: 8.8 s against 8.3 s, a quiet run is ~0.7x; 2026-11-27 M4 "
+                                                "run of 9b45a543c, shard 6 beside 7 other hosts, GH #536)",
     # not a budget: a race the load exposes, parked here until the test waits for a FRESH snapshot
     "CleanupTrashRunTests": "load race: its forced archive-volume snapshot was superseded while awaited (any volume "
                             "mount/rename on the Mac invalidates it), so the next line saw a provisional one and the "
