@@ -1,13 +1,13 @@
 {
  "overrides_recent": [],
  "overrides_total": 0,
- "ts": "2026-11-27T14:30:48Z",
- "sha": "97a527a6",
+ "ts": "2026-11-28T13:46:37Z",
+ "sha": "b5e3c688",
  "thresholds": {
   "ccn": 15,
   "nloc": 80
  },
- "offenders": 364,
+ "offenders": 365,
  "baseline_before": 351,
  "baseline_after": 351,
  "new": [
@@ -52,19 +52,27 @@
    "lang": "swift"
   },
   {
-   "key": "VideoScan/VideoScan/Volumes/VideoScanModel+ScanMerge.swift::VideoScanModel.commitScanResults",
-   "file": "VideoScan/VideoScan/Volumes/VideoScanModel+ScanMerge.swift",
-   "function": "VideoScanModel.commitScanResults",
-   "ccn": 14,
-   "nloc": 87,
-   "lang": "swift"
-  },
-  {
    "key": "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI+Picker.swift::HallieShellCLI.pick",
    "file": "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI+Picker.swift",
    "function": "HallieShellCLI.pick",
    "ccn": 14,
    "nloc": 81,
+   "lang": "swift"
+  },
+  {
+   "key": "VideoScan/VideoScan/Volumes/VideoScanModel+ScanMerge.swift::VideoScanModel.commitScanResults",
+   "file": "VideoScan/VideoScan/Volumes/VideoScanModel+ScanMerge.swift",
+   "function": "VideoScanModel.commitScanResults",
+   "ccn": 13,
+   "nloc": 96,
+   "lang": "swift"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/Store/GRDBCatalogRepository.swift::GRDBCatalogRepository.migrator",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/Store/GRDBCatalogRepository.swift",
+   "function": "GRDBCatalogRepository.migrator",
+   "ccn": 13,
+   "nloc": 83,
    "lang": "swift"
   },
   {
@@ -132,7 +140,7 @@
    "file": "VideoScan/VideoScan/App/VideoScanApp.swift",
    "function": "VideoScanApp.body",
    "ccn": 15,
-   "nloc": 270,
+   "nloc": 271,
    "lang": "swift",
    "base_ccn": 13,
    "base_nloc": 238
@@ -162,7 +170,7 @@
    "file": "VideoScan/VideoScan/App/ContentView.swift",
    "function": "ContentView.body",
    "ccn": 14,
-   "nloc": 131,
+   "nloc": 132,
    "lang": "swift",
    "base_ccn": 12,
    "base_nloc": 108
@@ -171,8 +179,8 @@
    "key": "VideoScan/VideoScan/Catalog/CatalogHelpers.swift::CatalogContent.body",
    "file": "VideoScan/VideoScan/Catalog/CatalogHelpers.swift",
    "function": "CatalogContent.body",
-   "ccn": 11,
-   "nloc": 168,
+   "ccn": 12,
+   "nloc": 174,
    "lang": "swift",
    "base_ccn": 11,
    "base_nloc": 149
