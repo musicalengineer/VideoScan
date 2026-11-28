@@ -35,9 +35,13 @@ extension MediaFileOperationKind {
     /// (2026-11-07) writes only its own cache folder (FrameIndexJob).
     /// `.findMovedCopies` (2026-11-25, #339) writes nothing: it hands its
     /// proven pairs to the held-back store; the carry is a separate commit.
+    /// `.checkAVSync` (2026-11-27) reads two files and writes nothing to the
+    /// catalog: its results live in AVSyncResultStore (session memory) and
+    /// videoscan.log until a table for them is approved.
     static let notCatalogWriters: Set<MediaFileOperationKind> = [
         .combine, .compare, .extract, .ripFrames, .reformat, .transcode, .cleanup, .trim,
         .balanceAudio, .rebuildAudio, .compareFootage, .findMaster, .indexFrames, .findMovedCopies,
+        .checkAVSync,
     ]
 
     var writesCatalog: Bool { Self.catalogWriters.contains(self) }

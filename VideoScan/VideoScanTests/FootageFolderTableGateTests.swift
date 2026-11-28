@@ -370,5 +370,6 @@ struct FootageFolderTableGateTests {
         #expect(MediaFileOperationKind.fingerprintSound.writesCatalog)
         #expect(!MediaFileOperationKind.compare.writesCatalog)
         #expect(!MediaFileOperationKind.findMaster.writesCatalog, "Find Master reads the sound-print sidecar and writes nothing")
+        #expect(!MediaFileOperationKind.checkAVSync.writesCatalog, "Check A/V Sync reads two files; its results are session memory + the log")
     }
 }
