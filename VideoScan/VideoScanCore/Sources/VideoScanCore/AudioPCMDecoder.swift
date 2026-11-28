@@ -160,28 +160,38 @@ public struct AudioPCMDecoder: Sendable {
     public var sampleRate: Int
     public var maxSeconds: Double
     public var deadlineSeconds: Double
+    /// Sample 0 = the FILE's time zero, not the sound stream's first sample
+    /// (A/V sync, 2026-11-27): ffmpeg writes raw PCM from the first decoded
+    /// sample, so a sound stream that starts 0.5 s into the file would read
+    /// 0.5 s early against the picture. When true, `aresample=async=1:
+    /// first_pts=0` pads the start (and any hole) with silence so sample i is
+    /// at file time i / rate. Off by default: the sound print is unchanged.
+    public var alignToFileStart: Bool
 
     public init(ffmpegPath: String = FFmpegLocator.ffmpegPath,
                 sampleRate: Int = AudioPCMDecoder.defaultSampleRate,
                 maxSeconds: Double = AudioPCMDecoder.defaultMaxSeconds,
-                deadlineSeconds: Double = AudioPCMDecoder.defaultDeadlineSeconds) {
+                deadlineSeconds: Double = AudioPCMDecoder.defaultDeadlineSeconds,
+                alignToFileStart: Bool = false) {
         self.ffmpegPath = ffmpegPath
         self.sampleRate = sampleRate
         self.maxSeconds = maxSeconds
         self.deadlineSeconds = deadlineSeconds
+        self.alignToFileStart = alignToFileStart
     }
 
     /// The exact argv (pure, so the tests can pin its shape). `-ss` goes
     /// BEFORE `-i` (input seek: exact for audio, and cheap); `-t` is the
     /// smaller of the window and the cap, always present; the output is `-`.
-    public static func arguments(path: String, window: Window, sampleRate: Int, maxSeconds: Double) -> [String] {
+    public static func arguments(path: String, window: Window, sampleRate: Int, maxSeconds: Double,
+                                 alignToFileStart: Bool = false) -> [String] {
         var args = ["-nostdin", "-hide_banner", "-nostats", "-v", "info"]
         if let start = window.startSeconds {
             args += ["-ss", Self.seconds(start)]
         }
-        args += ["-i", path, "-vn",
-                 "-af", "astats@\(AudioSourceLevel.astatsTag)=measure_perchannel=Peak_level:measure_overall=none",
-                 "-ac", "1", "-ar", String(sampleRate)]
+        var filters = "astats@\(AudioSourceLevel.astatsTag)=measure_perchannel=Peak_level:measure_overall=none"
+        if alignToFileStart { filters += ",aresample=async=1:first_pts=0" }
+        args += ["-i", path, "-vn", "-af", filters, "-ac", "1", "-ar", String(sampleRate)]
         let limit = min(window.durationSeconds ?? maxSeconds, maxSeconds)
         args += ["-t", Self.seconds(limit), "-f", "s16le", "-"]
         return args
@@ -191,8 +201,9 @@ public struct AudioPCMDecoder: Sendable {
         value == value.rounded() ? String(Int(value)) : String(format: "%.3f", value)
     }
 
-    /// Decode `path` (optionally a window of it) to PCM.
-    public func decode(path: String, window: Window = .whole) async throws -> AudioPCM {
+    /// Decode `path` (optionally a window of it) to PCM. `control` lets a
+    /// job pause the ffmpeg child (SIGSTOP/SIGCONT, ProcessControl).
+    public func decode(path: String, window: Window = .whole, control: ProcessControl? = nil) async throws -> AudioPCM {
         guard FileManager.default.isExecutableFile(atPath: ffmpegPath) else {
             throw Failure.ffmpegMissing(path: ffmpegPath)
         }
@@ -200,10 +211,12 @@ public struct AudioPCMDecoder: Sendable {
         let sink = PCMSink(capSamples: capSamples)
         let result = await ProcessRunner.runProcess(
             executable: ffmpegPath,
-            arguments: Self.arguments(path: path, window: window, sampleRate: sampleRate, maxSeconds: maxSeconds),
+            arguments: Self.arguments(path: path, window: window, sampleRate: sampleRate, maxSeconds: maxSeconds,
+                                      alignToFileStart: alignToFileStart),
             stdoutData: { chunk in sink.append(chunk) },
             stdoutLimitBytes: 0,
-            deadlineSeconds: deadlineSeconds)
+            deadlineSeconds: deadlineSeconds,
+            control: control)
         // A cancelled task kills the child and reads as exit -1; surface it
         // as cancellation, never as a verdict about the file.
         try Task.checkCancellation()
