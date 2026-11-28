@@ -39992,7 +39992,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AVSyncLogicTests.swift",
       "stage": "unit",
@@ -40068,7 +40067,6 @@
       ]
     },
     {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AVSyncScaleTests.swift",
       "stage": "performance",
@@ -40097,6 +40095,41 @@
         "jump",
         "trimBothIsHarmless",
         "unchangedReencode"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AVSyncJobTests.swift",
+      "stage": "unit",
+      "suites": [
+        "AVSyncJobRulesTests",
+        "AVSyncResultStoreTests",
+        "AVSyncJobRunTests",
+        "AVSyncOriginalsTests",
+        "AVSyncWiringSensorTests",
+        "AVSyncJobMediaTests"
+      ],
+      "tests": [
+        "boundaries",
+        "candidates",
+        "capAndLine",
+        "changedDuringRead",
+        "currentRulesOnly",
+        "duplicateDispatch",
+        "endToEnd",
+        "inSync",
+        "keyedByDigests",
+        "logLine",
+        "measuredPair",
+        "menuAndSheet",
+        "noLineage",
+        "pauseResume",
+        "readFailure",
+        "refusals",
+        "refusedPair",
+        "stop",
+        "summary",
+        "timingLine"
       ]
     }
   ],
@@ -42892,15 +42925,11 @@
         {
           "name": "VideoScan/VideoScanTests/SigLIPTinyModelTests.swift",
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AVSyncLogicTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 4202,
+      "expected_floor": 4222,
       "name": "unit",
-      "package_expected_floor": 1049,
+      "package_expected_floor": 1078,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",
@@ -43028,7 +43057,12 @@
         "VideoScanCoreTests.CatalogHighWaterPublishFaultTests",
         "VideoScanCoreTests.ContainedLogWriteTests",
         "VideoScanCoreTests.TimingBudgetNanosecondsTests",
-        "VideoScanCoreTests.TestHostScratchTests"
+        "VideoScanCoreTests.TestHostScratchTests",
+        "VideoScanCoreTests.AVSyncAnalyzerTests",
+        "VideoScanCoreTests.AVSyncCorrelationTests",
+        "VideoScanCoreTests.AVSyncPolicyTests",
+        "VideoScanCoreTests.AVSyncReportWordsTests",
+        "VideoScanCoreTests.AVSyncSignalsTests"
       ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -43715,7 +43749,13 @@
         "VideoScanTests/HeldBackProofTests",
         "VideoScanTests/HeldBackCarryTests",
         "VideoScanTests/ArchivedContentIndexTests",
-        "VideoScanTests/AudioStatusAttentionGateTests"
+        "VideoScanTests/AudioStatusAttentionGateTests",
+        "VideoScanTests/AVSyncJobMediaTests",
+        "VideoScanTests/AVSyncJobRulesTests",
+        "VideoScanTests/AVSyncJobRunTests",
+        "VideoScanTests/AVSyncOriginalsTests",
+        "VideoScanTests/AVSyncResultStoreTests",
+        "VideoScanTests/AVSyncWiringSensorTests"
       ]
     },
     {
@@ -44727,10 +44767,6 @@
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioCatalogIndexScaleTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AVSyncScaleTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
       "environment": {
@@ -44742,7 +44778,7 @@
       },
       "expected_floor": 70,
       "name": "performance",
-      "package_expected_floor": 16,
+      "package_expected_floor": 19,
       "package_selectors": [
         "VideoScanCoreTests.CatalogRepositoryScaleTests",
         "VideoScanCoreTests.CatalogDataSchemaScaleTests",
@@ -44750,7 +44786,8 @@
         "VideoScanCoreTests.CatalogLoadScaleTests",
         "VideoScanCoreTests.CatalogCommitScaleTests",
         "VideoScanCoreTests.ModelLabScaleTests",
-        "VideoScanCoreTests.ProbeFixtureDriftTests"
+        "VideoScanCoreTests.ProbeFixtureDriftTests",
+        "VideoScanCoreTests.AVSyncScaleTests"
       ],
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",

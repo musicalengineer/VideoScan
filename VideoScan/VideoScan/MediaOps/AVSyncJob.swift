@@ -1,0 +1,417 @@
+// AVSyncJob.swift
+// ONE SENTENCE: the one engine of "Check A/V Sync" (CLAUDE.md rule 4) — for
+// each processed file and its original, read both through ffmpeg, measure the
+// sound-vs-picture shift (VideoScanCore AVSyncAnalyzer) and say it in words.
+//
+// Design: docs/design/av_sync_analysis.md §6. An MFO job (rule 5): a row with
+// progress, Pause/Stop, a per-pair detail on double-click, START from the
+// Center, one log line per pair, and the OUTCOME line the Center writes at the
+// terminal transition. The menu verb (Analyze ▸ Check A/V Sync…) and, later,
+// the background cycler call THIS job.
+//
+// It reads, never writes media: both files are opened by ffmpeg read-only and
+// piped. Every check that can say no runs before the first read (§10.6):
+// both files must carry a whole-file SHA-256 (identity is the digest — the
+// result is keyed by both), must be different content, must be reachable, and
+// must still be the size the catalog knows. Their size and modification date
+// are taken again after the read; a file that changed while it was read gives
+// no result ("refuse rather than guess").
+//
+// Pause: the pause coordinator's ProcessControl SIGSTOPs the live ffmpeg
+// children (sound and picture), and the stall watchdog is held while paused.
+// Stop cancels the task; ProcessRunner kills the children.
+//
+// MEMORY: per pair, the reader holds one file's PCM at a time (8 kHz Int16:
+// 57.6 MB per hour of sound) plus both files' signals (≈ 17 MB per 2 hours);
+// the reports kept on the items are ≈ 200 B per window.
+//
+// (For Rick: `@MainActor final class` ≈ a C++ object whose methods all run on
+// the UI thread; the `await`s are where it yields while ffmpeg works.)
+
+import Combine
+import Foundation
+import os
+import SwiftUI
+import VideoScanCore
+
+private let avSyncLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "fileOps")
+
+@MainActor
+final class AVSyncJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnDetail {
+
+    struct Pair: Sendable, Identifiable, Equatable {
+        let id = UUID()
+        let processed: AVSyncSide
+        let original: AVSyncSide
+    }
+
+    enum Outcome: Sendable, Equatable {
+        case measured(AVSyncReport)
+        /// A gate said no before anything was read (or the file changed).
+        case refused(String)
+        case failed(String)
+        case cancelled
+
+        var words: String {
+            switch self {
+            case let .measured(report): return report.sentence
+            case let .refused(why): return "not checked: \(why)"
+            case let .failed(why): return "failed: \(why)"
+            case .cancelled: return "stopped"
+            }
+        }
+    }
+
+    struct Item: Identifiable {
+        let pair: Pair
+        var outcome: Outcome?
+        var id: UUID { pair.id }
+    }
+
+    /// Size and modification date — "is it still the same file?".
+    struct FileStamp: Equatable, Sendable {
+        let size: Int64
+        let modified: Date
+    }
+
+    /// Test seams. Production: the real reader and a stat of the path.
+    typealias Reader = @Sendable (AVSyncSide, ProcessControl, @escaping @Sendable (Double) -> Void) async throws
+        -> AVSyncFileEvidence
+    typealias Stat = @Sendable (String) -> FileStamp?
+
+    nonisolated static let realReader: Reader = { side, control, progress in
+        try await AVSyncSignalReader().read(path: side.path, expectedDurationSeconds: side.durationSeconds,
+                                            control: control, progress: progress)
+    }
+
+    nonisolated static let realStat: Stat = { path in
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let size = (attrs[.size] as? NSNumber)?.int64Value,
+              let modified = attrs[.modificationDate] as? Date else { return nil }
+        return FileStamp(size: size, modified: modified)
+    }
+
+    let id = UUID()
+    let kind: MediaFileOperationKind = .checkAVSync
+    let startedAt = Date()
+    let policy: AVSyncPolicy
+
+    @Published private(set) var items: [Item]
+    @Published private(set) var state: MediaFileOperationState = .running
+    @Published private(set) var finishedAt: Date?
+    @Published private(set) var fraction: Double = 0
+    @Published private(set) var status = "Starting…"
+    @Published private(set) var waitingForVolumeLabel: String?
+    private(set) var wasRefused = false
+
+    private let store: AVSyncResultStore
+    private let reader: Reader
+    private let stat: Stat
+    private let gatesFor: (Pair) -> [MediaVolumeGate]
+    private let pauseCoordinator = JobPauseCoordinator()
+    private var stallMonitor: StallMonitor?
+    private var stallReason: String?
+    private var wasCancelled = false
+    /// The run task — internal so tests can await it.
+    private(set) var task: Task<Void, Never>?
+
+    init(pairs: [Pair], store: AVSyncResultStore, policy: AVSyncPolicy = .default,
+         gatesFor: @escaping (Pair) -> [MediaVolumeGate] = { _ in [] },
+         reader: @escaping Reader = AVSyncJob.realReader, stat: @escaping Stat = AVSyncJob.realStat) {
+        items = pairs.map { Item(pair: $0, outcome: nil) }
+        self.store = store
+        self.policy = policy
+        self.gatesFor = gatesFor
+        self.reader = reader
+        self.stat = stat
+    }
+
+    // MARK: MediaFileOperationJob
+
+    var title: String {
+        guard let first = items.first else { return "Check A/V Sync" }
+        if items.count == 1 { return "\(first.pair.processed.filename) vs \(first.pair.original.filename)" }
+        return "\(items.count) files against their originals"
+    }
+
+    var subtitle: String {
+        if let label = waitingForVolumeLabel { return "Waiting for \(label)…" }
+        switch state {
+        case .running: return pauseCoordinator.isPaused ? "Paused — \(status)" : status
+        case .cancelling: return "Stopping…"
+        case let .finished(summary): return summary
+        case let .failed(message): return message
+        case .cancelled: return "Stopped"
+        }
+    }
+
+    var isIndeterminate: Bool { waitingForVolumeLabel != nil }
+    var canPause: Bool { true }
+    var isPaused: Bool { pauseCoordinator.isPaused }
+
+    func pause() {
+        guard state.isActive, pauseCoordinator.pause() else { return }
+        objectWillChange.send()
+        avSyncLog.info("check a/v sync paused: \(self.title, privacy: .public)")
+    }
+
+    func resume() {
+        guard pauseCoordinator.resume() else { return }
+        objectWillChange.send()
+        avSyncLog.info("check a/v sync resumed: \(self.title, privacy: .public)")
+    }
+
+    func cancel() {
+        guard state.isActive, !wasCancelled else { return }
+        wasCancelled = true
+        if pauseCoordinator.isPaused { pauseCoordinator.resume() }   // a stopped child cannot take SIGTERM
+        state = .cancelling
+        task?.cancel()
+        if task == nil { finish() }
+    }
+
+    // MARK: Run
+
+    func start() {
+        guard task == nil, state.isActive else { return }
+        task = Task { [weak self] in
+            await self?.run()
+        }
+    }
+
+    private func run() async {
+        for index in items.indices {
+            if Task.isCancelled || wasCancelled { break }
+            let outcome = await measure(items[index].pair, index: index)
+            items[index].outcome = outcome
+            appLog.write(Self.logLine(pair: items[index].pair, outcome: outcome, policy: policy))
+        }
+        finish()
+    }
+
+    private func finish() {
+        guard finishedAt == nil else { return }
+        for index in items.indices where items[index].outcome == nil { items[index].outcome = .cancelled }
+        stallMonitor?.stop()
+        stallMonitor = nil
+        if let stallReason {
+            state = .failed(message: stallReason)
+        } else if wasCancelled {
+            state = .cancelled
+        } else {
+            let outcomes = items.compactMap(\.outcome)
+            wasRefused = !outcomes.isEmpty && outcomes.allSatisfy { if case .refused = $0 { true } else { false } }
+            let summary = Self.summary(outcomes)
+            if outcomes.contains(where: { if case .measured = $0 { true } else { false } }) || outcomes.isEmpty {
+                state = .finished(summary: summary)
+            } else {
+                state = .failed(message: summary)
+            }
+        }
+        fraction = 1
+        finishedAt = Date()
+    }
+
+    /// One pair: refuse before reading; read both; refuse if either changed;
+    /// analyse off the main actor; keep the result.
+    private func measure(_ pair: Pair, index: Int) async -> Outcome {
+        if let why = Self.refusal(pair, stat: stat) { return .refused(why) }
+        let stampsBefore = (stat(pair.original.path), stat(pair.processed.path))
+        let label = "check a/v sync \(pair.processed.filename)"
+        let monitor = StallMonitor(label: label) { [weak self] silent in
+            Task { @MainActor [weak self] in self?.handleStall(silentFor: silent) }
+        }
+        stallMonitor = monitor
+        monitor.start()
+        pauseCoordinator.register(monitor)
+        defer { monitor.stop(); if stallMonitor === monitor { stallMonitor = nil } }
+        do {
+            let control = pauseCoordinator.control
+            let onOriginal: @Sendable (Double) -> Void = { [weak self] f in
+                self?.progress(index: index, part: 0, of: f, monitor: monitor)
+            }
+            let onProcessed: @Sendable (Double) -> Void = { [weak self] f in
+                self?.progress(index: index, part: 1, of: f, monitor: monitor)
+            }
+            let evidence = try await withGates(gatesFor(pair)[...]) { [reader] in
+                let original = try await Self.read(pair.original, role: "the original", reader: reader,
+                                                   control: control, progress: onOriginal)
+                let processed = try await Self.read(pair.processed, role: "the processed file", reader: reader,
+                                                    control: control, progress: onProcessed)
+                return Evidence(original: original, processed: processed)
+            }
+            try Task.checkCancellation()
+            if stat(pair.original.path) != stampsBefore.0 || stat(pair.processed.path) != stampsBefore.1 {
+                return .refused("a file changed while it was being read")
+            }
+            status = "Measuring \(pair.processed.filename)…"
+            let report = await Self.analyze(evidence, policy: policy)
+            store.record(report, processed: pair.processed, original: pair.original)
+            return .measured(report)
+        } catch is CancellationError {
+            return .cancelled
+        } catch let failure as ReadFailure {
+            return Task.isCancelled ? .cancelled : .failed(failure.words)
+        } catch {
+            return Task.isCancelled ? .cancelled : .failed(String(describing: error))
+        }
+    }
+
+    struct Evidence: Sendable {
+        let original: AVSyncFileEvidence
+        let processed: AVSyncFileEvidence
+    }
+
+    struct ReadFailure: Error {
+        let words: String
+    }
+
+    nonisolated private static func read(_ side: AVSyncSide, role: String, reader: Reader, control: ProcessControl,
+                                         progress: @escaping @Sendable (Double) -> Void) async throws -> AVSyncFileEvidence {
+        do {
+            return try await reader(side, control, progress)
+        } catch let failure as AVSyncSignalReader.Failure {
+            throw ReadFailure(words: "\(role) (\(side.filename)): \(failure.words)")
+        }
+    }
+
+    /// The analysis is pure CPU (a fraction of a second to a few seconds for
+    /// two hours) — run it off the main actor.
+    @concurrent
+    nonisolated private static func analyze(_ evidence: Evidence, policy: AVSyncPolicy) async -> AVSyncReport {
+        AVSyncAnalyzer.analyze(original: evidence.original, processed: evidence.processed, policy: policy)
+    }
+
+    /// Called from ffmpeg's reader threads.
+    nonisolated private func progress(index: Int, part: Int, of fileFraction: Double, monitor: StallMonitor) {
+        monitor.tick()
+        Task { @MainActor [weak self] in
+            guard let self, self.state.isActive else { return }
+            let perPair = 1.0 / Double(max(1, self.items.count))
+            self.fraction = min(1, perPair * (Double(index) + (Double(part) + fileFraction) / 2))
+            let side = part == 0 ? self.items[index].pair.original : self.items[index].pair.processed
+            self.status = "Reading \(side.filename) (\(Int(fileFraction * 100)) %)"
+        }
+    }
+
+    /// Hold each volume gate in order (sorted by the Center), then run `body`.
+    private func withGates<T: Sendable>(_ gates: ArraySlice<MediaVolumeGate>,
+                                        _ body: @escaping @Sendable () async throws -> T) async throws -> T {
+        guard let gate = gates.first else {
+            waitingForVolumeLabel = nil
+            return try await body()
+        }
+        waitingForVolumeLabel = gate.label
+        return try await gate.semaphore.withPermit { [weak self] in
+            guard let self else { throw CancellationError() }
+            return try await self.withGates(gates.dropFirst(), body)
+        }
+    }
+
+    func handleStall(silentFor: Double) {
+        guard state.isActive, stallReason == nil, !wasCancelled else { return }
+        let paths = items.flatMap { [$0.pair.original.path, $0.pair.processed.path] }
+        stallReason = "Stalled — no progress for \(Int(silentFor))s. \(StallMonitor.attribution(forPaths: paths))"
+        appLog.write("check a/v sync watchdog: \(title) stalled \(Int(silentFor))s; stopping")
+        task?.cancel()
+    }
+
+    // MARK: Pure rules (tested)
+
+    /// The refusal for a pair, or nil. Runs before anything is read.
+    nonisolated static func refusal(_ pair: Pair, stat: Stat) -> String? {
+        for (side, role) in [(pair.processed, "the processed file"), (pair.original, "the original")] {
+            if side.digest == nil {
+                return "\(role) (\(side.filename)) has no whole-file fingerprint yet — run Full Hashes first"
+            }
+        }
+        if pair.processed.digest == pair.original.digest { return "the two files are the same content" }
+        for (side, role) in [(pair.processed, "the processed file"), (pair.original, "the original")] {
+            guard let stamp = stat(side.path) else {
+                return "\(role) (\(side.filename)) is not reachable — connect its drive"
+            }
+            if stamp.size != side.sizeBytes {
+                return "\(role) (\(side.filename)) changed since it was catalogued (\(stamp.size) bytes, catalog says \(side.sizeBytes))"
+            }
+        }
+        return nil
+    }
+
+    /// The row's summary: one pair → its sentence; several → counts.
+    nonisolated static func summary(_ outcomes: [Outcome]) -> String {
+        if outcomes.count == 1, let only = outcomes.first { return only.words }
+        var inSync = 0, review = 0, cannot = 0, refused = 0, failed = 0, stopped = 0
+        for outcome in outcomes {
+            switch outcome {
+            case let .measured(report):
+                if report.verdict.isInSync { inSync += 1 } else if report.verdict.needsReview { review += 1 } else { cannot += 1 }
+            case .refused: refused += 1
+            case .failed: failed += 1
+            case .cancelled: stopped += 1
+            }
+        }
+        var parts = ["\(inSync) in sync", "\(review) to review", "\(cannot) could not be measured"]
+        if refused > 0 { parts.append("\(refused) not checked") }
+        if failed > 0 { parts.append("\(failed) failed") }
+        if stopped > 0 { parts.append("\(stopped) stopped") }
+        return "\(outcomes.count) checked: " + parts.joined(separator: ", ")
+    }
+
+    /// One videoscan.log line per pair: the words, the numbers behind them,
+    /// both digests (prefix) and the policy — the result's record until the
+    /// catalog has a table for it.
+    nonisolated static func logLine(pair: Pair, outcome: Outcome, policy: AVSyncPolicy) -> String {
+        let digests = "\(pair.processed.digest.map { String($0.prefix(12)) } ?? "-")"
+            + " vs \(pair.original.digest.map { String($0.prefix(12)) } ?? "-")"
+        var line = "check a/v sync: \(pair.processed.filename) vs \(pair.original.filename) — \(outcome.words)"
+        if case let .measured(report) = outcome {
+            let median = report.medianShiftMs.map { String(format: "%.1f", $0) } ?? "-"
+            let drift = report.driftMsPerMinute.map { String(format: "%.2f", $0) } ?? "-"
+            line += " [median \(median) ms, drift \(drift) ms/min, \(report.measuredWindows)/\(report.windows.count) windows,"
+                + " coarse \(report.coarseOffsetSeconds.map { String(format: "%.3f", $0) } ?? "-") s,"
+                + " policy \(report.policyIdentity), analyzer v\(report.analyzerVersion), sha256 \(digests)]"
+        } else {
+            line += " [sha256 \(digests), policy \(policy.identity)]"
+        }
+        return line
+    }
+
+    // MARK: Detail (double-click)
+
+    var detailView: AnyView { AnyView(AVSyncJobDetailView(job: self)) }
+}
+
+/// The per-pair list under the row.
+struct AVSyncJobDetailView: View {
+    @ObservedObject var job: AVSyncJob
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(job.items) { item in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(item.pair.processed.filename) — against \(item.pair.original.filename)")
+                        .font(.callout.weight(.medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text(item.outcome?.words ?? "waiting…")
+                        .font(.callout)
+                        .foregroundStyle(Self.color(item.outcome))
+                        .textSelection(.enabled)
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .accessibilityIdentifier("mfo.avSync.detail")
+    }
+
+    static func color(_ outcome: AVSyncJob.Outcome?) -> Color {
+        guard let outcome else { return .secondary }
+        switch outcome {
+        case let .measured(report):
+            if report.verdict.isInSync { return .green }
+            return report.verdict.needsReview ? .orange : .secondary
+        case .refused, .cancelled: return .secondary
+        case .failed: return .red
+        }
+    }
+}

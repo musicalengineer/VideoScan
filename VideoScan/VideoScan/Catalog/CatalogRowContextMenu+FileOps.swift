@@ -148,6 +148,19 @@ extension CatalogContent {
             })
             .accessibilityIdentifier("catalog.row.analyze")
 
+            // Check A/V Sync… (2026-11-27, design av_sync_analysis §6): did
+            // processing move the sound against the picture? The sheet shows
+            // each file's original (lineage, or Rick's choice); ONE job reads
+            // both. O(selection) here; the candidate search runs in the sheet.
+            Button(CatalogRowMenuText.checkAVSync) {
+                avSyncRequest = AVSyncSheetRequest(recordIDs: activeRecs.map(\.id))
+            }
+            .disabled(!activeRecs.contains {
+                AVSyncOriginals.eligible($0) && VolumeReachability.isReachable(path: $0.fullPath)
+            })
+            .help("Compare a processed file (an upscale, a repair, a re-encode) with its original and say whether its sound still lines up with its picture — in sync, a constant offset, a drift, or a jump. Reads both files; changes nothing.")
+            .accessibilityIdentifier("catalog.row.checkAVSync")
+
             transcriptionItems(rec: rec)
         }
     }

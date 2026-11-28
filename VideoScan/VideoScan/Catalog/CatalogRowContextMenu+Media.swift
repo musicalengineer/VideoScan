@@ -135,7 +135,9 @@ extension CatalogContent {
                         onFindMatchingAudio: { repairAudio(for: rec) })   // Combine sheet or alert; no job window (codex #964)
                 }
             },
-            soundCopy: soundCopyHooks(for: rec))
+            soundCopy: soundCopyHooks(for: rec),
+            avSyncResults: fileOpsCenter.avSyncResults,
+            contentDigest: CatalogCommit.digest(of: rec))
     }
 
     /// "A copy with sound is here" for Get Info (Rick 2026-10-10). The

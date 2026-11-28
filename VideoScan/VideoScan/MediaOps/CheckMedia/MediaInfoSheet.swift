@@ -32,6 +32,10 @@ struct MediaInfoRequest: Identifiable {
     /// actions, supplied by the presenter (which owns the model). nil =
     /// the sheet still shows the no-sound warning, without the lookup.
     var soundCopy: SoundCopyHooks?
+    /// Check A/V Sync's session results and this file's whole-file digest:
+    /// the "Sound & picture timing" line (AVSyncTimingLine). nil = no line.
+    var avSyncResults: AVSyncResultStore?
+    var contentDigest: String?
 }
 
 /// What Get Info needs to say where the sound is and act on it. Closures,
@@ -71,6 +75,9 @@ struct MediaInfoSheet: View {
             soundSection
             repairBanner
             repairedCopyLine
+            if let store = request.avSyncResults {
+                AVSyncTimingLine(store: store, digest: request.contentDigest)
+            }
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {

@@ -83,6 +83,9 @@ enum CatalogRowMenuText {
     /// "Repair…" (new, Rick 2026-10-08): the file's report card, opened at
     /// its Fixes section.
     static let repair = "Repair\u{2026}"
+    /// "Analyze ▸ Check A/V Sync…" (2026-11-27): the ellipsis is earned —
+    /// the sheet shows (or asks for) each file's original first.
+    static let checkAVSync = "Check A/V Sync\u{2026}"
     static func removeFromCatalog(count: Int) -> String {
         count > 1 ? "Remove \(count) from Catalog" : "Remove from Catalog"
     }
