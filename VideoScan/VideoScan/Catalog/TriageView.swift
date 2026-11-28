@@ -496,9 +496,12 @@ struct TriageView: View {
                 WorkspaceImportLineageSheet(
                     imported: pendingRecord,
                     catalogRecords: model.records,
+                    provenanceNote: WorkspaceImportProvenance.note(for: pendingRecord),
                     onCommit: { parentID in
                         commitImportedRecord(pendingRecord, parentID: parentID)
-                        importSheet = nil
+                        // Same sheet id: the provenance form replaces the
+                        // lineage picker in place (no chained sheets).
+                        importSheet = askProvenanceAfterImport(pendingRecord)
                     },
                     onCancel: {
                         // Cancel discards the probe result. User has to
@@ -507,6 +510,9 @@ struct TriageView: View {
                         importSheet = nil
                     }
                 )
+            case .provenance(let item):
+                ProvenanceReviewSheet(items: [item], store: model.provenanceFields, place: "manual add",
+                                      subtitle: "Every field is optional; Skip leaves it unknown.") { _ in importSheet = nil }
             }
         }
         .sheet(item: $transcodeRequest) { request in
@@ -1248,6 +1254,21 @@ struct TriageView: View {
         selectedIDs = [rec.id]
         model.focusedMediaIDs = model.focusSet(for: rec.id)
         catalogEdited()
+    }
+
+    /// The manual add's provenance step (DECISIONS 2026-11-27): the form
+    /// now when the file has a whole-file SHA-256 (the record is saved first
+    /// so catalog.sqlite holds its content); otherwise it waits with the
+    /// scan's new files for Full Hashes, and the notice offers it then.
+    private func askProvenanceAfterImport(_ rec: VideoRecord) -> WorkspaceImportSheet? {
+        switch WorkspaceImportProvenance.next(for: rec) {
+        case .askNow(let digest):
+            _ = model.saveCatalogNow()
+            return .provenance(ProvenanceReviewItem.item(rec, digest: digest, dateLocked: model.isDateReadOnly(rec)))
+        case .afterFullHashes:
+            model.newMediaProvenance.register([rec.id], why: "manual add")
+            return nil
+        }
     }
 
     // MARK: - Steward review (trial UI, 2026-10-03)

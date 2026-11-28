@@ -430,6 +430,13 @@ final class FullHashBackfillJob: @MainActor MediaFileOperationJob, MediaFileOper
 
     private func conclude(model: VideoScanModel) async {
         await persist(model: model)
+        // New media (DECISIONS 2026-11-27): with the hashes saved, the files
+        // waiting since a scan or a manual add are decided; content the
+        // catalog never saw is offered for provenance review, once. Also when
+        // THIS run stored nothing: a file hashed by an earlier run that ended
+        // before its evaluation (a crash after the checkpoint) is decided now
+        // (Codex round 2). Nothing waiting = no work.
+        if !saveFailed { model.newMediaProvenance.evaluate(records: model.records) }
         let line = totals.line
         if saveFailed {
             let message = "Stopped — the catalog could not be saved. \(storedCount.formatted()) hash(es) saved earlier are kept; no media was changed. " + line

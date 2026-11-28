@@ -45,7 +45,10 @@
 // Truth: catalog.sqlite is the truth; `byDigest` is a read-only projection
 // (what ProvenanceResolver.estimate says of each content's rows), loaded when
 // catalog.sqlite becomes the authority and corrected from each transaction's
-// own read-back. It is DISPLAY ONLY (the tape glyph, the menu's counts):
+// own read-back — its own, and ProvenanceFieldsStore's (Rick's tape IS the
+// `carrier` here): both post every write of Rick's rows on the session's
+// ProvenanceAssertionsFeed and fold each other's (Codex round 2, 2026-11-27).
+// The rule's own runs write only inferred rows, which the tape never reads. It is DISPLAY ONLY (the tape glyph, the menu's counts):
 // every verb decides inside its transaction, from the table. "Confirmed" is
 // shown only when Rick's confirmed rows are stored; an unattached or unloaded
 // store shows nothing.
@@ -105,10 +108,14 @@ final class ProvenanceEstimateCatalogBacking {
     private let commit: Commit
     /// Why a write cannot be taken right now (nil = it can).
     let writeRefusal: () -> String?
+    /// The session's one rows-changed signal (shared with ProvenanceFieldsStore).
+    let feed: ProvenanceAssertionsFeed
 
-    init(repository: any CatalogRepository, writeRefusal: @escaping () -> String?, commit: @escaping Commit) {
+    init(repository: any CatalogRepository, writeRefusal: @escaping () -> String?,
+         feed: ProvenanceAssertionsFeed = ProvenanceAssertionsFeed(), commit: @escaping Commit) {
         self.repository = repository
         self.writeRefusal = writeRefusal
+        self.feed = feed
         self.commit = commit
     }
 
@@ -117,7 +124,7 @@ final class ProvenanceEstimateCatalogBacking {
         self.init(repository: committer.repository, writeRefusal: { [weak committer] in
             guard let committer else { return "the catalog is closed" }
             return committer.sideTableWriteRefusal
-        }, commit: { [weak committer] what, body in
+        }, feed: committer.provenanceAssertions, commit: { [weak committer] what, body in
             guard let committer else { return "the catalog is closed" }
             return committer.commitSideTables(what, via: .provenanceEstimates, body)
         })
@@ -225,6 +232,26 @@ final class ProvenanceEstimateStore: ObservableObject {
         byDigest = [:]
         commitEpoch &+= 1          // a load begun on the old backing is stale
         revision &+= 1
+        // Rick's tape (ProvenanceFieldsStore) is this estimate's carrier: a
+        // save there hands its read-back here, so the glyph, the menu and the
+        // Inspector line (which re-reads on `revision`) follow it at once.
+        backing.feed.listen(self) { [weak self] digest, rows in
+            self?.adoptRows(digest, rows)
+        }
+    }
+
+    /// Another writer changed `digest`'s rows; `rows` is its read-back.
+    private func adoptRows(_ digest: String, _ rows: [CatalogRow.ProvenanceAssertionReading]) {
+        let key = digest.lowercased()
+        if let estimate = ProvenanceResolver.estimate(fromRowsOfOneSubject: rows) { byDigest[key] = estimate } else { byDigest.removeValue(forKey: key) }
+        commitEpoch &+= 1
+        revision &+= 1
+    }
+
+    /// Tell the other readers of these rows (the fields' tape) what `digest` holds now.
+    private func post(_ digest: String, _ rows: [CatalogRow.ProvenanceAssertionReading]) {
+        guard !rows.isEmpty else { return }
+        backing?.feed.changed(digest: digest, rows: rows, by: self)
     }
 
     /// Read what stands for every content off the main actor (one streamed
@@ -609,13 +636,16 @@ final class ProvenanceEstimateStore: ObservableObject {
             var table: ProvenanceEstimate?
             var wasRead = false
             var after: ProvenanceEstimate?
+            var readBack: [CatalogRow.ProvenanceAssertionReading] = []
             let outcome = roles.set(estimate.role, digests: [digest], sourceMissing: flag, now: now,
                                     alongsideWhat: "with Rick's confirmed \(fields) rows (Confirm Provenance)") { tx in
                 wasRead = false
+                readBack = []
                 let standing = try Self.visibleStanding(digest, in: tx)
                 table = standing.table
                 wasRead = true
                 after = try Self.confirmRows(digest, shown: estimate, visible: standing.visible, at: seconds, in: tx)
+                readBack = try tx.provenanceAssertions(subjectKind: ProvenanceAssertionSubject.content, subjectID: digest)
             }
             if case .refused(let why) = outcome {
                 guard wasRead else {
@@ -635,6 +665,7 @@ final class ProvenanceEstimateStore: ObservableObject {
             confirmed += 1
             commitEpoch &+= 1
             revision &+= 1
+            post(digest, readBack)          // Rick's confirmed carrier is his tape too
             note("  content \(digest.prefix(12))… estimated → confirmed by Rick: \(ProvenanceEstimateWords.summary(estimate)) "
                  + "(confirmed rows: \(fields); role set through Set Role)")
         }
@@ -695,8 +726,10 @@ final class ProvenanceEstimateStore: ObservableObject {
         let seconds = Int64(now.timeIntervalSince1970.rounded(.down))
         var rejected: ProvenanceEstimate?
         var after: ProvenanceEstimate?
+        var readBack: [CatalogRow.ProvenanceAssertionReading] = []
         let refusal = backing.write("provenance not right: content \(key.prefix(12))…") { tx in
             rejected = nil
+            readBack = []
             let kind = ProvenanceAssertionSubject.content
             let seen = try Self.visibleStanding(key, in: tx)
             after = seen.table
@@ -709,12 +742,14 @@ final class ProvenanceEstimateStore: ObservableObject {
             default: throw ProvenanceRowNotLanded(digest: key, field: draft.field, landing: landing)
             }
             rejected = standing
-            after = ProvenanceResolver.estimate(fromRowsOfOneSubject: try tx.provenanceAssertions(subjectKind: kind, subjectID: key))
+            readBack = try tx.provenanceAssertions(subjectKind: kind, subjectID: key)
+            after = ProvenanceResolver.estimate(fromRowsOfOneSubject: readBack)
         }
         if let refusal { return refuseReject(refusal, key) }
         if let after { byDigest[key] = after } else { byDigest.removeValue(forKey: key) }
         commitEpoch &+= 1
         revision &+= 1
+        post(key, readBack)
         guard let rejected else {
             note("OUTCOME provenance not right: content \(key.prefix(12))… — no estimate is waiting for it; nothing was written.")
             return .nothingToReject
