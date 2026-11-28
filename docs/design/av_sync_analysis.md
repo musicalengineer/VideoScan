@@ -1,9 +1,10 @@
 # AV Sync Analysis — design (phase 1: a processed file against its original)
 
-Status: built (phase 1) — 2026-11-27, merge ea94e7f1e. Result storage waits for Rick's schema decision (results in memory and the log meanwhile); phase 2 (no original) and phase 3 (repair) not built.
+Status: built (phase 1) — 2026-11-27, merge ea94e7f1e. Results table approved 2026-11-28 (DECISIONS), not yet built (results in memory and the log meanwhile); phase 2 (no original) and phase 3 (repair) not built.
 
-*Rick said "design it" 2026-11-27. Problem statement and first ideas: Rick's notes `lip_sync.md` (in his checkout, not yet in git). This doc replaces their
-"Proposed Solution" for phase 1. Deleted when built (CLAUDE.md); git keeps it.*
+*Rick said "design it" 2026-11-27, from his notes (lip_sync.md, retired 2026-11-28: superseded by this doc). Kept from those notes and not yet built: run it
+in the background cycler (§6), a file with no original (phase 2), repair (§8). Deliberate departures: ffmpeg, not AVFoundation (§3); facts in words, not a
+probability (§1); asymmetric thresholds, not a symmetric 15/30 ms (§4). Deleted when all phases are built (CLAUDE.md); git keeps it.*
 
 ## 1. What it answers
 
