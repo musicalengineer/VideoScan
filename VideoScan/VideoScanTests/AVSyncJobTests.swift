@@ -119,9 +119,32 @@ struct AVSyncJobRulesTests {
         #expect(AVSyncJob.refusal(ok, stat: grown)?.contains("changed since it was catalogued") == true)
     }
 
+    @Test("F3: a duration of 0 (or less) is unknown — the reader gets nil, not zero seconds")
+    func zeroDurationIsUnknown() {
+        func side(_ seconds: Double) -> AVSyncSide {
+            AVSyncSide(recordID: UUID(), filename: "x.mp4", path: "/x", sizeBytes: 1, durationSeconds: seconds, digest: nil)
+        }
+        #expect(AVSyncJob.expectedDuration(of: side(0)) == nil)
+        #expect(AVSyncJob.expectedDuration(of: side(-1)) == nil)
+        #expect(AVSyncJob.expectedDuration(of: side(61.5)) == 61.5)
+    }
+
+    @Test("refused before reading when the stored stamp no longer describes the file (not size alone)")
+    func staleStampIsRefused() {
+        let stamp = FileIdentityStamp(device: 1, inode: 1, size: 1_000, mtimeNs: 0)
+        let stale = ContentFixity(digest: AVSyncAppFixture.d1, byteCount: 1_000, stamp: stamp, computedAt: Date())
+        let processed = AVSyncSide(recordID: UUID(), filename: "proc.mp4", path: "/Volumes/Test/proc.mp4",
+                                   sizeBytes: 1_000, durationSeconds: 60, digest: AVSyncAppFixture.d1, fixity: stale)
+        let pair = AVSyncJob.Pair(processed: processed, original: AVSyncAppFixture.side("orig.mov", digest: AVSyncAppFixture.d2))
+        // Size matches (steadyStat), but no file on disk carries that stamp.
+        let why = AVSyncJob.refusal(pair, stat: AVSyncAppFixture.steadyStat, vouch: AVSyncJob.realVouch)
+        #expect(why == "the processed file (proc.mp4) may have changed since its whole-file fingerprint was taken — run Full Hashes again")
+        #expect(AVSyncJob.refusal(pair, stat: AVSyncAppFixture.steadyStat, vouch: { _ in true }) == nil)
+    }
+
     @Test("the row summary: one pair says its sentence; several are counted")
     func summary() {
-        let inSync = AVSyncReport(policyIdentity: "v1", verdict: .inSync(withinMs: 3, measured: 5, total: 5, notMeasured: []))
+        let inSync = AVSyncReport(policyIdentity: "v1", verdict: .inSync(withinMs: 3, measured: 5, total: 5, notMeasured: [], setAside: 0))
         let late = AVSyncReport(policyIdentity: "v1", verdict: .offset(shiftMs: -80))
         #expect(AVSyncJob.summary([.measured(late)]) == "sound 80 ms late against the picture, the same through the whole file")
         #expect(AVSyncJob.summary([.measured(inSync), .measured(late), .refused("x"), .failed("y")])
@@ -176,6 +199,35 @@ struct AVSyncResultStoreTests {
         #expect(store.entry(forProcessedDigest: AVSyncAppFixture.d1) == nil)
         store.record(report, processed: proc, original: orig)
         #expect(store.entry(forProcessedDigest: AVSyncAppFixture.d1) != nil)
+    }
+
+    @Test("F5: re-recording refreshes the FIFO order; an eviction never drops another entry's lookup")
+    func reRecordRefreshesAndEvictionKeepsLookups() {
+        let store = AVSyncResultStore()
+        let proc = AVSyncAppFixture.side("proc.mp4", digest: AVSyncAppFixture.d1)
+        let origA = AVSyncAppFixture.side("origA.mov", digest: AVSyncAppFixture.d2)
+        let origB = AVSyncAppFixture.side("origB.mov", digest: AVSyncAppFixture.d3)
+        store.record(report, processed: proc, original: origA)   // k1 (oldest)
+        store.record(report, processed: proc, original: origB)   // k2
+        store.record(report, processed: proc, original: origA)   // k1 again: now the newest
+        for i in 0..<(AVSyncResultStore.cap - 1) {               // fill to the cap, then one past it
+            store.record(report, processed: AVSyncAppFixture.side("p\(i)", digest: String(format: "%064x", i + 100)),
+                         original: origA)
+        }
+        #expect(store.entry(forProcessedDigest: AVSyncAppFixture.d1)?.original.filename == "origA.mov",
+                "the refreshed k1 must survive; k2 (older) is the one evicted")
+        // Evict k1 too: the processed digest has no entry left, so nothing answers — but if k2
+        // had still been there, the lookup must have fallen back to it, never to nil.
+        let store2 = AVSyncResultStore()
+        store2.record(report, processed: proc, original: origB)  // k2 (newer content of the pair kept)
+        store2.record(report, processed: proc, original: origA)  // k1 latest
+        store2.record(report, processed: proc, original: origB)  // k2 refreshed → newest; k1 oldest
+        for i in 0..<(AVSyncResultStore.cap - 1) {
+            store2.record(report, processed: AVSyncAppFixture.side("q\(i)", digest: String(format: "%064x", i + 500)),
+                          original: origA)
+        }
+        #expect(store2.entry(forProcessedDigest: AVSyncAppFixture.d1)?.original.filename == "origB.mov",
+                "evicting k1 must not drop the lookup of the surviving k2")
     }
 
     @Test("FIFO cap; the line names the original and when")
@@ -331,6 +383,22 @@ struct AVSyncJobRunTests {
         await job.task?.value
     }
 
+    @Test("the stall watchdog starts only once the volume gates are held — queueing is not a stall")
+    func watchdogAfterGates() async throws {
+        let gate = MediaVolumeGate(root: "/Volumes/Test", label: "Test", semaphore: AsyncSemaphore(limit: 1))
+        try await gate.semaphore.wait()   // another job holds the drive
+        let job = AVSyncJob(pairs: [pair()], store: AVSyncResultStore(), gatesFor: { _ in [gate] },
+                            reader: AVSyncAppFixture.reader(AVSyncAppFixture.pair(soundLateMs: 0)),
+                            stat: AVSyncAppFixture.steadyStat)
+        job.start()
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(job.subtitle == "Waiting for Test…")
+        #expect(!job.isWatchingForStall, "waiting for the drive must not arm the stall watchdog")
+        await gate.semaphore.signal()
+        await job.task?.value
+        guard case .finished = job.state else { Issue.record("expected finished, got \(job.state)"); return }
+    }
+
     @Test("a second dispatch for a file already being checked is refused")
     func duplicateDispatch() async throws {
         let center = MediaFileOperationsCenter()
@@ -354,46 +422,49 @@ final class AVSyncControlBox: @unchecked Sendable {   // guarded by `lock`
     var control: ProcessControl? { lock.lock(); defer { lock.unlock() }; return value }
 }
 
-// MARK: - The original
+// MARK: - The original (pure, over plain facts — runs off the main actor)
 
-@MainActor
 struct AVSyncOriginalsTests {
 
-    func record(_ name: String, seconds: Double, derivedFrom: UUID? = nil,
-                stream: StreamType = .videoAndAudio) -> VideoRecord {
-        let r = VideoRecord()
-        r.filename = name
-        r.fullPath = "/Volumes/Test/\(name)"
-        r.durationSeconds = seconds
-        r.streamTypeRaw = stream.rawValue
-        r.derivedFrom = derivedFrom
-        return r
-    }
-
-    @Test("the lineage original comes first; then files of similar length, closest first")
-    func candidates() {
-        let original = record("tape7.mov", seconds: 600)
-        let topaz = record("tape7_topaz.mp4", seconds: 600, derivedFrom: original.id)
-        let near = record("other.mov", seconds: 610)
-        let far = record("far.mov", seconds: 900)
-        let soundOnly = record("tape7.wav", seconds: 600, stream: .audioOnly)
+    @Test("the lineage original comes first; then files of similar length, closest first; matched off the main actor")
+    func candidates() async {
+        let original = AVSyncFileFacts(filename: "tape7.mov", durationSeconds: 600)
+        let topaz = AVSyncFileFacts(filename: "tape7_topaz.mp4", durationSeconds: 600, derivedFrom: original.id)
+        let near = AVSyncFileFacts(filename: "other.mov", durationSeconds: 610)
+        let far = AVSyncFileFacts(filename: "far.mov", durationSeconds: 900)
+        let soundOnly = AVSyncFileFacts(filename: "tape7.wav", durationSeconds: 600, eligible: false)
         let all = [original, topaz, near, far, soundOnly]
-        let lookup: (UUID) -> VideoRecord? = { id in all.first { $0.id == id } }
-        #expect(AVSyncOriginals.lineageOriginal(of: topaz, lookup: lookup) === original)
-        let found = AVSyncOriginals.candidates(for: topaz, in: all, lookup: lookup)
-        #expect(found.map(\.filename) == ["tape7.mov", "other.mov"])
+        let byID = Dictionary(uniqueKeysWithValues: all.map { ($0.id, $0) })
+        #expect(AVSyncOriginals.lineageOriginal(of: topaz, byID: byID) == original)
+        #expect(AVSyncOriginals.candidates(for: topaz, in: all, byID: byID).map(\.filename) == ["tape7.mov", "other.mov"])
+        let rows = await AVSyncOriginals.rows(for: [topaz.id, soundOnly.id], in: all)
+        #expect(rows.count == 1 && rows.first?.chosen == original.id)
+        #expect(rows.first?.candidates.first?.label.hasPrefix("Made from: tape7.mov") == true)
     }
 
     @Test("no lineage, a self-link or an ineligible parent: no known original")
     func noLineage() {
-        let lone = record("lone.mp4", seconds: 60)
-        #expect(AVSyncOriginals.lineageOriginal(of: lone, lookup: { _ in nil }) == nil)
-        let selfLinked = record("self.mp4", seconds: 60)
-        selfLinked.derivedFrom = selfLinked.id
-        #expect(AVSyncOriginals.lineageOriginal(of: selfLinked, lookup: { _ in selfLinked }) == nil)
-        let silentParent = record("parent.mov", seconds: 60, stream: .videoOnly)
-        let child = record("child.mp4", seconds: 60, derivedFrom: silentParent.id)
-        #expect(AVSyncOriginals.lineageOriginal(of: child, lookup: { _ in silentParent }) == nil)
+        let lone = AVSyncFileFacts(filename: "lone.mp4", durationSeconds: 60)
+        #expect(AVSyncOriginals.lineageOriginal(of: lone, byID: [:]) == nil)
+        let selfID = UUID()
+        let selfLinked = AVSyncFileFacts(id: selfID, filename: "self.mp4", durationSeconds: 60, derivedFrom: selfID)
+        #expect(AVSyncOriginals.lineageOriginal(of: selfLinked, byID: [selfID: selfLinked]) == nil)
+        let silentParent = AVSyncFileFacts(filename: "parent.mov", durationSeconds: 60, eligible: false)
+        let child = AVSyncFileFacts(filename: "child.mp4", durationSeconds: 60, derivedFrom: silentParent.id)
+        #expect(AVSyncOriginals.lineageOriginal(of: child, byID: [silentParent.id: silentParent]) == nil)
+    }
+
+    @Test("a record's facts: picture and sound, live, its lineage and whether it has a full hash")
+    @MainActor
+    func factsFromRecord() {
+        let r = VideoRecord()
+        r.filename = "a.mp4"
+        r.durationSeconds = 12
+        r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+        let facts = AVSyncFileFacts(record: r)
+        #expect(facts.eligible && !facts.hasDigest && facts.durationSeconds == 12)
+        r.streamTypeRaw = StreamType.audioOnly.rawValue
+        #expect(!AVSyncFileFacts(record: r).eligible)
     }
 }
 

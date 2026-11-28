@@ -95,13 +95,13 @@ struct AVSyncSyntheticPairTests {
         let at = 60.0, drop = 200.0
         let report = try await Self.pair(.pictureDrop(atSeconds: at, dropMs: drop), seconds: 120)
         AVSyncFixtures.note("200 ms of picture dropped at 1:00", expected: "jump 200 ms late at 1:00", report: report)
-        guard case let .jump(step, when) = report.verdict else {
+        guard case let .jump(from, to, when) = report.verdict else {
             Issue.record("expected a jump: \(AVSyncFixtures.describe(report))")
             return
         }
-        #expect(abs(step - (-drop)) <= 10, "\(AVSyncFixtures.describe(report))")
+        #expect(abs(from) <= 5 && abs(to - (-drop)) <= 10, "\(AVSyncFixtures.describe(report))")
         #expect(abs(when - at) <= AVSyncPolicy.default.hopSeconds, "\(AVSyncFixtures.describe(report))")
-        #expect(report.sentence.hasPrefix("sound jumps 200 ms late at 1:0"), "\(report.sentence)")
+        #expect(report.sentence.hasPrefix("sound jumps from 0 to 200 ms late at 1:0"), "\(report.sentence)")
         #expect(report.sentence.hasSuffix("(frames dropped or added there)"))
     }
 

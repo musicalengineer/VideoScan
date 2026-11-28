@@ -20,7 +20,7 @@ extension MediaFileOperationsCenter {
     /// seams; production passes nil.
     @discardableResult
     func startAVSync(pairs: [AVSyncJob.Pair], reader: AVSyncJob.Reader? = nil,
-                     stat: AVSyncJob.Stat? = nil) -> AVSyncJob? {
+                     stat: AVSyncJob.Stat? = nil, vouch: AVSyncJob.Vouch? = nil) -> AVSyncJob? {
         let fresh = pairs.filter { activeAVSyncJob(forProcessedID: $0.processed.recordID) == nil }
         guard !fresh.isEmpty else {
             appLog.write("check a/v sync refused: the selected file(s) are already being checked; nothing was started")
@@ -30,7 +30,8 @@ extension MediaFileOperationsCenter {
                             gatesFor: { [weak self] pair in
                                 self?.gatePlan(forPaths: [pair.original.path, pair.processed.path]) ?? []
                             },
-                            reader: reader ?? AVSyncJob.realReader, stat: stat ?? AVSyncJob.realStat)
+                            reader: reader ?? AVSyncJob.realReader, stat: stat ?? AVSyncJob.realStat,
+                            vouch: vouch ?? AVSyncJob.realVouch)
         guard add(job) else { return nil }
         job.start()
         appLog.write(Self.startSummaryLine(verb: job.kind.logVerb, title: job.title,

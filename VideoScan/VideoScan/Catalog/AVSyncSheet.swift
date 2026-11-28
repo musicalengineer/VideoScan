@@ -19,7 +19,39 @@ struct AVSyncSheetRequest: Identifiable {
     let recordIDs: [UUID]
 }
 
-/// Which catalogued files could be a processed file's original.
+/// One catalogued file as the original-matching sees it: plain values, so the
+/// matching runs off the main actor (review, 2026-11-28).
+struct AVSyncFileFacts: Sendable, Equatable, Identifiable {
+    let id: UUID
+    let filename: String
+    let durationSeconds: Double
+    let eligible: Bool
+    let derivedFrom: UUID?
+    let hasDigest: Bool
+
+    @MainActor
+    init(record: VideoRecord) {
+        id = record.id
+        filename = record.filename
+        durationSeconds = record.durationSeconds
+        eligible = AVSyncOriginals.eligible(record)
+        derivedFrom = record.derivedFrom
+        hasDigest = CatalogCommit.digest(of: record) != nil
+    }
+
+    init(id: UUID = UUID(), filename: String, durationSeconds: Double, eligible: Bool = true,
+         derivedFrom: UUID? = nil, hasDigest: Bool = true) {
+        self.id = id
+        self.filename = filename
+        self.durationSeconds = durationSeconds
+        self.eligible = eligible
+        self.derivedFrom = derivedFrom
+        self.hasDigest = hasDigest
+    }
+}
+
+/// Which catalogued files could be a processed file's original. Pure over
+/// `AVSyncFileFacts`; one pass per processed file.
 enum AVSyncOriginals {
 
     /// A file can take part when it has both picture and sound and is live.
@@ -28,27 +60,25 @@ enum AVSyncOriginals {
         rec.streamType == .videoAndAudio && rec.removal == nil
     }
 
-    /// The lineage original: the record `rec` was derived from, when it
-    /// exists, is a different record, and can take part.
-    @MainActor
-    static func lineageOriginal(of rec: VideoRecord, lookup: (UUID) -> VideoRecord?) -> VideoRecord? {
-        guard let parentID = rec.derivedFrom, parentID != rec.id, let parent = lookup(parentID),
-              eligible(parent) else { return nil }
+    /// The lineage original: the file `file` was derived from, when it
+    /// exists, is a different file, and can take part.
+    static func lineageOriginal(of file: AVSyncFileFacts, byID: [UUID: AVSyncFileFacts]) -> AVSyncFileFacts? {
+        guard let parentID = file.derivedFrom, parentID != file.id, let parent = byID[parentID],
+              parent.eligible else { return nil }
         return parent
     }
 
     /// The lineage original first, then live picture-and-sound files whose
-    /// length is within 5 % (or 10 s) of `rec`'s, closest first, at most
-    /// `limit`. One pass over `records`.
-    @MainActor
-    static func candidates(for rec: VideoRecord, in records: [VideoRecord], lookup: (UUID) -> VideoRecord?,
-                           limit: Int = 12) -> [VideoRecord] {
-        let lineage = lineageOriginal(of: rec, lookup: lookup)
-        let target = rec.durationSeconds
+    /// length is within 5 % (or 10 s) of `file`'s, closest first, at most
+    /// `limit`.
+    static func candidates(for file: AVSyncFileFacts, in all: [AVSyncFileFacts], byID: [UUID: AVSyncFileFacts],
+                           limit: Int = 12) -> [AVSyncFileFacts] {
+        let lineage = lineageOriginal(of: file, byID: byID)
+        let target = file.durationSeconds
         let tolerance = max(10, 0.05 * target)
-        var similar: [(VideoRecord, Double)] = []
+        var similar: [(AVSyncFileFacts, Double)] = []
         if target > 0 {
-            for other in records where other.id != rec.id && other.id != lineage?.id && eligible(other) {
+            for other in all where other.id != file.id && other.id != lineage?.id && other.eligible {
                 let gap = abs(other.durationSeconds - target)
                 if gap <= tolerance { similar.append((other, gap)) }
             }
@@ -56,6 +86,22 @@ enum AVSyncOriginals {
         similar.sort { $0.1 != $1.1 ? $0.1 < $1.1 : $0.0.filename < $1.0.filename }
         let rest = similar.prefix(max(0, limit - (lineage == nil ? 0 : 1))).map(\.0)
         return (lineage.map { [$0] } ?? []) + rest
+    }
+
+    /// The sheet's rows for the selected ids — the whole matching, off the
+    /// main actor.
+    @concurrent
+    static func rows(for selected: [UUID], in all: [AVSyncFileFacts]) async -> [AVSyncSheet.Row] {
+        let byID = Dictionary(all.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        return selected.compactMap { id -> AVSyncSheet.Row? in
+            guard let file = byID[id], file.eligible else { return nil }
+            let lineage = lineageOriginal(of: file, byID: byID)
+            let candidates = candidates(for: file, in: all, byID: byID).map { other in
+                AVSyncSheet.Candidate(id: other.id, label: AVSyncSheet.label(other, isLineage: other.id == lineage?.id))
+            }
+            return AVSyncSheet.Row(id: file.id, filename: file.filename, hasDigest: file.hasDigest,
+                                   candidates: candidates, lineageID: lineage?.id, chosen: lineage?.id)
+        }
     }
 }
 
@@ -65,12 +111,12 @@ struct AVSyncSheet: View {
     let model: VideoScanModel
     let onStart: ([AVSyncJob.Pair]) -> Void
 
-    struct Candidate: Identifiable, Equatable {
+    struct Candidate: Identifiable, Equatable, Sendable {
         let id: UUID
         let label: String
     }
 
-    struct Row: Identifiable {
+    struct Row: Identifiable, Sendable {
         let id: UUID
         let filename: String
         let hasDigest: Bool
@@ -123,7 +169,7 @@ struct AVSyncSheet: View {
         }
         .padding(24)
         .frame(width: 620)
-        .task { load() }
+        .task { await load() }
     }
 
     @ViewBuilder
@@ -157,27 +203,19 @@ struct AVSyncSheet: View {
         }
     }
 
-    /// One pass per selected file over the records (main actor, .task).
-    private func load() {
+    /// Plain facts are taken on the main actor (one field copy per record);
+    /// the matching itself runs off it (`AVSyncOriginals.rows`).
+    private func load() async {
         guard !loaded else { return }
-        let records = model.records
-        rows = request.recordIDs.compactMap { id -> Row? in
-            guard let rec = model.record(forID: id), AVSyncOriginals.eligible(rec) else { return nil }
-            let lineage = AVSyncOriginals.lineageOriginal(of: rec, lookup: model.record(forID:))
-            let found = AVSyncOriginals.candidates(for: rec, in: records, lookup: model.record(forID:))
-            let candidates = found.map { other in
-                Candidate(id: other.id, label: Self.label(other, isLineage: other.id == lineage?.id))
-            }
-            return Row(id: rec.id, filename: rec.filename, hasDigest: CatalogCommit.digest(of: rec) != nil,
-                       candidates: candidates, lineageID: lineage?.id, chosen: lineage?.id)
-        }
+        let facts = model.records.map(AVSyncFileFacts.init(record:))
+        rows = await AVSyncOriginals.rows(for: request.recordIDs, in: facts)
         loaded = true
     }
 
-    static func label(_ rec: VideoRecord, isLineage: Bool) -> String {
-        let length = Duration.seconds(rec.durationSeconds).formatted(.time(pattern: .hourMinuteSecond))
-        let fingerprint = CatalogCommit.digest(of: rec) == nil ? " · no full hash yet" : ""
-        return (isLineage ? "Made from: " : "") + "\(rec.filename) (\(length))\(fingerprint)"
+    nonisolated static func label(_ file: AVSyncFileFacts, isLineage: Bool) -> String {
+        let length = Duration.seconds(max(0, file.durationSeconds)).formatted(.time(pattern: .hourMinuteSecond))
+        let fingerprint = file.hasDigest ? "" : " · no full hash yet"
+        return (isLineage ? "Made from: " : "") + "\(file.filename) (\(length))\(fingerprint)"
     }
 
     /// The chosen pairs, snapshotted on the main actor.

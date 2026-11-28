@@ -89,21 +89,38 @@ public struct AVSyncSignalReader: Sendable {
          "-fps_mode", "passthrough", "-f", "rawvideo", "-"]
     }
 
-    /// A deadline that scales with the file: twice real time, at least 10 min.
-    static func deadline(expectedDurationSeconds: Double?) -> Double {
-        max(600, 2 * (expectedDurationSeconds ?? AudioPCMDecoder.defaultMaxSeconds))
+    /// A duration the catalog does not know reads 0 (or less): unknown, never
+    /// "zero seconds long" (review F3, 2026-11-28).
+    public static func knownDuration(_ seconds: Double?) -> Double? {
+        guard let seconds, seconds > 0, seconds.isFinite else { return nil }
+        return seconds
     }
 
-    /// Read `path` into its evidence. `progress` gets 0…1 by picture time
-    /// against `expectedDurationSeconds` (nothing when that is unknown).
+    /// A deadline that scales with the file: twice real time, at least 10 min;
+    /// an unknown length gets the decoder's 4-hour cap, doubled.
+    static func deadline(expectedDurationSeconds: Double?) -> Double {
+        max(600, 2 * (knownDuration(expectedDurationSeconds) ?? AudioPCMDecoder.defaultMaxSeconds))
+    }
+
+    /// Read `path` into its evidence. `progress` gets the picture's fraction
+    /// against `expectedDurationSeconds` in steps of at least 1 %, or nil — "still
+    /// working, fraction unknown" — at most twice a second while either pipe
+    /// delivers data (sound chunks or picture frames), so a stall watchdog sees
+    /// a healthy read of unknown length. Called on ffmpeg's reader threads.
     public func read(path: String, expectedDurationSeconds: Double?, control: ProcessControl? = nil,
-                     progress: (@Sendable (Double) -> Void)? = nil) async throws -> AVSyncFileEvidence {
+                     progress: (@Sendable (Double?) -> Void)? = nil) async throws -> AVSyncFileEvidence {
         guard FileManager.default.isExecutableFile(atPath: ffmpegPath) else {
             throw Failure.ffmpegMissing(path: ffmpegPath)
         }
-        async let sound = readSound(path: path, expectedDurationSeconds: expectedDurationSeconds, control: control)
-        async let picture = readPicture(path: path, expectedDurationSeconds: expectedDurationSeconds,
-                                        control: control, progress: progress)
+        let expected = Self.knownDuration(expectedDurationSeconds)
+        let throttle = progress.map { ProgressThrottle(expectedSeconds: expected, emit: $0) }
+        var activity: (@Sendable () -> Void)?
+        if let throttle { activity = { throttle.alive() } }
+        let soundActivity = activity
+        async let sound = readSound(path: path, expectedDurationSeconds: expected, control: control,
+                                    activity: soundActivity)
+        async let picture = readPicture(path: path, expectedDurationSeconds: expected,
+                                        control: control, throttle: throttle)
         let (onset, fingerprint) = try await sound
         let (times, changes) = try await picture
         let length = Int((Double(times.last ?? 0) / gridSeconds).rounded(.up)) + 1
@@ -118,14 +135,14 @@ public struct AVSyncSignalReader: Sendable {
 
     /// Sound: PCM on the file's timeline → onset envelope + sound print; the
     /// PCM is released when this returns.
-    func readSound(path: String, expectedDurationSeconds: Double?,
-                   control: ProcessControl?) async throws -> ([Float], AudioFingerprint) {
+    func readSound(path: String, expectedDurationSeconds: Double?, control: ProcessControl?,
+                   activity: (@Sendable () -> Void)? = nil) async throws -> ([Float], AudioFingerprint) {
         let decoder = AudioPCMDecoder(ffmpegPath: ffmpegPath,
                                       deadlineSeconds: Self.deadline(expectedDurationSeconds: expectedDurationSeconds),
                                       alignToFileStart: true)
         let pcm: AudioPCM
         do {
-            pcm = try await decoder.decode(path: path, control: control)
+            pcm = try await decoder.decode(path: path, control: control, activity: activity)
         } catch let failure as AudioPCMDecoder.Failure {
             throw Failure.sound(failure)
         }
@@ -136,17 +153,16 @@ public struct AVSyncSignalReader: Sendable {
 
     /// Picture: frame times and per-frame changes.
     func readPicture(path: String, expectedDurationSeconds: Double?, control: ProcessControl?,
-                     progress: (@Sendable (Double) -> Void)?) async throws -> ([Double], [Float]) {
+                     throttle: ProgressThrottle?) async throws -> ([Double], [Float]) {
         let sink = PictureSink(frameBytes: Self.thumbnailWidth * Self.thumbnailHeight)
         let prefix = "[showinfo@\(Self.showinfoTag) @ "
-        let expected = expectedDurationSeconds ?? 0
         let result = await ProcessRunner.runProcess(
             executable: ffmpegPath,
             arguments: Self.pictureArguments(path: path),
             stderrLine: { line in
                 guard let time = Self.frameTime(line: line, prefix: prefix) else { return }
                 sink.addTime(time)
-                if expected > 0, let progress { progress(min(1, max(0, time / expected))) }
+                throttle?.picture(at: time)
             },
             stdoutData: { chunk in sink.append(chunk) },
             stdoutLimitBytes: 0,
@@ -163,13 +179,20 @@ public struct AVSyncSignalReader: Sendable {
         }
         let (times, changes) = sink.take()
         guard !changes.isEmpty || !times.isEmpty else { throw Failure.noPicture }
-        // The last line or frame can trail the other by one at EOF; more than
-        // that means the pairing cannot be trusted.
-        guard abs(times.count - changes.count) <= 1, min(times.count, changes.count) > 0 else {
+        guard Self.pairable(times: times.count, frames: changes.count, partialFrameAtEnd: sink.hasPartialFrame) else {
             throw Failure.frameTimesMissing(frames: changes.count, times: times.count)
         }
         let count = min(times.count, changes.count)
         return (Array(times.prefix(count)), Array(changes.prefix(count)))
+    }
+
+    /// The n-th time belongs to the n-th frame only when the counts agree —
+    /// or, at end of file, when the last frame's bytes were cut short (one
+    /// more time than whole frames, and a partial frame left in the sink).
+    /// Any other mismatch: the pairing cannot be trusted (review, 2026-11-28).
+    static func pairable(times: Int, frames: Int, partialFrameAtEnd: Bool) -> Bool {
+        guard min(times, frames) > 0 else { return false }
+        return times == frames || (times == frames + 1 && partialFrameAtEnd)
     }
 
     /// The pts_time of a showinfo frame line from THIS instance, else nil.
@@ -225,8 +248,52 @@ final class PictureSink: @unchecked Sendable {   // guarded by `lock`
         times.append(time)
     }
 
+    /// Bytes of a frame that never completed (the stream ended mid-frame).
+    var hasPartialFrame: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return !partial.isEmpty
+    }
+
     func take() -> ([Double], [Float]) {
         lock.lock(); defer { lock.unlock() }
         return (times, changes)
+    }
+}
+
+/// Turns per-frame and per-chunk events into at most ~100 fraction updates
+/// (≥ 1 % steps) plus "alive" ticks at most every 0.5 s — so a caller's
+/// main-actor hop is never per frame. Thread-safe: both ffmpeg reader threads
+/// call it.
+final class ProgressThrottle: @unchecked Sendable {   // guarded by `lock`
+    private let lock = NSLock()
+    private let expectedSeconds: Double?
+    private let emit: @Sendable (Double?) -> Void
+    private var lastFraction = -1.0
+    private var lastAlive = -Double.infinity
+    static let fractionStep = 0.01
+    static let aliveInterval = 0.5
+
+    init(expectedSeconds: Double?, emit: @escaping @Sendable (Double?) -> Void) {
+        self.expectedSeconds = expectedSeconds
+        self.emit = emit
+    }
+
+    func picture(at time: Double) {
+        guard let expected = expectedSeconds else { alive(); return }
+        let fraction = min(1, max(0, time / expected))
+        lock.lock()
+        let due = fraction - lastFraction >= Self.fractionStep
+        if due { lastFraction = fraction }
+        lock.unlock()
+        if due { emit(fraction) } else { alive() }
+    }
+
+    func alive() {
+        let now = ProcessInfo.processInfo.systemUptime
+        lock.lock()
+        let due = now - lastAlive >= Self.aliveInterval
+        if due { lastAlive = now }
+        lock.unlock()
+        if due { emit(nil) }
     }
 }

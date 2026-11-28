@@ -7,8 +7,15 @@
 //              windows (3 could not be measured: no movement)"
 //   offset:   "sound 80 ms late against the picture, the same through the whole file"
 //   drift:    "sound drifts from 0 to 160 ms late over 58 minutes"
-//   jump:     "sound jumps 200 ms late at 23:41 (frames dropped or added there)"
-//   could not measure: "could not measure: …" — never "in sync".
+//   jump:     "sound jumps from 0 to 200 ms late at 23:41 (frames dropped or added
+//              there)" — both levels, each early or late (review F2, 2026-11-28:
+//              a bare relative step hid where the sound ended up)
+//   local:    "sound 150 ms late for about 20 seconds at 1:10" — a run of windows
+//              out of line with the rest and beyond the band (review F4)
+//   could not measure: "could not measure: …" — never "in sync"; windows that
+//              scatter are "the windows disagree (spread ±N ms)" (review F1).
+// A window set aside as out of line with the rest WAS measured: it is counted
+// as "set aside", never as "could not be measured" (review F4).
 // Every word says "early" or "late", never a signed number alone (§2:
 // s > 0 = sound early, s < 0 = sound late). `worstAbsShiftMs` may ORDER a
 // review list; it is never the verdict (§1).
@@ -38,7 +45,7 @@ public enum AVSyncNotMeasured: String, Codable, Sendable, CaseIterable {
         case .soundUnmatched: return "the sound does not match"
         case .pictureUnmatched: return "the picture does not match"
         case .beyondSearch: return "the shift is beyond the search range"
-        case .outlier: return "out of line with the rest"
+        case .outlier: return "set aside as out of line with the rest"
         }
     }
 }
@@ -63,6 +70,8 @@ public struct AVSyncWindow: Codable, Sendable, Equatable {
 
     public var centreSeconds: Double { startSeconds + durationSeconds / 2 }
     public var isMeasured: Bool { notMeasured == nil && shiftMs != nil }
+    /// Measured, then set aside as out of line with the rest.
+    public var isSetAside: Bool { notMeasured == .outlier && shiftMs != nil }
     public var shiftMs: Double? {
         guard let a = soundLagMs, let v = pictureLagMs else { return nil }
         return a - v
@@ -89,13 +98,20 @@ public enum AVSyncCannotMeasure: Codable, Sendable, Equatable {
     case tooShort(overlapSeconds: Double, neededSeconds: Double)
     /// Too few windows measured (§4: fewer than 3, or under 30 %).
     case tooFewWindows(measured: Int, total: Int, reasons: [AVSyncReasonCount])
+    /// Enough windows were measured, but they do not agree on one level, one
+    /// line or one step: their robust spread exceeds `maxWindowSpreadMs`.
+    case windowsDisagree(spreadMs: Double)
 }
 
 public enum AVSyncVerdict: Codable, Sendable, Equatable {
-    case inSync(withinMs: Double, measured: Int, total: Int, notMeasured: [AVSyncReasonCount])
+    /// `notMeasured` never includes set-aside windows; `setAside` counts them.
+    case inSync(withinMs: Double, measured: Int, total: Int, notMeasured: [AVSyncReasonCount], setAside: Int)
     case offset(shiftMs: Double)
     case drift(fromMs: Double, toMs: Double, overSeconds: Double)
-    case jump(stepMs: Double, atSeconds: Double)
+    /// The shift steps from one level to another (both s, ms).
+    case jump(fromMs: Double, toMs: Double, atSeconds: Double)
+    /// A run of windows out of line with the rest and beyond the band.
+    case localShift(shiftMs: Double, atSeconds: Double, forSeconds: Double)
     case couldNotMeasure(AVSyncCannotMeasure)
 
     /// True only for `.inSync`.
@@ -103,7 +119,7 @@ public enum AVSyncVerdict: Codable, Sendable, Equatable {
     /// True for offset, drift and jump — flag for review.
     public var needsReview: Bool {
         switch self {
-        case .offset, .drift, .jump: return true
+        case .offset, .drift, .jump, .localShift: return true
         case .inSync, .couldNotMeasure: return false
         }
     }
@@ -111,17 +127,22 @@ public enum AVSyncVerdict: Codable, Sendable, Equatable {
     /// The plain-language verdict (§1).
     public var sentence: String {
         switch self {
-        case let .inSync(within, measured, total, notMeasured):
+        case let .inSync(within, measured, total, notMeasured, setAside):
             var text = "in sync: sound within \(AVSyncWords.ms(within)) ms of the picture across \(measured) of \(total) windows"
+            var notes: [String] = []
             let missing = notMeasured.reduce(0) { $0 + $1.count }
-            if missing > 0 { text += " (\(missing) could not be measured: \(AVSyncWords.reasons(notMeasured)))" }
+            if missing > 0 { notes.append("\(missing) could not be measured: \(AVSyncWords.reasons(notMeasured))") }
+            if setAside > 0 { notes.append("\(setAside) \(AVSyncNotMeasured.outlier.words)") }
+            if !notes.isEmpty { text += " (" + notes.joined(separator: "; ") + ")" }
             return text
         case let .offset(shift):
             return "sound \(AVSyncWords.shift(shift)) against the picture, the same through the whole file"
         case let .drift(from, to, over):
             return "sound drifts from \(AVSyncWords.range(from, to)) over \(AVSyncWords.duration(over))"
-        case let .jump(step, at):
-            return "sound jumps \(AVSyncWords.shift(step)) at \(AVSyncWords.clock(at)) (frames dropped or added there)"
+        case let .jump(from, to, at):
+            return "sound jumps from \(AVSyncWords.range(from, to)) at \(AVSyncWords.clock(at)) (frames dropped or added there)"
+        case let .localShift(shift, at, length):
+            return "sound \(AVSyncWords.shift(shift)) for about \(AVSyncWords.duration(length)) at \(AVSyncWords.clock(at))"
         case let .couldNotMeasure(why):
             return "could not measure: " + AVSyncWords.cannot(why)
         }
@@ -234,6 +255,8 @@ enum AVSyncWords {
             let lead = measured == 0 ? "none of \(total) windows could be measured"
                                      : "only \(measured) of \(total) windows could be measured"
             return reasons.isEmpty ? lead : lead + " (\(Self.reasons(reasons)))"
+        case let .windowsDisagree(spread):
+            return "the windows disagree (spread ±\(ms(spread)) ms)"
         }
     }
 }

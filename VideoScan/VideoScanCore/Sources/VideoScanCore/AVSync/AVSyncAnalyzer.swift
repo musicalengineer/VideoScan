@@ -17,10 +17,15 @@
 //      moves both lags equally and leaves s = 0.
 //   4. Confidence: a window is measured only when both peaks are high enough
 //      and unique enough; else it says why.
-//   5. Across windows: outliers set aside; then, in order — every window in
-//      band and drift < 20 ms → in sync; a step held ≥ 3 windows each side and
-//      larger than 2× the jitter → jump; a steady change ≥ 20 ms (Theil–Sen
-//      line) → drift; otherwise → offset (median).
+//   5. Across windows: outliers set aside (they WERE measured — counted as
+//      "set aside", never "could not be measured"); then, in order — every
+//      kept window in band, drift < 20 ms and no local run → in sync; a step
+//      held ≥ 3 windows each side, > 2× the jitter → jump (both levels); a run
+//      of ≥ 2 consecutive set-aside windows beyond the band → a local shift;
+//      a steady change ≥ 20 ms (Theil–Sen) → drift; otherwise → offset. Each
+//      of jump / drift / offset is said only when the windows agree with it
+//      (robust spread ≤ maxWindowSpreadMs), else "the windows disagree"
+//      (review 2026-11-28, F1/F2/F4).
 //
 // SIGN: lag = processed(t) ≈ original(t + lag). Sound delayed by d in the
 // processed file: Δa = −d, Δv = 0, s = −d → "late". (§2: s > 0 early.)
@@ -236,40 +241,71 @@ public enum AVSyncAnalyzer {
 
     static func judge(_ report: inout AVSyncReport, policy: AVSyncPolicy) {
         let total = report.windows.count
-        var measured = report.windows.indices.filter { report.windows[$0].isMeasured }
-        guard enough(measured.count, of: total, policy: policy) else {
-            report.verdict = .couldNotMeasure(.tooFewWindows(measured: measured.count, total: total,
+        let measuredAll = report.windows.indices.filter { report.windows[$0].isMeasured }
+        guard enough(measuredAll.count, of: total, policy: policy) else {
+            report.verdict = .couldNotMeasure(.tooFewWindows(measured: measuredAll.count, total: total,
                                                              reasons: reasonCounts(report.windows)))
             return
         }
-        markOutliers(&report.windows, indices: measured, policy: policy)
-        measured = measured.filter { report.windows[$0].isMeasured }
+        markOutliers(&report.windows, indices: measuredAll, policy: policy)
+        let measured = measuredAll.filter { report.windows[$0].isMeasured }
+        let setAside = measuredAll.filter { report.windows[$0].isSetAside }
         guard enough(measured.count, of: total, policy: policy) else {
-            report.verdict = .couldNotMeasure(.tooFewWindows(measured: measured.count, total: total,
-                                                             reasons: reasonCounts(report.windows)))
+            // Measured, but too many fell out of line: they disagree.
+            let all = measuredAll.map { report.windows[$0].shiftMs ?? 0 }
+            let median = AVSyncStats.median(all)
+            report.verdict = .couldNotMeasure(.windowsDisagree(spreadMs: AVSyncStats.robustSigma(all.map { $0 - median })))
             return
         }
         let times = measured.map { report.windows[$0].centreSeconds }
         let values = measured.map { report.windows[$0].shiftMs ?? 0 }
         let line = AVSyncStats.theilSen(times: times, values: values)
         let step = jump(in: report.windows, indices: measured, policy: policy, line: line)
+        let local = localRun(report.windows, setAside: setAside, policy: policy)
         let from = line.intercept + line.slope * report.overlapStartSeconds
         let to = line.intercept + line.slope * report.overlapEndSeconds
         let span = report.overlapEndSeconds - report.overlapStartSeconds
-        report.medianShiftMs = AVSyncStats.median(values)
+        let median = AVSyncStats.median(values)
+        report.medianShiftMs = median
         report.driftMsPerMinute = line.slope * 60
         report.worstAbsShiftMs = values.map(abs).max()
         let allInBand = values.allSatisfy { policy.isInSync(shiftMs: $0) }
-        if allInBand && abs(to - from) < policy.maxDriftMs {
+        // How tightly the windows sit around each model (review F1).
+        let levelSpread = AVSyncStats.robustSigma(values.map { $0 - median })
+        let lineSpread = AVSyncStats.robustSigma(zip(times, values).map { $1 - (line.intercept + line.slope * $0) })
+        func disagree(_ spread: Double) -> AVSyncVerdict { .couldNotMeasure(.windowsDisagree(spreadMs: spread)) }
+        if allInBand && abs(to - from) < policy.maxDriftMs && local == nil {
             report.verdict = .inSync(withinMs: report.worstAbsShiftMs ?? 0, measured: measured.count, total: total,
-                                     notMeasured: reasonCounts(report.windows))
+                                     notMeasured: reasonCounts(report.windows), setAside: setAside.count)
         } else if let step {
-            report.verdict = .jump(stepMs: step.stepMs, atSeconds: step.atSeconds)
+            report.verdict = step.spreadMs <= policy.maxWindowSpreadMs
+                ? .jump(fromMs: step.fromMs, toMs: step.toMs, atSeconds: step.atSeconds) : disagree(step.spreadMs)
+        } else if let local {
+            report.verdict = .localShift(shiftMs: local.shiftMs, atSeconds: local.atSeconds, forSeconds: local.forSeconds)
         } else if abs(to - from) >= policy.maxDriftMs {
-            report.verdict = .drift(fromMs: from, toMs: to, overSeconds: span)
+            report.verdict = lineSpread <= policy.maxWindowSpreadMs
+                ? .drift(fromMs: from, toMs: to, overSeconds: span) : disagree(lineSpread)
         } else {
-            report.verdict = .offset(shiftMs: report.medianShiftMs ?? 0)
+            report.verdict = levelSpread <= policy.maxWindowSpreadMs ? .offset(shiftMs: median) : disagree(levelSpread)
         }
+    }
+
+    /// The longest run (≥ 2) of CONSECUTIVE windows set aside as out of line
+    /// whose shifts all lie outside the in-sync band — a local event (review
+    /// F4), never hidden under "in sync". At the first window's centre; for
+    /// the run's centres plus one hop.
+    static func localRun(_ windows: [AVSyncWindow], setAside: [Int],
+                         policy: AVSyncPolicy) -> (shiftMs: Double, atSeconds: Double, forSeconds: Double)? {
+        let beyond = setAside.filter { !policy.isInSync(shiftMs: windows[$0].shiftMs ?? 0) }.sorted()
+        var best: [Int] = [], run: [Int] = []
+        for index in beyond {
+            if let last = run.last, index == last + 1 { run.append(index) } else { run = [index] }
+            if run.count > best.count { best = run }
+        }
+        guard best.count >= 2, let first = best.first, let last = best.last else { return nil }
+        let shifts = best.map { windows[$0].shiftMs ?? 0 }
+        return (AVSyncStats.median(shifts), windows[first].centreSeconds,
+                windows[last].centreSeconds - windows[first].centreSeconds + policy.hopSeconds)
     }
 
     /// Set aside windows far from their level — the median, or the two
@@ -295,9 +331,10 @@ public enum AVSyncAnalyzer {
         measured >= policy.minMeasuredWindows && Double(measured) >= policy.minMeasuredFraction * Double(total)
     }
 
-    /// Unmeasured windows by reason, largest first (ties in declaration order).
+    /// Unmeasured windows by reason, largest first (ties in declaration
+    /// order). Set-aside windows were measured: never counted here.
     static func reasonCounts(_ windows: [AVSyncWindow]) -> [AVSyncReasonCount] {
-        AVSyncNotMeasured.allCases.compactMap { reason in
+        AVSyncNotMeasured.allCases.filter { $0 != .outlier }.compactMap { reason in
             let count = windows.filter { $0.notMeasured == reason }.count
             return count > 0 ? AVSyncReasonCount(reason: reason, count: count) : nil
         }.enumerated().sorted { a, b in
@@ -313,7 +350,8 @@ public enum AVSyncAnalyzer {
     /// `minJumpMs`, and (c) two levels explain the series better than a
     /// straight line (a drift is not a jump).
     static func jump(in windows: [AVSyncWindow], indices: [Int], policy: AVSyncPolicy,
-                     line known: (slope: Double, intercept: Double)? = nil) -> (stepMs: Double, atSeconds: Double)? {
+                     line known: (slope: Double, intercept: Double)? = nil)
+        -> (fromMs: Double, toMs: Double, atSeconds: Double, spreadMs: Double)? {
         let hold = max(1, policy.jumpHoldWindows)
         let n = indices.count
         guard n >= 2 * hold else { return nil }
@@ -331,14 +369,14 @@ public enum AVSyncAnalyzer {
         let ml = AVSyncStats.median(left), mr = AVSyncStats.median(right)
         let residuals = left.map { $0 - ml } + right.map { $0 - mr }
         let step = mr - ml
-        guard abs(step) >= policy.minJumpMs,
-              abs(step) > policy.jumpJitterFactor * max(AVSyncStats.robustSigma(residuals), 1) else { return nil }
+        let jitter = AVSyncStats.robustSigma(residuals)
+        guard abs(step) >= policy.minJumpMs, abs(step) > policy.jumpJitterFactor * max(jitter, 1) else { return nil }
         let stepError = residuals.map(abs).reduce(0, +) / Double(n)
         let line = known ?? AVSyncStats.theilSen(times: times, values: values)
         let lineError = zip(times, values).map { abs($1 - (line.intercept + line.slope * $0)) }
             .reduce(0, +) / Double(n)
         guard stepError < 0.5 * lineError else { return nil }
-        return (step, (times[bestK - 1] + times[bestK]) / 2)
+        return (ml, mr, (times[bestK - 1] + times[bestK]) / 2, jitter)
     }
 }
 

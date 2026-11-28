@@ -202,8 +202,11 @@ public struct AudioPCMDecoder: Sendable {
     }
 
     /// Decode `path` (optionally a window of it) to PCM. `control` lets a
-    /// job pause the ffmpeg child (SIGSTOP/SIGCONT, ProcessControl).
-    public func decode(path: String, window: Window = .whole, control: ProcessControl? = nil) async throws -> AudioPCM {
+    /// job pause the ffmpeg child (SIGSTOP/SIGCONT, ProcessControl);
+    /// `activity` is called on the pipe thread for each chunk that arrives (a
+    /// liveness signal for a stall watchdog — keep it cheap).
+    public func decode(path: String, window: Window = .whole, control: ProcessControl? = nil,
+                       activity: (@Sendable () -> Void)? = nil) async throws -> AudioPCM {
         guard FileManager.default.isExecutableFile(atPath: ffmpegPath) else {
             throw Failure.ffmpegMissing(path: ffmpegPath)
         }
@@ -213,7 +216,10 @@ public struct AudioPCMDecoder: Sendable {
             executable: ffmpegPath,
             arguments: Self.arguments(path: path, window: window, sampleRate: sampleRate, maxSeconds: maxSeconds,
                                       alignToFileStart: alignToFileStart),
-            stdoutData: { chunk in sink.append(chunk) },
+            stdoutData: { chunk in
+                sink.append(chunk)
+                activity?()
+            },
             stdoutLimitBytes: 0,
             deadlineSeconds: deadlineSeconds,
             control: control)

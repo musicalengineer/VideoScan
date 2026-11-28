@@ -241,11 +241,11 @@ struct AVSyncAnalyzerTests {
 
         let jump = analyze(AVSyncSyntheticSignals.pair(seconds: 240, sound: { _ in 0 },
                                                        picture: { $0 < 121 ? 0 : 200 }))
-        guard case let .jump(step, at) = jump.verdict else {
+        guard case let .jump(from, to, at) = jump.verdict else {
             Issue.record("expected jump: \(jump.sentence)"); return
         }
-        #expect(abs(step + 200) < 5 && abs(at - 121) <= 10, "\(jump.sentence)")
-        #expect(jump.sentence.hasPrefix("sound jumps 200 ms late at "), "\(jump.sentence)")
+        #expect(abs(from) < 5 && abs(to + 200) < 5 && abs(at - 121) <= 10, "\(jump.sentence)")
+        #expect(jump.sentence.hasPrefix("sound jumps from 0 to 200 ms late at "), "\(jump.sentence)")
     }
 
     @Test("could not measure: silent sound, static picture, too short — never in sync")
@@ -324,7 +324,7 @@ struct AVSyncPolicyTests {
         #expect(p.soundSearchMs == 250 && p.pictureSearchMs == 1_000 && p.soundAmbiguitySearchMs == 1_000)
         #expect(p.minPeak == 0.30 && p.maxSecondPeakRatio == 0.80)
         #expect(p.minSoundActivity == 0.002 && p.minPictureActivity == 2.0)
-        #expect(p.outlierSigmas == 4 && p.outlierFloorMs == 20)
+        #expect(p.outlierSigmas == 4 && p.outlierFloorMs == 20 && p.maxWindowSpreadMs == 15)
         #expect(p.jumpJitterFactor == 2 && p.minJumpMs == 20 && p.jumpHoldWindows == 3)
         #expect(p.identity == "v1")
     }
@@ -350,14 +350,18 @@ struct AVSyncReportWordsTests {
     @Test("the verdict sentences are exactly the design's words (§1)")
     func sentences() {
         #expect(AVSyncVerdict.inSync(withinMs: 12, measured: 41, total: 44,
-                                     notMeasured: [AVSyncReasonCount(reason: .noMovement, count: 3)]).sentence
+                                     notMeasured: [AVSyncReasonCount(reason: .noMovement, count: 3)], setAside: 0).sentence
                 == "in sync: sound within 12 ms of the picture across 41 of 44 windows (3 could not be measured: no movement)")
         #expect(AVSyncVerdict.offset(shiftMs: -80).sentence
                 == "sound 80 ms late against the picture, the same through the whole file")
         #expect(AVSyncVerdict.drift(fromMs: 0.4, toMs: -160, overSeconds: 58 * 60).sentence
                 == "sound drifts from 0 to 160 ms late over 58 minutes")
-        #expect(AVSyncVerdict.jump(stepMs: -200, atSeconds: 23 * 60 + 41).sentence
-                == "sound jumps 200 ms late at 23:41 (frames dropped or added there)")
+        #expect(AVSyncVerdict.jump(fromMs: 0, toMs: -200, atSeconds: 23 * 60 + 41).sentence
+                == "sound jumps from 0 to 200 ms late at 23:41 (frames dropped or added there)")
+        #expect(AVSyncVerdict.localShift(shiftMs: -150, atSeconds: 80, forSeconds: 30).sentence
+                == "sound 150 ms late for about 30 seconds at 1:20")
+        #expect(AVSyncVerdict.couldNotMeasure(.windowsDisagree(spreadMs: 42.4)).sentence
+                == "could not measure: the windows disagree (spread ±42 ms)")
         #expect(AVSyncVerdict.couldNotMeasure(.noSharedSound).sentence
                 == "could not measure: these two files do not share the same sound")
     }
@@ -367,9 +371,10 @@ struct AVSyncReportWordsTests {
         #expect(AVSyncVerdict.offset(shiftMs: 45).sentence.hasPrefix("sound 45 ms early "))
         #expect(AVSyncVerdict.drift(fromMs: 20, toMs: -40, overSeconds: 600).sentence
                 == "sound drifts from 20 ms early to 40 ms late over 10 minutes")
-        #expect(AVSyncVerdict.jump(stepMs: 120, atSeconds: 3_725).sentence
-                == "sound jumps 120 ms early at 1:02:05 (frames dropped or added there)")
-        for verdict in [AVSyncVerdict.offset(shiftMs: -80), .offset(shiftMs: 80), .jump(stepMs: -5, atSeconds: 1)] {
+        #expect(AVSyncVerdict.jump(fromMs: -20, toMs: 100, atSeconds: 3_725).sentence
+                == "sound jumps from 20 ms late to 100 ms early at 1:02:05 (frames dropped or added there)")
+        for verdict in [AVSyncVerdict.offset(shiftMs: -80), .offset(shiftMs: 80), .jump(fromMs: -5, toMs: -50, atSeconds: 1),
+                        .localShift(shiftMs: -90, atSeconds: 5, forSeconds: 20)] {
             #expect(!verdict.sentence.contains("-"), "\(verdict.sentence)")
         }
     }
@@ -377,7 +382,7 @@ struct AVSyncReportWordsTests {
     @Test("several reasons are counted, largest first; could-not-measure words")
     func reasons() {
         let v = AVSyncVerdict.inSync(withinMs: 3, measured: 7, total: 10, notMeasured: [
-            AVSyncReasonCount(reason: .noMovement, count: 2), AVSyncReasonCount(reason: .noSound, count: 1)])
+            AVSyncReasonCount(reason: .noMovement, count: 2), AVSyncReasonCount(reason: .noSound, count: 1)], setAside: 0)
         #expect(v.sentence.hasSuffix("(3 could not be measured: 2 no movement, 1 no sound)"))
         #expect(AVSyncVerdict.couldNotMeasure(.tooFewWindows(measured: 2, total: 10, reasons: [])).sentence
                 == "could not measure: only 2 of 10 windows could be measured")

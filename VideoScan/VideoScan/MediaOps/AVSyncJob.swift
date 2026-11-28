@@ -75,13 +75,29 @@ final class AVSyncJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnDe
     }
 
     /// Test seams. Production: the real reader and a stat of the path.
-    typealias Reader = @Sendable (AVSyncSide, ProcessControl, @escaping @Sendable (Double) -> Void) async throws
+    typealias Reader = @Sendable (AVSyncSide, ProcessControl, @escaping @Sendable (Double?) -> Void) async throws
         -> AVSyncFileEvidence
     typealias Stat = @Sendable (String) -> FileStamp?
 
     nonisolated static let realReader: Reader = { side, control, progress in
-        try await AVSyncSignalReader().read(path: side.path, expectedDurationSeconds: side.durationSeconds,
+        try await AVSyncSignalReader().read(path: side.path, expectedDurationSeconds: expectedDuration(of: side),
                                             control: control, progress: progress)
+    }
+
+    /// The catalog's duration, or nil when it does not know one (0 or less —
+    /// review F3: never "zero seconds long", which made a 10-minute deadline
+    /// and no progress ticks for the stall watchdog).
+    nonisolated static func expectedDuration(of side: AVSyncSide) -> Double? {
+        AVSyncSignalReader.knownDuration(side.durationSeconds)
+    }
+
+    /// Does the side's stored stamp still describe the file on disk?
+    typealias Vouch = @Sendable (AVSyncSide) -> Bool
+
+    /// No stamp (the digest came from an archive fixity): size governs.
+    nonisolated static let realVouch: Vouch = { side in
+        guard let fixity = side.fixity else { return true }
+        return fixity.describesFileNow(FileIdentityStamp.capture(path: side.path))
     }
 
     nonisolated static let realStat: Stat = { path in
@@ -107,6 +123,7 @@ final class AVSyncJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnDe
     private let store: AVSyncResultStore
     private let reader: Reader
     private let stat: Stat
+    private let vouch: Vouch
     private let gatesFor: (Pair) -> [MediaVolumeGate]
     private let pauseCoordinator = JobPauseCoordinator()
     private var stallMonitor: StallMonitor?
@@ -117,14 +134,20 @@ final class AVSyncJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnDe
 
     init(pairs: [Pair], store: AVSyncResultStore, policy: AVSyncPolicy = .default,
          gatesFor: @escaping (Pair) -> [MediaVolumeGate] = { _ in [] },
-         reader: @escaping Reader = AVSyncJob.realReader, stat: @escaping Stat = AVSyncJob.realStat) {
+         reader: @escaping Reader = AVSyncJob.realReader, stat: @escaping Stat = AVSyncJob.realStat,
+         vouch: @escaping Vouch = AVSyncJob.realVouch) {
         items = pairs.map { Item(pair: $0, outcome: nil) }
         self.store = store
         self.policy = policy
         self.gatesFor = gatesFor
         self.reader = reader
         self.stat = stat
+        self.vouch = vouch
     }
+
+    /// True while the stall watchdog is running (tests: never while queued
+    /// for a volume gate).
+    var isWatchingForStall: Bool { stallMonitor?.isRunningForTesting ?? false }
 
     // MARK: MediaFileOperationJob
 
@@ -215,25 +238,28 @@ final class AVSyncJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnDe
     /// One pair: refuse before reading; read both; refuse if either changed;
     /// analyse off the main actor; keep the result.
     private func measure(_ pair: Pair, index: Int) async -> Outcome {
-        if let why = Self.refusal(pair, stat: stat) { return .refused(why) }
+        if let why = Self.refusal(pair, stat: stat, vouch: vouch) { return .refused(why) }
         let stampsBefore = (stat(pair.original.path), stat(pair.processed.path))
         let label = "check a/v sync \(pair.processed.filename)"
         let monitor = StallMonitor(label: label) { [weak self] silent in
             Task { @MainActor [weak self] in self?.handleStall(silentFor: silent) }
         }
-        stallMonitor = monitor
-        monitor.start()
-        pauseCoordinator.register(monitor)
+        // Started only once the volume gates are held: waiting hours behind
+        // another job's read is not a stall (review, 2026-11-28).
+        let beginWatching: @Sendable () async -> Void = { [weak self] in
+            await self?.watch(monitor)
+        }
         defer { monitor.stop(); if stallMonitor === monitor { stallMonitor = nil } }
         do {
             let control = pauseCoordinator.control
-            let onOriginal: @Sendable (Double) -> Void = { [weak self] f in
+            let onOriginal: @Sendable (Double?) -> Void = { [weak self] f in
                 self?.progress(index: index, part: 0, of: f, monitor: monitor)
             }
-            let onProcessed: @Sendable (Double) -> Void = { [weak self] f in
+            let onProcessed: @Sendable (Double?) -> Void = { [weak self] f in
                 self?.progress(index: index, part: 1, of: f, monitor: monitor)
             }
             let evidence = try await withGates(gatesFor(pair)[...]) { [reader] in
+                await beginWatching()
                 let original = try await Self.read(pair.original, role: "the original", reader: reader,
                                                    control: control, progress: onOriginal)
                 let processed = try await Self.read(pair.processed, role: "the processed file", reader: reader,
@@ -257,6 +283,13 @@ final class AVSyncJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnDe
         }
     }
 
+    private func watch(_ monitor: StallMonitor) {
+        guard state.isActive else { return }
+        stallMonitor = monitor
+        monitor.start()
+        pauseCoordinator.register(monitor)
+    }
+
     struct Evidence: Sendable {
         let original: AVSyncFileEvidence
         let processed: AVSyncFileEvidence
@@ -267,7 +300,7 @@ final class AVSyncJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnDe
     }
 
     nonisolated private static func read(_ side: AVSyncSide, role: String, reader: Reader, control: ProcessControl,
-                                         progress: @escaping @Sendable (Double) -> Void) async throws -> AVSyncFileEvidence {
+                                         progress: @escaping @Sendable (Double?) -> Void) async throws -> AVSyncFileEvidence {
         do {
             return try await reader(side, control, progress)
         } catch let failure as AVSyncSignalReader.Failure {
@@ -283,8 +316,9 @@ final class AVSyncJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnDe
     }
 
     /// Called from ffmpeg's reader threads.
-    nonisolated private func progress(index: Int, part: Int, of fileFraction: Double, monitor: StallMonitor) {
+    nonisolated private func progress(index: Int, part: Int, of fraction: Double?, monitor: StallMonitor) {
         monitor.tick()
+        guard let fileFraction = fraction else { return }
         Task { @MainActor [weak self] in
             guard let self, self.state.isActive else { return }
             let perPair = 1.0 / Double(max(1, self.items.count))
@@ -319,7 +353,7 @@ final class AVSyncJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnDe
     // MARK: Pure rules (tested)
 
     /// The refusal for a pair, or nil. Runs before anything is read.
-    nonisolated static func refusal(_ pair: Pair, stat: Stat) -> String? {
+    nonisolated static func refusal(_ pair: Pair, stat: Stat, vouch: Vouch = { _ in true }) -> String? {
         for (side, role) in [(pair.processed, "the processed file"), (pair.original, "the original")] {
             if side.digest == nil {
                 return "\(role) (\(side.filename)) has no whole-file fingerprint yet — run Full Hashes first"
@@ -332,6 +366,11 @@ final class AVSyncJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnDe
             }
             if stamp.size != side.sizeBytes {
                 return "\(role) (\(side.filename)) changed since it was catalogued (\(stamp.size) bytes, catalog says \(side.sizeBytes))"
+            }
+            // The digest is evidence only while its stamp still describes the
+            // file (device, inode, size, mtime, ctime) — the #523 precedent.
+            if !vouch(side) {
+                return "\(role) (\(side.filename)) may have changed since its whole-file fingerprint was taken — run Full Hashes again"
             }
         }
         return nil

@@ -40117,6 +40117,7 @@
         "currentRulesOnly",
         "duplicateDispatch",
         "endToEnd",
+        "factsFromRecord",
         "inSync",
         "keyedByDigests",
         "logLine",
@@ -40124,12 +40125,36 @@
         "menuAndSheet",
         "noLineage",
         "pauseResume",
+        "reRecordRefreshesAndEvictionKeepsLookups",
         "readFailure",
         "refusals",
         "refusedPair",
+        "staleStampIsRefused",
         "stop",
         "summary",
-        "timingLine"
+        "timingLine",
+        "watchdogAfterGates",
+        "zeroDurationIsUnknown"
+      ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AVSyncReviewFindingsTests.swift",
+      "stage": "unit",
+      "suites": [
+        "AVSyncReviewFindingsTests",
+        "AVSyncPairingTests",
+        "AVSyncReviewReaderTests"
+      ],
+      "tests": [
+        "agreementIsAnOffset",
+        "jumpWordsKeepTheLevel",
+        "localRunIsReported",
+        "outliersAreNotUnmeasured",
+        "pairingOnlyAtEOF",
+        "progressIsThrottled",
+        "scatterIsNotAnOffset",
+        "zeroDurationIsUnknown"
       ]
     }
   ],
@@ -42927,9 +42952,9 @@
           "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 4222,
+      "expected_floor": 4227,
       "name": "unit",
-      "package_expected_floor": 1078,
+      "package_expected_floor": 1086,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",
@@ -43062,7 +43087,10 @@
         "VideoScanCoreTests.AVSyncCorrelationTests",
         "VideoScanCoreTests.AVSyncPolicyTests",
         "VideoScanCoreTests.AVSyncReportWordsTests",
-        "VideoScanCoreTests.AVSyncSignalsTests"
+        "VideoScanCoreTests.AVSyncSignalsTests",
+        "VideoScanCoreTests.AVSyncPairingTests",
+        "VideoScanCoreTests.AVSyncReviewFindingsTests",
+        "VideoScanCoreTests.AVSyncReviewReaderTests"
       ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",

@@ -78,6 +78,11 @@ public struct AVSyncPolicy: Sendable, Equatable, Codable {
     /// median shift (and more than `outlierFloorMs` away) is set aside.
     public var outlierSigmas: Double = 4
     public var outlierFloorMs: Double = 20
+    /// The windows agree when the robust spread (1.4826 × MAD) of their
+    /// shifts around the verdict's model — one level (offset), a line
+    /// (drift), two levels (jump) — is at most this; otherwise "the windows
+    /// disagree" (review F1: a scatter is not "the same through the whole file").
+    public var maxWindowSpreadMs: Double = 15
     /// A step is a jump only when larger than this many times the window
     /// jitter, larger than `minJumpMs`, and held for `jumpHoldWindows` on
     /// each side.
@@ -103,7 +108,7 @@ public struct AVSyncPolicy: Sendable, Equatable, Codable {
                                 gridSeconds, windowSeconds, hopSeconds, soundSearchMs, pictureSearchMs,
                                 soundAmbiguitySearchMs, minPeak,
                                 maxSecondPeakRatio, minSoundActivity, minPictureActivity, outlierSigmas,
-                                outlierFloorMs, jumpJitterFactor, minJumpMs, Double(jumpHoldWindows)]
+                                outlierFloorMs, maxWindowSpreadMs, jumpJitterFactor, minJumpMs, Double(jumpHoldWindows)]
         return "v\(version)~" + values.map { String($0) }.joined(separator: ",")
     }
 }
