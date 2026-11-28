@@ -1,6 +1,6 @@
 # AV Sync Analysis — design (phase 1: a processed file against its original)
 
-Status: in flight — 2026-11-27. Phase 1 built on branch feat/av-sync-analysis (reviewed; awaiting its staged full suite); result storage waits for Rick's schema decision.
+Status: built (phase 1) — 2026-11-27, merge ea94e7f1e. Result storage waits for Rick's schema decision (results in memory and the log meanwhile); phase 2 (no original) and phase 3 (repair) not built.
 
 *Rick said "design it" 2026-11-27. Problem statement and first ideas: Rick's notes `lip_sync.md` (in his checkout, not yet in git). This doc replaces their
 "Proposed Solution" for phase 1. Deleted when built (CLAUDE.md); git keeps it.*
