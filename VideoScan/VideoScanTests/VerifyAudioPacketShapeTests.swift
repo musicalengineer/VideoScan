@@ -254,7 +254,7 @@ struct VerifyAudioPacketShapeTests {
     /// pass — finishes before ONE levels pass of the pre-fix chain does. Before the fix the diagnosis
     /// is two such passes (ratio ≈ 2); after it each pass costs about a quarter (ratio ≈ 0.5).
     @Test("budget: Verify Audio's whole diagnosis of a one-sample file beats ONE pre-fix levels pass, with the verdict of the same sound in normal packets",
-          .timeLimit(.minutes(5)))
+          .timeLimit(.minutes(8)))
     func diagnoseWithinBudget() async throws {
         try #require(VerifyAudioTestMedia.toolsAvailable)
         let dir = try VerifyAudioTestMedia.makeScratchDir("packetshape_budget")
@@ -263,17 +263,31 @@ struct VerifyAudioPacketShapeTests {
         let oneSample = try OneSamplePacketMov.oneSampleCopy(of: normal, name: "test_shape_one_sample.mov")
         let reference = try await VerifyAudioProbe.diagnose(path: normal)
 
+        // Two rounds, alternately, keeping each one's fastest (TimingBudget.interleavedMinimumCPUTime's
+        // rule, in wall time because the work is in child processes): a burst of load that lands on one
+        // measurement and not the other is dropped instead of deciding the verdict (GH #536).
+        // Worst-case memory: two diagnoses' findings, a few KB; the media is streamed by ffmpeg.
         let clock = ContinuousClock()
-        var start = clock.now
-        let tag = AstatsOutputParser.newRunTag()
-        _ = try await measure(referenceArgs(oneSample, difference: false, tag: tag), tag: tag)
-        let oldPassSeconds = (clock.now - start) / .seconds(1)
-        start = clock.now
-        let diagnosis = try await VerifyAudioProbe.diagnose(path: oneSample)
-        let seconds = (clock.now - start) / .seconds(1)
+        var oldPassSeconds = Double.infinity, seconds = Double.infinity
+        var lastDiagnosis: AudioVerifyDiagnosis?
+        for _ in 0..<2 {
+            var start = clock.now
+            let tag = AstatsOutputParser.newRunTag()
+            _ = try await measure(referenceArgs(oneSample, difference: false, tag: tag), tag: tag)
+            oldPassSeconds = min(oldPassSeconds, (clock.now - start) / .seconds(1))
+            start = clock.now
+            lastDiagnosis = try await VerifyAudioProbe.diagnose(path: oneSample)
+            seconds = min(seconds, (clock.now - start) / .seconds(1))
+        }
+        let diagnosis = try #require(lastDiagnosis)
 
         print("VerifyAudioPacketShapeTests: on 480 000 one-sample packets, diagnose \(String(format: "%.1f", seconds)) s; one pre-fix levels pass \(String(format: "%.1f", oldPassSeconds)) s")
-        #expect(seconds < oldPassSeconds, "diagnose took \(seconds) s, one pre-fix levels pass \(oldPassSeconds) s")
+        // GH #536: judged as a relative budget, fastest of two interleaved rounds, and the suite runs in
+        // xctest_shards' serial tail (TIMING_SEEN): beside 7 other test hosts on the M4 (11/27, load ~10)
+        // one round measured 8.8 s against 8.3 s, where a quiet run is 0.56–0.7×. The limit (×1) is unchanged; the pre-fix chain is ≈ ×2.
+        expectRatio(TimingBudget.judgeRelative("Verify Audio diagnose of 480 000 one-sample packets",
+                                               measured: .seconds(seconds), reference: .seconds(oldPassSeconds),
+                                               referenceName: "one pre-fix levels pass", limit: 1))
         #expect(diagnosis.isHealthy && reference.isHealthy, "\(diagnosis.findings) / \(reference.findings)")
         #expect(diagnosis.balanceAnalysis?.levelsComplete == true)
         #expect(diagnosis.balanceAnalysis?.measurements == reference.balanceAnalysis?.measurements)

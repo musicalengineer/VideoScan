@@ -297,13 +297,27 @@ struct TimingBudgetTests {
         expectBudget(sleepCPU, under: .milliseconds(50), "sleeping 300 ms cost \(sleepCPU) of thread CPU")
 
         var sink: UInt64 = 0
+        var spinWall = Duration.zero
         let spinCPU = TimingBudget.measureThreadCPUTime {
-            let until = ContinuousClock.now + .milliseconds(200)
-            while ContinuousClock.now < until { sink &+= 1 }
+            spinWall = wall.measure {
+                let until = ContinuousClock.now + .milliseconds(200)
+                while ContinuousClock.now < until { sink &+= 1 }
+            }
         }
         #expect(sink > 0)
-        // On an idle core ~200 ms; allow for a busy host descheduling us.
-        #expect(spinCPU >= .milliseconds(20), "spinning 200 ms wall cost only \(spinCPU) of thread CPU")
+        // On an idle core the spin's thread CPU is ~its wall time. A busy host
+        // deschedules the spinner, and then wall runs on while CPU does not:
+        // the M4 full suite of 11/27 (load ~10) measured 10.5 ms of CPU for the
+        // 200 ms spin. So "the clock counts this thread's work" is judged as a
+        // RATIO with a budget marker (GH #536), not a bare #expect: a miss beside
+        // the Core lane's other strands is run again alone (DECISIONS 2026-11-21)
+        // — AMBER if it passes alone, RED if not. A clock that returns zero (or
+        // another thread's time) is ×∞ alone too. The ×10 is the old floor
+        // (20 ms of a 200 ms spin), unchanged.
+        expectRatio(TimingBudget.judgeRelative("spin: wall time per unit of its own thread CPU",
+                                               measured: spinWall, reference: spinCPU,
+                                               referenceName: "the spin's thread CPU", limit: 10))
+        // Not load: a thread cannot burn more CPU than the wall time it spun.
         #expect(spinCPU <= .milliseconds(260), "thread CPU \(spinCPU) exceeds the 200 ms spin — not per-thread?")
     }
 
