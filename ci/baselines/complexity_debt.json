@@ -264,7 +264,7 @@
   },
   "VideoScan/VideoScan/Catalog/UpdateCatalogSheet.swift::UpdateCatalogRowView.statusView": {
    "ccn": 19,
-   "nloc": 58
+   "nloc": 56
   },
   "VideoScan/VideoScan/Catalog/VideoScanModel+CatalogScope.swift::VideoScanModel.applyCatalogScopeGate": {
    "ccn": 21,
