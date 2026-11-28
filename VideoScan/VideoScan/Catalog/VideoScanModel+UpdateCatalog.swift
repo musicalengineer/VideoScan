@@ -54,6 +54,9 @@ struct UpdateCatalogApplySummary: Equatable, Sendable {
     var unchanged: Int = 0
     var retainedInvisible: Int = 0
     var ambiguous: Int = 0
+    /// GH #478: files at known paths that had changed; Rick's values copied
+    /// onto them with a note (RescanCarryWithNote).
+    var carriedWithNote: Int = 0
     var tripwireFired: Bool = false
     var snapshotPath: String?
 
@@ -66,6 +69,7 @@ struct UpdateCatalogApplySummary: Equatable, Sendable {
         unchanged = outcome.refreshed
         retainedInvisible = outcome.retainedInvisible
         ambiguous = outcome.ambiguous
+        carriedWithNote = outcome.carriedWithNote
         tripwireFired = outcome.tripwireFired
         snapshotPath = outcome.snapshotPath
     }
@@ -418,7 +422,7 @@ extension VideoScanModel {
         updateCatalogPendingMerges[key] = nil
         updateCatalogDeferredRoots.remove(key)
         setUpdateCatalogPhase(targetID: row.id, .applied(summary))
-        let line = "Update Catalog (\(pending.volName)): \(summary.moved) moved (relinked), \(summary.new) new, \(summary.pruned) missing pruned, \(summary.unchanged) unchanged, \(summary.retainedInvisible) kept (invisible to scan options)\(summary.ambiguous > 0 ? ", \(summary.ambiguous) ambiguous left for review" : "")\(summary.tripwireFired ? " — TRIPWIRE fired, snapshot: \(summary.snapshotPath ?? "none")" : "")"
+        let line = "Update Catalog (\(pending.volName)): \(summary.moved) moved (relinked), \(summary.new) new, \(summary.pruned) missing pruned, \(summary.unchanged) unchanged, \(summary.retainedInvisible) kept (invisible to scan options)\(summary.ambiguous > 0 ? ", \(summary.ambiguous) ambiguous left for review" : "")\(summary.carriedWithNote > 0 ? "; \(RescanCarryWithNote.summary(summary.carriedWithNote))" : "")\(summary.tripwireFired ? " — TRIPWIRE fired, snapshot: \(summary.snapshotPath ?? "none")" : "")"
         log("  \(line)")
         appLog.write(line)
         updateCatalogLog.notice("\(line, privacy: .public)")

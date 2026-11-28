@@ -30,6 +30,7 @@ struct NotesAuthorshipSensorTests {
         "VideoScanModel+RepairLifecycle.swift":   "repair confirm carries the original's note; undo restores the snapshot",
         "VideoScanModel+MasterArchive.swift":     "Promote: the archive copy carries the source's note verbatim",
         "VideoScanModel+RescanPreservation.swift": "rescan preservation carries the note's history lines; probe diagnostics come from the fresh probe",
+        "RescanCarryWithNote.swift":              "GH #478 Undo Carry: takes Rick's carried note back off (blank = the new record's prior value) — never machine text",
         "VideoRecord+Clone.swift":                "clone copies the field",
         "VideoRecord.swift":                      "Codable decode",
         "VideoRecordDTO.swift":                   "export DTO init copies the field",
@@ -60,6 +61,7 @@ struct NotesAuthorshipSensorTests {
         "VideoScanModel+MasterArchive.swift", "VideoScanModel+NotesRepair.swift", "VideoScanModel+PeopleTags.swift",
         "VideoScanModel+ProbeEngine.swift", "VideoScanModel+Relocate.swift", "VideoScanModel+RepairLifecycle.swift",
         "VideoScanModel+RescanPreservation.swift", "VideoScanModel+ScanMergeMoveIdentity.swift",
+        "RescanCarryWithNote.swift",   // GH #478: the signed File Journey "Carry <ISO>: …" line and its undone rewrite
         "VideoScanModel+ScanTargetPersistence.swift", "VideoScanModel+WorkflowTags.swift",
     ]
 

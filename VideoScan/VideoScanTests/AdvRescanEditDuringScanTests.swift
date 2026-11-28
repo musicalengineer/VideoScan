@@ -60,8 +60,12 @@ struct AdvRescanEditDuringScanTests {
     }
 
     /// What the scan produces for `path`: a new instance (new id), the
-    /// file's technical values, no curated values at all.
-    private static func freshProbe(path: String, codec: String = "h264-NEW", sizeBytes: Int64 = 2_000) -> VideoRecord {
+    /// file's technical values, no curated values at all. Same size as
+    /// `curatedRecord` by default: the SAME file re-probed — these tests are
+    /// about edits during the scan; a size change means a different file,
+    /// which carries with a note and keeps the old row (GH #478,
+    /// RescanCarryWithNoteTests).
+    private static func freshProbe(path: String, codec: String = "h264-NEW", sizeBytes: Int64 = 1_000) -> VideoRecord {
         let r = VideoRecord()
         r.filename = (path as NSString).lastPathComponent
         r.fullPath = path
@@ -128,7 +132,7 @@ struct AdvRescanEditDuringScanTests {
         #expect(merged === fresh, "precondition: the merge swapped in the fresh instance")
         Self.expectCurated(merged, "edit during the scan")
         #expect(merged.videoCodec == "h264-NEW", "the scan's technical values still refresh")
-        #expect(merged.sizeBytes == 2_000)
+        #expect(merged.sizeBytes == 1_000)
     }
 
     /// A record with NOTHING curated at scan start (so no snapshot entry)
@@ -306,7 +310,7 @@ struct AdvRescanEditDuringScanTests {
 
         model.snapshotPreservedFieldsForRescan(of: target)
         plain.starRating = 2
-        let fresh = Self.freshProbe(path: plain.fullPath, codec: "", sizeBytes: 7)
+        let fresh = Self.freshProbe(path: plain.fullPath, codec: "")   // the same file, now unreadable
         fresh.notes = MachineNote.line(author: .ffprobe, text: "moov atom not found")
         model.applyPreservedFieldsAfterRescan(of: target, onto: [fresh])
         _ = await model.commitScanResults(root: root.path, volName: "Adv",
