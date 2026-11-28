@@ -31,7 +31,7 @@ extension MediaFileOperationsCenter {
                                 self?.gatePlan(forPaths: [pair.original.path, pair.processed.path]) ?? []
                             },
                             reader: reader ?? AVSyncJob.realReader, stat: stat ?? AVSyncJob.realStat,
-                            vouch: vouch ?? AVSyncJob.realVouch)
+                            vouch: vouch ?? AVSyncJob.realVouch, cache: avSyncEvidence)
         guard add(job) else { return nil }
         job.start()
         appLog.write(Self.startSummaryLine(verb: job.kind.logVerb, title: job.title,

@@ -38,9 +38,16 @@ private let processRunnerLog = Logger(subsystem: "Rick-Breen.VideoScan",
 ///     continued — it would just sit there "cancelling" forever. Every
 ///     ProcessRunner SIGTERM site calls `resumeForKill()` first. (SIGKILL
 ///     needs no such help; it destroys stopped processes directly.)
+///   - Several live children: one job may run children side by side (A/V
+///     sync reads sound and picture of both files at once — four). The
+///     control holds every live child (weakly) and pauses, resumes and
+///     unfreezes-for-kill ALL of them; it once held only the last one
+///     attached, so Pause left the others running (2026-11-28).
 public final class ProcessControl: @unchecked Sendable {
     private let lock = NSLock()
-    private weak var proc: Process?
+    /// Live children, held weakly (≈ a set of weak_ptr; a finished child
+    /// drops out by itself). Touched only under `lock`.
+    private let procs = NSHashTable<Process>.weakObjects()
     private var wantsSuspended = false
     /// True while the child (or the pending wish) is suspended.
     public var isSuspended: Bool {
@@ -54,7 +61,7 @@ public final class ProcessControl: @unchecked Sendable {
     /// suspend wish immediately so "pause between phases" holds.
     func attach(_ process: Process) {
         lock.lock()
-        proc = process
+        procs.add(process)
         let applyNow = wantsSuspended
         lock.unlock()
         if applyNow { process.suspend() }
@@ -66,9 +73,9 @@ public final class ProcessControl: @unchecked Sendable {
         lock.lock()
         guard !wantsSuspended else { lock.unlock(); return false }
         wantsSuspended = true
-        let target = proc
+        let targets = procs.allObjects
         lock.unlock()
-        if let target, target.isRunning { _ = target.suspend() }
+        for target in targets where target.isRunning { _ = target.suspend() }
         return true
     }
 
@@ -89,20 +96,21 @@ public final class ProcessControl: @unchecked Sendable {
         guard wantsSuspended else { lock.unlock(); return false }
         wantsSuspended = false
         lastResumedAtValue = Date()
-        let target = proc
+        let targets = procs.allObjects
         lock.unlock()
-        if let target, target.isRunning { _ = target.resume() }
+        for target in targets where target.isRunning { _ = target.resume() }
         return true
     }
 
     /// Runner-side, before any SIGTERM: continue a stopped child so the
     /// signal can actually be delivered. Keeps `wantsSuspended` — a job
     /// paused then cancelled must not flip its UI back to "running".
-    func resumeForKill() {
+    /// Only the child being killed: its paused siblings stay paused.
+    func resumeForKill(_ process: Process) {
         lock.lock()
-        let target = wantsSuspended ? proc : nil
+        let paused = wantsSuspended
         lock.unlock()
-        if let target, target.isRunning { _ = target.resume() }
+        if paused, process.isRunning { _ = process.resume() }
     }
 }
 
@@ -400,7 +408,7 @@ public enum ProcessRunner {
             if proc.isRunning {
                 // A SIGSTOPped child can't receive SIGTERM — continue it
                 // first so cancel-while-paused actually cancels (GH #150).
-                control?.resumeForKill()
+                control?.resumeForKill(proc)
                 proc.terminate()
                 // Escalate SIGTERM → SIGKILL (→ abandon) if the child lingers
                 // past the grace period. `isRunning` is re-checked at fire
@@ -518,7 +526,7 @@ public enum ProcessRunner {
                 )
             }
             if launchState.isCancelled, proc.isRunning {
-                control?.resumeForKill()
+                control?.resumeForKill(proc)
                 proc.terminate()
                 escalateAfterTerminate(
                     proc: proc, executable: executable,
@@ -605,7 +613,7 @@ public enum ProcessRunner {
             // run immediately after terminate()) always sees it (GH #136).
             deadlineFlag.markFired()
             processRunnerLog.warning("\(tool, privacy: .public) pid \(proc.processIdentifier) exceeded \(afterSeconds, format: .fixed(precision: 0), privacy: .public)s deadline — sending SIGTERM")
-            control?.resumeForKill()
+            control?.resumeForKill(proc)
             proc.terminate()
             escalateAfterTerminate(
                 proc: proc, executable: executable,

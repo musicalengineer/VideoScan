@@ -139,4 +139,60 @@ struct ProcessControlTests {
         // not flip its badge back to running.
         #expect(control.isSuspended)
     }
+
+    // MARK: Several live children under one control (A/V sync reads sound and
+    // picture side by side, and both files of a pair at once — up to four).
+
+    private static func beatLoop(_ beats: BeatCounter, count: Int?, control: ProcessControl,
+                                 killGraceSeconds: Double = ProcessRunner.defaultKillGraceSeconds) -> Task<ProcessRunner.Result, Never> {
+        let loop = count.map { "i=0; while [ $i -lt \($0) ]; do echo beat >&2; i=$((i+1)); sleep 0.05; done" }
+            ?? "while true; do echo beat >&2; sleep 0.05; done"
+        return Task {
+            await ProcessRunner.runProcess(executable: "/bin/sh", arguments: ["-c", loop],
+                                           stderrLine: { _ in beats.increment() },
+                                           killGraceSeconds: killGraceSeconds, control: control)
+        }
+    }
+
+    /// Pause freezes EVERY live child, not only the last one launched.
+    @Test func suspendFreezesEveryLiveChild() async throws {
+        let control = ProcessControl()
+        let first = BeatCounter(), second = BeatCounter()
+        let total = 60
+        let runA = Self.beatLoop(first, count: total, control: control)
+        let runB = Self.beatLoop(second, count: total, control: control)
+        for _ in 0..<100 where first.count < 3 || second.count < 3 {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        #expect(first.count >= 3 && second.count >= 3, "children never started emitting")
+
+        control.suspend()
+        try await Task.sleep(nanoseconds: 600_000_000)
+        let frozen = (first.count, second.count)
+        try await Task.sleep(nanoseconds: 600_000_000)
+        #expect(first.count == frozen.0, "the first child kept emitting while paused")
+        #expect(second.count == frozen.1, "the second child kept emitting while paused")
+
+        control.resume()
+        _ = await (runA.value, runB.value)
+        #expect(first.count == total && second.count == total)
+    }
+
+    /// Born paused, then Stop: every child must get SIGCONT before SIGTERM.
+    /// The kill grace is set long (30 s), so a child left stopped would hold
+    /// the cancel for 30 s before SIGKILL; the expectation is well under that.
+    @Test func cancelWhileBornPausedKillsEveryChildPromptly() async throws {
+        let control = ProcessControl()
+        control.suspend()
+        let runA = Self.beatLoop(BeatCounter(), count: nil, control: control, killGraceSeconds: 30)
+        let runB = Self.beatLoop(BeatCounter(), count: nil, control: control, killGraceSeconds: 30)
+        try await Task.sleep(nanoseconds: 500_000_000)
+
+        let cancelledAt = ContinuousClock.now
+        runA.cancel()
+        runB.cancel()
+        _ = await (runA.value, runB.value)
+        let waited = ContinuousClock.now - cancelledAt
+        #expect(waited < .seconds(10), "cancel took \(waited) — a stopped child never got SIGCONT before SIGTERM")
+    }
 }

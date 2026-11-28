@@ -971,6 +971,8 @@ final class MediaFileOperationsCenter: ObservableObject {
     /// Check A/V Sync's results this session (the feature's store, #337 —
     /// AVSyncResultStore.swift); Media Info and the Inspector read it.
     let avSyncResults = AVSyncResultStore()
+    /// Each file's A/V sync signals, kept for the app session (one read per original).
+    let avSyncEvidence = AVSyncEvidenceCache()
 
     /// Keep at most this many non-active jobs around.
     static let finishedCap = 50

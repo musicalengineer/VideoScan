@@ -17,13 +17,19 @@
 // are taken again after the read; a file that changed while it was read gives
 // no result ("refuse rather than guess").
 //
-// Pause: the pause coordinator's ProcessControl SIGSTOPs the live ffmpeg
-// children (sound and picture), and the stall watchdog is held while paused.
-// Stop cancels the task; ProcessRunner kills the children.
+// SPEED (Rick 2026-11-28): the two files of a pair are read at the same time
+// (they usually sit on different drives, and the read is drive-bound), and
+// each file's signals are kept for the session (AVSyncEvidenceCache) so an
+// original compared against several processed versions is read once.
 //
-// MEMORY: per pair, the reader holds one file's PCM at a time (8 kHz Int16:
-// 57.6 MB per hour of sound) plus both files' signals (≈ 17 MB per 2 hours);
-// the reports kept on the items are ≈ 200 B per window.
+// Pause: the pause coordinator's ProcessControl SIGSTOPs every live ffmpeg
+// child (sound and picture of both files — four), and the stall watchdog is
+// held while paused. Stop cancels the task; ProcessRunner kills the children.
+// A read that fails cancels the other; the failure names its side.
+//
+// MEMORY: per pair, each reader holds its file's PCM (8 kHz Int16: 57.6 MB
+// per hour of sound — two files at once now) plus both files' signals
+// (≈ 17 MB per 2 hours); the reports kept on the items are ≈ 200 B per window.
 //
 // (For Rick: `@MainActor final class` ≈ a C++ object whose methods all run on
 // the UI thread; the `await`s are where it yields while ffmpeg works.)
@@ -125,6 +131,10 @@ final class AVSyncJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnDe
     private let stat: Stat
     private let vouch: Vouch
     private let gatesFor: (Pair) -> [MediaVolumeGate]
+    private let cache: AVSyncEvidenceCache
+    private let readerIdentity: String
+    /// Read fraction of the current pair's original [0] and processed [1].
+    private var sideFractions: [Double] = [0, 0]
     private let pauseCoordinator = JobPauseCoordinator()
     private var stallMonitor: StallMonitor?
     private var stallReason: String?
@@ -135,8 +145,11 @@ final class AVSyncJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnDe
     init(pairs: [Pair], store: AVSyncResultStore, policy: AVSyncPolicy = .default,
          gatesFor: @escaping (Pair) -> [MediaVolumeGate] = { _ in [] },
          reader: @escaping Reader = AVSyncJob.realReader, stat: @escaping Stat = AVSyncJob.realStat,
-         vouch: @escaping Vouch = AVSyncJob.realVouch) {
+         vouch: @escaping Vouch = AVSyncJob.realVouch,
+         cache: AVSyncEvidenceCache = AVSyncEvidenceCache(), readerIdentity: String = AVSyncSignalReader().identity) {
         items = pairs.map { Item(pair: $0, outcome: nil) }
+        self.cache = cache
+        self.readerIdentity = readerIdentity
         self.store = store
         self.policy = policy
         self.gatesFor = gatesFor
@@ -251,25 +264,14 @@ final class AVSyncJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnDe
         }
         defer { monitor.stop(); if stallMonitor === monitor { stallMonitor = nil } }
         do {
-            let control = pauseCoordinator.control
-            let onOriginal: @Sendable (Double?) -> Void = { [weak self] f in
-                self?.progress(index: index, part: 0, of: f, monitor: monitor)
-            }
-            let onProcessed: @Sendable (Double?) -> Void = { [weak self] f in
-                self?.progress(index: index, part: 1, of: f, monitor: monitor)
-            }
-            let evidence = try await withGates(gatesFor(pair)[...]) { [reader] in
-                await beginWatching()
-                let original = try await Self.read(pair.original, role: "the original", reader: reader,
-                                                   control: control, progress: onOriginal)
-                let processed = try await Self.read(pair.processed, role: "the processed file", reader: reader,
-                                                    control: control, progress: onProcessed)
-                return Evidence(original: original, processed: processed)
-            }
+            let gathered = try await gather(pair, index: index, stamps: stampsBefore, monitor: monitor,
+                                            beginWatching: beginWatching)
+            let evidence = gathered.evidence
             try Task.checkCancellation()
             if stat(pair.original.path) != stampsBefore.0 || stat(pair.processed.path) != stampsBefore.1 {
                 return .refused("a file changed while it was being read")
             }
+            for (fresh, key) in gathered.toKeep { cache.insert(fresh, for: key) }
             status = "Measuring \(pair.processed.filename)…"
             let report = await Self.analyze(evidence, policy: policy)
             store.record(report, processed: pair.processed, original: pair.original)
@@ -281,6 +283,41 @@ final class AVSyncJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnDe
         } catch {
             return Task.isCancelled ? .cancelled : .failed(String(describing: error))
         }
+    }
+
+    /// A pair's evidence: each side from the session's kept signals when its
+    /// key matches, the rest read from disk (both at once, under the volume
+    /// gates). `toKeep` = what was read, to keep once the after-read stat
+    /// check has passed.
+    private func gather(_ pair: Pair, index: Int, stamps: (FileStamp?, FileStamp?), monitor: StallMonitor,
+                        beginWatching: @escaping @Sendable () async -> Void) async throws
+        -> (evidence: Evidence, toKeep: [(AVSyncFileEvidence, AVSyncEvidenceCache.Key)]) {
+        let keys = (cacheKey(pair.original, stamps.0), cacheKey(pair.processed, stamps.1))
+        let kept = (keys.0.flatMap { cache.evidence(for: $0) }, keys.1.flatMap { cache.evidence(for: $0) })
+        for (side, hit) in [(pair.original, kept.0), (pair.processed, kept.1)] where hit != nil {
+            appLog.write("check a/v sync: \(side.filename) — its signals were read earlier this session"
+                         + " (same SHA-256, size and date); not read again")
+        }
+        sideFractions = [kept.0 == nil ? 0 : 1, kept.1 == nil ? 0 : 1]
+        if let original = kept.0, let processed = kept.1 {
+            return (Evidence(original: original, processed: processed), [])
+        }
+        let control = pauseCoordinator.control
+        let onOriginal: @Sendable (Double?) -> Void = { [weak self] f in
+            self?.progress(index: index, part: 0, of: f, monitor: monitor)
+        }
+        let onProcessed: @Sendable (Double?) -> Void = { [weak self] f in
+            self?.progress(index: index, part: 1, of: f, monitor: monitor)
+        }
+        let evidence = try await withGates(gatesFor(pair)[...]) { [reader] in
+            await beginWatching()
+            return try await Self.readBoth(pair, kept: kept, reader: reader, control: control,
+                                           progress: (onOriginal, onProcessed))
+        }
+        var toKeep: [(AVSyncFileEvidence, AVSyncEvidenceCache.Key)] = []
+        if kept.0 == nil, let key = keys.0 { toKeep.append((evidence.original, key)) }
+        if kept.1 == nil, let key = keys.1 { toKeep.append((evidence.processed, key)) }
+        return (evidence, toKeep)
     }
 
     private func watch(_ monitor: StallMonitor) {
@@ -308,6 +345,40 @@ final class AVSyncJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnDe
         }
     }
 
+    /// Read the sides not already kept, both at once. The first failure
+    /// cancels the other read (its ffmpeg children are killed) and is the one
+    /// reported, naming its side.
+    /// (For Rick: a throwing task group ≈ launching two std::async jobs and
+    /// joining both, where the first exception cancels the sibling.)
+    nonisolated static func readBoth(_ pair: Pair, kept: (AVSyncFileEvidence?, AVSyncFileEvidence?), reader: @escaping Reader,
+                                     control: ProcessControl,
+                                     progress: (@Sendable (Double?) -> Void, @Sendable (Double?) -> Void))
+        async throws -> Evidence {
+        try await withThrowingTaskGroup(of: (Int, AVSyncFileEvidence).self) { group in
+            if kept.0 == nil {
+                group.addTask { (0, try await read(pair.original, role: "the original", reader: reader,
+                                                   control: control, progress: progress.0)) }
+            }
+            if kept.1 == nil {
+                group.addTask { (1, try await read(pair.processed, role: "the processed file", reader: reader,
+                                                   control: control, progress: progress.1)) }
+            }
+            var read: [Int: AVSyncFileEvidence] = [:]
+            for try await (side, evidence) in group { read[side] = evidence }
+            guard let original = kept.0 ?? read[0], let processed = kept.1 ?? read[1] else {
+                throw CancellationError()
+            }
+            return Evidence(original: original, processed: processed)
+        }
+    }
+
+    /// The cache key for a side, or nil when it has no digest or stamp
+    /// (the refusal gate stops those before here).
+    private func cacheKey(_ side: AVSyncSide, _ stamp: FileStamp?) -> AVSyncEvidenceCache.Key? {
+        guard let digest = side.digest, let stamp else { return nil }
+        return .init(digest: digest, size: stamp.size, modified: stamp.modified, readerIdentity: readerIdentity)
+    }
+
     /// The analysis is pure CPU (a fraction of a second to a few seconds for
     /// two hours) — run it off the main actor.
     @concurrent
@@ -321,10 +392,11 @@ final class AVSyncJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnDe
         guard let fileFraction = fraction else { return }
         Task { @MainActor [weak self] in
             guard let self, self.state.isActive else { return }
+            self.sideFractions[part] = min(1, max(self.sideFractions[part], fileFraction))
             let perPair = 1.0 / Double(max(1, self.items.count))
-            self.fraction = min(1, perPair * (Double(index) + (Double(part) + fileFraction) / 2))
-            let side = part == 0 ? self.items[index].pair.original : self.items[index].pair.processed
-            self.status = "Reading \(side.filename) (\(Int(fileFraction * 100)) %)"
+            let both = self.sideFractions
+            self.fraction = min(1, perPair * (Double(index) + (both[0] + both[1]) / 2))
+            self.status = Self.readingStatus(self.items[index].pair, fractions: both)
         }
     }
 
@@ -351,6 +423,14 @@ final class AVSyncJob: @MainActor MediaFileOperationJob, MediaFileOperationOwnDe
     }
 
     // MARK: Pure rules (tested)
+
+    /// "Reading A (40 %) and B (55 %)" — a side already read is left out.
+    nonisolated static func readingStatus(_ pair: Pair, fractions: [Double]) -> String {
+        let parts = zip([pair.original, pair.processed], fractions)
+            .filter { $0.1 < 1 }
+            .map { "\($0.0.filename) (\(Int($0.1 * 100)) %)" }
+        return parts.isEmpty ? "Read \(pair.processed.filename) and its original" : "Reading " + parts.joined(separator: " and ")
+    }
 
     /// The refusal for a pair, or nil. Runs before anything is read.
     nonisolated static func refusal(_ pair: Pair, stat: Stat, vouch: Vouch = { _ in true }) -> String? {
