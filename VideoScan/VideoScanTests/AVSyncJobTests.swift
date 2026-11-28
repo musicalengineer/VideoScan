@@ -413,6 +413,194 @@ struct AVSyncJobRunTests {
         first?.cancel()
         await first?.task?.value
     }
+
+    // MARK: Speed (Rick 2026-11-28): both files at once; an original read once per session
+
+    @Test("both files of a pair are read at the same time")
+    func bothSidesReadAtOnce() async throws {
+        let center = MediaFileOperationsCenter()
+        center.mediaTechForPath = { _ in .ssd }   // an ungated drive: both reads may run at once
+        let flight = AVSyncFlightRecorder()
+        let evidence = AVSyncAppFixture.pair(soundLateMs: 0)
+        let reader: AVSyncJob.Reader = { side, _, _ in
+            flight.enter()
+            defer { flight.leave() }
+            try await Task.sleep(for: .milliseconds(300))
+            return side.filename.hasPrefix("orig") ? evidence.0 : evidence.1
+        }
+        let job = center.startAVSync(pairs: [pair()], reader: reader, stat: AVSyncAppFixture.steadyStat)
+        await job?.task?.value
+        #expect(flight.peak == 2, "the original and the processed file were read one after the other (peak \(flight.peak))")
+        guard case .finished? = job?.state else { Issue.record("expected finished, got \(String(describing: job?.state))"); return }
+    }
+
+    @Test("a failure on one side names that side and stops the other read at once")
+    func oneSideFailsTheOtherIsCancelled() async throws {
+        let center = MediaFileOperationsCenter()
+        center.mediaTechForPath = { _ in .ssd }   // an ungated drive: both reads may run at once
+        let cancelled = AVSyncCallCounter()
+        let reader: AVSyncJob.Reader = { side, _, _ in
+            if side.filename.hasPrefix("proc") { throw AVSyncSignalReader.Failure.noPicture }
+            do { try await Task.sleep(for: .seconds(60)) } catch { cancelled.bump(); throw error }
+            return AVSyncAppFixture.pair(soundLateMs: 0).0
+        }
+        let started = ContinuousClock.now
+        let job = center.startAVSync(pairs: [pair()], reader: reader, stat: AVSyncAppFixture.steadyStat)
+        await job?.task?.value
+        #expect(ContinuousClock.now - started < .seconds(10), "the original's read was not cancelled")
+        #expect(job?.items.first?.outcome == .failed("the processed file (proc.mp4): the file has no picture"))
+        #expect(cancelled.count == 1)
+        #expect(center.avSyncResults.isEmpty)
+    }
+
+    @Test("Stop while both files are being read cancels both reads")
+    func stopCancelsBothReads() async throws {
+        let center = MediaFileOperationsCenter()
+        center.mediaTechForPath = { _ in .ssd }   // an ungated drive: both reads may run at once
+        let flight = AVSyncFlightRecorder()
+        let cancelled = AVSyncCallCounter()
+        let reader: AVSyncJob.Reader = { _, _, _ in
+            flight.enter()
+            defer { flight.leave() }
+            do { try await Task.sleep(for: .seconds(60)) } catch { cancelled.bump(); throw error }
+            return AVSyncAppFixture.pair(soundLateMs: 0).0
+        }
+        let job = try #require(center.startAVSync(pairs: [pair()], reader: reader, stat: AVSyncAppFixture.steadyStat))
+        for _ in 0..<100 where flight.peak < 2 { try await Task.sleep(for: .milliseconds(20)) }
+        job.cancel()
+        await job.task?.value
+        #expect(cancelled.count == 2 && flight.inFlight == 0)
+        #expect(job.state == .cancelled)
+    }
+
+    @Test("an original shared by two processed files is read once; each processed file once")
+    func sharedOriginalReadOnce() async throws {
+        let center = MediaFileOperationsCenter()
+        let calls = AVSyncCallCounter()
+        let evidence = AVSyncAppFixture.pair(soundLateMs: 80)
+        let original = AVSyncAppFixture.side("orig.mov", digest: AVSyncAppFixture.d2)
+        let pairs = [AVSyncJob.Pair(processed: AVSyncAppFixture.side("proc-a.mp4", digest: AVSyncAppFixture.d1), original: original),
+                     AVSyncJob.Pair(processed: AVSyncAppFixture.side("proc-b.mp4", digest: AVSyncAppFixture.d3), original: original)]
+        let (job, _) = await expectingLog(
+            .once(.hasPrefix("check a/v sync: orig.mov — its signals were read earlier this session"))
+        ) {
+            let job = center.startAVSync(pairs: pairs, reader: AVSyncAppFixture.reader(evidence, calls: calls),
+                                         stat: AVSyncAppFixture.steadyStat)
+            await job?.task?.value
+            return job
+        }
+        #expect(calls.count == 3, "expected 3 reads (one original, two processed), saw \(calls.count)")
+        for item in job?.items ?? [] {
+            guard case let .measured(report)? = item.outcome, case let .offset(shift) = report.verdict else {
+                Issue.record("expected an offset for \(item.pair.processed.filename)"); continue
+            }
+            #expect(abs(shift + 80) <= 5, "a kept original must measure exactly like a fresh read")
+        }
+    }
+
+    @Test("kept signals are used only for the same file: a changed date or size reads again")
+    func keptSignalsNeedTheSameStamp() async throws {
+        let center = MediaFileOperationsCenter()
+        let calls = AVSyncCallCounter()
+        let reader = AVSyncAppFixture.reader(AVSyncAppFixture.pair(soundLateMs: 0), calls: calls)
+        func run(_ stat: @escaping AVSyncJob.Stat) async {
+            await center.startAVSync(pairs: [pair()], reader: reader, stat: stat)?.task?.value
+        }
+        await run(AVSyncAppFixture.steadyStat)
+        #expect(calls.count == 2)
+        await run(AVSyncAppFixture.steadyStat)
+        #expect(calls.count == 2, "the same two files, unchanged, are not read again")
+        await run { _ in AVSyncJob.FileStamp(size: 1_000, modified: Date(timeIntervalSince1970: 99)) }
+        #expect(calls.count == 4, "a newer modification date must read both files again")
+    }
+
+    @Test("a file that changes during the read is not kept")
+    func changedFileIsNotKept() async throws {
+        let center = MediaFileOperationsCenter()
+        let ticks = AVSyncCallCounter()
+        let stat: AVSyncJob.Stat = { _ in
+            ticks.bump()
+            return AVSyncJob.FileStamp(size: 1_000, modified: Date(timeIntervalSince1970: ticks.count <= 4 ? 1 : 2))
+        }
+        let job = center.startAVSync(pairs: [pair()], reader: AVSyncAppFixture.reader(AVSyncAppFixture.pair(soundLateMs: 0)),
+                                     stat: stat)
+        await job?.task?.value
+        #expect(center.avSyncEvidence.isEmpty)
+    }
+
+    @Test("the reading status names each side still being read")
+    func readingStatus() {
+        let p = pair()
+        #expect(AVSyncJob.readingStatus(p, fractions: [0.4, 0.55]) == "Reading orig.mov (40 %) and proc.mp4 (55 %)")
+        #expect(AVSyncJob.readingStatus(p, fractions: [1, 0.5]) == "Reading proc.mp4 (50 %)")
+    }
+}
+
+/// How many reads are in flight at once, and the most seen.
+final class AVSyncFlightRecorder: @unchecked Sendable {   // guarded by `lock`
+    private let lock = NSLock()
+    private var current = 0, most = 0
+    func enter() { lock.lock(); current += 1; most = max(most, current); lock.unlock() }
+    func leave() { lock.lock(); current -= 1; lock.unlock() }
+    var peak: Int { lock.lock(); defer { lock.unlock() }; return most }
+    var inFlight: Int { lock.lock(); defer { lock.unlock() }; return current }
+}
+
+struct AVSyncEvidenceCacheTests {
+
+    static func key(_ n: Int, modified: Double = 1, reader: String = "r1") -> AVSyncEvidenceCache.Key {
+        .init(digest: String(repeating: "\(n % 10)", count: 64) + "\(n)", size: 1_000,
+              modified: Date(timeIntervalSince1970: modified), readerIdentity: reader)
+    }
+
+    /// 60 s of evidence ≈ 12k grid steps × 2 signals × 4 B ≈ 96 KB plus the print.
+    static let sample = AVSyncAppFixture.pair(soundLateMs: 0).0
+
+    @Test("a key is the content AND the moment: digest, size, date and reader identity all count")
+    func keyParts() {
+        let cache = AVSyncEvidenceCache()
+        cache.insert(Self.sample, for: Self.key(1))
+        #expect(cache.evidence(for: Self.key(1)) != nil)
+        #expect(cache.evidence(for: Self.key(2)) == nil)
+        #expect(cache.evidence(for: Self.key(1, modified: 2)) == nil)
+        #expect(cache.evidence(for: Self.key(1, reader: "r2")) == nil)
+    }
+
+    @Test("bounded by bytes: the least recently USED entry goes first")
+    func evictsLeastRecentlyUsed() {
+        let bytes = AVSyncEvidenceCache.bytes(of: Self.sample)
+        #expect(bytes > 50_000)
+        let cache = AVSyncEvidenceCache(byteLimit: bytes * 3)
+        for n in 1...3 { cache.insert(Self.sample, for: Self.key(n)) }
+        _ = cache.evidence(for: Self.key(1))           // 1 is now the most recent
+        cache.insert(Self.sample, for: Self.key(4))
+        #expect(cache.evidence(for: Self.key(2)) == nil, "2 was the least recently used")
+        #expect(cache.evidence(for: Self.key(1)) != nil && cache.evidence(for: Self.key(4)) != nil)
+        #expect(cache.count == 3 && cache.totalBytes <= cache.byteLimit)
+    }
+
+    @Test("an entry larger than the whole limit is not kept, and evicts nothing")
+    func oversizedIsNotKept() {
+        let cache = AVSyncEvidenceCache(byteLimit: AVSyncEvidenceCache.bytes(of: Self.sample) - 1)
+        cache.insert(Self.sample, for: Self.key(1))
+        #expect(cache.isEmpty && cache.totalBytes == 0)
+    }
+
+    @Test("parallel readers and writers keep the books straight")
+    func concurrentUse() async {
+        let bytes = AVSyncEvidenceCache.bytes(of: Self.sample)
+        let cache = AVSyncEvidenceCache(byteLimit: bytes * 8)
+        let sample = Self.sample
+        await withTaskGroup(of: Void.self) { group in
+            for n in 0..<400 {
+                group.addTask {
+                    cache.insert(sample, for: Self.key(n % 20))
+                    _ = cache.evidence(for: Self.key((n * 7) % 20))
+                }
+            }
+        }
+        #expect(cache.count <= 8 && cache.totalBytes == cache.count * bytes)
+    }
 }
 
 final class AVSyncControlBox: @unchecked Sendable {   // guarded by `lock`
@@ -573,4 +761,85 @@ struct AVSyncJobMediaTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path).sorted() == before,
                 "the job writes nothing beside the files it reads")
     }
+}
+
+// MARK: Volume gates and concurrency (review 2026-11-28)
+
+@MainActor
+extension AVSyncJobRunTests {
+
+    static func side(_ name: String, volume: String, digest: String) -> AVSyncSide {
+        AVSyncSide(recordID: UUID(), filename: name, path: "/Volumes/\(volume)/\(name)", sizeBytes: 1_000,
+                   durationSeconds: 60, digest: digest)
+    }
+
+    static func timedReader(_ flight: AVSyncFlightRecorder, paths: AVSyncPathLog? = nil) -> AVSyncJob.Reader {
+        let evidence = AVSyncAppFixture.pair(soundLateMs: 0)
+        return { side, _, _ in
+            paths?.add(side.path)
+            flight.enter()
+            defer { flight.leave() }
+            try await Task.sleep(for: .milliseconds(300))
+            return side.filename.hasPrefix("orig") ? evidence.0 : evidence.1
+        }
+    }
+
+    @Test("both files on ONE spinning disk are read one after the other (the volume gate's one-reader rule)")
+    func sameSpindleIsReadOneAtATime() async throws {
+        let center = MediaFileOperationsCenter()
+        center.mediaTechForPath = { _ in .hdd }          // /Volumes/Test: one root, one slot
+        #expect(center.gatePlan(forPaths: [pair().original.path, pair().processed.path]).count == 1)
+        let flight = AVSyncFlightRecorder()
+        let job = center.startAVSync(pairs: [pair()], reader: Self.timedReader(flight), stat: AVSyncAppFixture.steadyStat)
+        await job?.task?.value
+        guard case .finished? = job?.state else { Issue.record("expected finished, got \(String(describing: job?.state))"); return }
+        #expect(flight.peak == 1, "two whole-file reads ran at once on a one-slot (HDD) volume (peak \(flight.peak))")
+    }
+
+    @Test("files on two different spinning disks are read at the same time")
+    func twoSpindlesReadTogether() async throws {
+        let center = MediaFileOperationsCenter()
+        center.mediaTechForPath = { _ in .hdd }
+        let p = AVSyncJob.Pair(processed: Self.side("proc.mp4", volume: "DiskA", digest: AVSyncAppFixture.d1),
+                               original: Self.side("orig.mov", volume: "DiskB", digest: AVSyncAppFixture.d2))
+        let flight = AVSyncFlightRecorder()
+        let job = center.startAVSync(pairs: [p], reader: Self.timedReader(flight), stat: AVSyncAppFixture.steadyStat)
+        await job?.task?.value
+        #expect(flight.peak == 2, "different drives must not wait for each other (peak \(flight.peak))")
+    }
+
+    @Test("a pair whose original is kept waits only for the processed file's drive")
+    func keptSideTakesNoGate() async throws {
+        let center = MediaFileOperationsCenter()
+        center.mediaTechForPath = { _ in .hdd }
+        let original = Self.side("orig.mov", volume: "DiskB", digest: AVSyncAppFixture.d2)
+        let first = AVSyncJob.Pair(processed: Self.side("proc-a.mp4", volume: "DiskA", digest: AVSyncAppFixture.d1),
+                                   original: original)
+        let second = AVSyncJob.Pair(processed: Self.side("proc-b.mp4", volume: "DiskC", digest: AVSyncAppFixture.d3),
+                                    original: original)
+        await center.startAVSync(pairs: [first], reader: Self.timedReader(AVSyncFlightRecorder()),
+                                 stat: AVSyncAppFixture.steadyStat)?.task?.value
+        // Another job holds DiskB (the original's drive): the second pair must not wait for it.
+        let diskB = try #require(center.gatePlan(forPaths: [original.path]).first)
+        try await diskB.semaphore.wait()
+        let paths = AVSyncPathLog()
+        let job = try #require(center.startAVSync(pairs: [second], reader: Self.timedReader(AVSyncFlightRecorder(), paths: paths),
+                                                  stat: AVSyncAppFixture.steadyStat))
+        // Poll, never await the job here: a job queued on DiskB would wait
+        // for the signal below forever, and the test would hang, not fail.
+        for _ in 0..<100 where job.finishedAt == nil { try await Task.sleep(for: .milliseconds(50)) }
+        let finished = job.finishedAt != nil
+        await diskB.semaphore.signal()
+        if !finished { job.cancel() }
+        await job.task?.value
+        #expect(finished, "the job queued behind the kept original's drive")
+        #expect(paths.all == [second.processed.path])
+    }
+}
+
+final class AVSyncPathLog: @unchecked Sendable {   // guarded by `lock`
+    private let lock = NSLock()
+    private var paths: [String] = []
+    func add(_ path: String) { lock.lock(); paths.append(path); lock.unlock() }
+    var all: [String] { lock.lock(); defer { lock.unlock() }; return paths }
 }

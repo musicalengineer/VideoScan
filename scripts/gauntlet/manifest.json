@@ -1093,6 +1093,19 @@
     },
     {
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ProcessControlKillRaceTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ProcessControlKillRaceTests"
+      ],
+      "tests": [
+        "killRacingAttachWhilePausedStillContinuesTheChild",
+        "killingOneChildLeavesItsPausedSiblingPaused",
+        "repeatedPauseResumeStaysBalanced"
+      ]
+    },
+    {
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Commit/CatalogChangeDetectorTests.swift",
       "stage": "unit",
       "suites": [
@@ -18769,7 +18782,7 @@
       ]
     },
     {
-      "blocked_reason": "confinement: both tests need the public SigLIP 2 weights in ~/.cache/huggingface; the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home, the weights are not there, the suite's .enabled(if: weights) skips, and classify() fails the stage on any skip (the gauntlet was RED 2026-11-06 … 11-09 for these two skips alone); runs in the nightly all-tests pass on both Macs",
+      "blocked_reason": "confinement: both tests need the public SigLIP 2 weights in ~/.cache/huggingface; the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home, the weights are not there, the suite's .enabled(if: weights) skips, and classify() fails the stage on any skip (the gauntlet was RED 2026-11-06 \u2026 11-09 for these two skips alone); runs in the nightly all-tests pass on both Macs",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/SigLIPEmbedderTests.swift",
       "stage": "unit",
@@ -27686,9 +27699,11 @@
         "ProcessControlTests"
       ],
       "tests": [
+        "cancelWhileBornPausedKillsEveryChildPromptly",
         "cancelWhilePausedStillKillsTheChild",
         "pendingSuspendAppliesAtLaunch",
         "suspendFreezesChildOutputAndResumeCompletes",
+        "suspendFreezesEveryLiveChild",
         "suspendResumeFlagIsIdempotent"
       ]
     },
@@ -38842,7 +38857,7 @@
       ]
     },
     {
-      "blocked_reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes",
+      "blocked_reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet \u2014 unblock after one green deep run; runs in the nightly all-tests and coverage passes",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/SigLIPTinyModelTests.swift",
       "stage": "unit",
@@ -40169,6 +40184,21 @@
       ]
     },
     {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AVSyncSensitivityTests.swift",
+      "stage": "integration",
+      "suites": [
+        "AVSyncSensitivityTests"
+      ],
+      "tests": [
+        "driftLadder",
+        "offsetLadder",
+        "smallJump",
+        "topazLadder"
+      ]
+    },
+    {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/AVSyncJobTests.swift",
       "stage": "unit",
@@ -40176,34 +40206,49 @@
         "AVSyncJobRulesTests",
         "AVSyncResultStoreTests",
         "AVSyncJobRunTests",
+        "AVSyncEvidenceCacheTests",
         "AVSyncOriginalsTests",
         "AVSyncWiringSensorTests",
         "AVSyncJobMediaTests"
       ],
       "tests": [
+        "bothSidesReadAtOnce",
         "boundaries",
         "candidates",
         "capAndLine",
         "changedDuringRead",
+        "changedFileIsNotKept",
+        "concurrentUse",
         "currentRulesOnly",
         "duplicateDispatch",
         "endToEnd",
+        "evictsLeastRecentlyUsed",
         "factsFromRecord",
         "inSync",
+        "keptSideTakesNoGate",
+        "keptSignalsNeedTheSameStamp",
+        "keyParts",
         "keyedByDigests",
         "logLine",
         "measuredPair",
         "menuAndSheet",
         "noLineage",
+        "oneSideFailsTheOtherIsCancelled",
+        "oversizedIsNotKept",
         "pauseResume",
         "reRecordRefreshesAndEvictionKeepsLookups",
         "readFailure",
+        "readingStatus",
         "refusals",
         "refusedPair",
+        "sameSpindleIsReadOneAtATime",
+        "sharedOriginalReadOnce",
         "staleStampIsRefused",
         "stop",
+        "stopCancelsBothReads",
         "summary",
         "timingLine",
+        "twoSpindlesReadTogether",
         "watchdogAfterGates",
         "zeroDurationIsUnknown"
       ]
@@ -43012,7 +43057,7 @@
         },
         {
           "name": "VideoScan/VideoScanTests/SigLIPEmbedderTests.swift",
-          "reason": "confinement: both tests need the public SigLIP 2 weights in ~/.cache/huggingface; the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home, the weights are not there, the suite's .enabled(if: weights) skips, and classify() fails the stage on any skip (the gauntlet was RED 2026-11-06 … 11-09 for these two skips alone); runs in the nightly all-tests pass on both Macs"
+          "reason": "confinement: both tests need the public SigLIP 2 weights in ~/.cache/huggingface; the Runner gives the test host HOME=CFFIXED_USER_HOME=<run>/home, the weights are not there, the suite's .enabled(if: weights) skips, and classify() fails the stage on any skip (the gauntlet was RED 2026-11-06 \u2026 11-09 for these two skips alone); runs in the nightly all-tests pass on both Macs"
         },
         {
           "name": "VideoScan/VideoScanTests/MachineEstimateFoldersTests.swift",
@@ -43020,12 +43065,12 @@
         },
         {
           "name": "VideoScan/VideoScanTests/SigLIPTinyModelTests.swift",
-          "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet — unblock after one green deep run; runs in the nightly all-tests and coverage passes"
+          "reason": "first gauntlet run pending: runs MLX on the GPU in the test host (a few-kilobyte SigLIP built by the test, no weights, no HOME dependence); no MLX suite has run under the Runner's confined home yet \u2014 unblock after one green deep run; runs in the nightly all-tests and coverage passes"
         }
       ],
-      "expected_floor": 4227,
+      "expected_floor": 4241,
       "name": "unit",
-      "package_expected_floor": 1086,
+      "package_expected_floor": 1089,
       "package_selectors": [
         "VideoScanCoreTests.AnalysisResultsRejectionTests",
         "VideoScanCoreTests.AnalysisResultsReportCoverageTests",
@@ -43161,7 +43206,8 @@
         "VideoScanCoreTests.AVSyncSignalsTests",
         "VideoScanCoreTests.AVSyncPairingTests",
         "VideoScanCoreTests.AVSyncReviewFindingsTests",
-        "VideoScanCoreTests.AVSyncReviewReaderTests"
+        "VideoScanCoreTests.AVSyncReviewReaderTests",
+        "VideoScanCoreTests.ProcessControlKillRaceTests"
       ],
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -43854,7 +43900,8 @@
         "VideoScanTests/AVSyncJobRunTests",
         "VideoScanTests/AVSyncOriginalsTests",
         "VideoScanTests/AVSyncResultStoreTests",
-        "VideoScanTests/AVSyncWiringSensorTests"
+        "VideoScanTests/AVSyncWiringSensorTests",
+        "VideoScanTests/AVSyncEvidenceCacheTests"
       ]
     },
     {
@@ -44811,6 +44858,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AVSyncSyntheticPairTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AVSyncSensitivityTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],

@@ -97,6 +97,11 @@ run when the policy changes.
   policy version — no schema change if the existing analysis-results/observation table fits; if a new table is needed, STOP
   and ask Rick (rule 6). Shown in Media Info and the Inspector as a "Sound & picture timing" line.
 - **One engine** (rule 4): the menu verb and the background cycler call the same job.
+- **Speed** (Rick 2026-11-28): the two files of a pair are read at the same time (drive-bound: a 47-min 30 GB ProRes file
+  reads in ~50 s; hardware decode measured slower, not used), and each file's signals are kept in memory for the app
+  session (`AVSyncEvidenceCache`, owned by the MFO Center, 512 MB, keyed by SHA-256 + size + date + reader identity), so
+  an original compared against several processed versions is read once. Keeping them across relaunches rides with the
+  results table.
 
 ## 7. Tests (CLAUDE.md rules 7–8)
 
@@ -108,6 +113,18 @@ run when the policy changes.
 - **Media matrix:** mp4/h264, mov/prores, mkv/ffv1+pcm, mxf, avi/dv.
 - **Scale:** a 2-hour pair inside a time budget on the M4; memory bounded (streaming).
 - **Real data:** then 3–5 of Rick's Topaz pairs (local only), compared with what Rick hears — the only manual step, a spot check.
+
+**Measured precision** (`AVSyncSensitivityTests`, synthetic H.264 pairs through the real reader, 2026-11-28):
+
+| case | put in | measured | verdict |
+|---|---|---|---|
+| clean offset ladder, −125 … +45 ms (13 steps) | each step | within 0.25 ms | flips exactly at +30 / −60 (±2 ms straddles: +28 in sync, +32 early; −58 in sync, −62 late) |
+| Topaz-like chain (2× upscale, 30→60 fps interpolation, H.264, AAC 44.1 kHz) | 0, +25, +35, −55, −65, −100 ms | 1.4–1.8 ms later than put in at every step (a steady bias of the chain) | correct, except −55 → flagged: one window reads the picture half a frame off (GH #539) |
+| drift over 3 min | 6, 15, 30, 60 ms | 30 → "drifts from 0 to 30 ms late"; 60 → "0 to 60 ms" | under 20 ms in sync, above it drift |
+| picture frames dropped at 1:00 | 1, 2, 3 frames (33, 67, 100 ms) | 34, 66, 100 ms | a jump at 1:05 (±1 window) |
+
+A single dropped frame is seen. On interpolated footage the picture lag scatters up to about ±16 ms per window; until #539
+the worst-window rule narrows the in-sync band there to about −44 / +14 ms.
 
 ## 8. Repair (phase 3, not built now)
 

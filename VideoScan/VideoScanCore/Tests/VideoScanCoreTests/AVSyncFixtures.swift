@@ -90,6 +90,10 @@ enum AVSyncFixtures {
         case fps60Interpolated
         /// A different codec and bit rate (H.264 at low quality, AAC 64k).
         case lowQualityReencode
+        /// The Topaz shape, plus a sound offset: upscaled 2× (lanczos),
+        /// interpolated 30→60 fps, H.264 crf 23, AAC 128k resampled to
+        /// 44.1 kHz — and the sound moved `lateMs` (positive = later).
+        case topazLike(lateMs: Double)
     }
 
     struct Source {
@@ -230,6 +234,12 @@ enum AVSyncFixtures {
         case .lowQualityReencode:
             codec = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "35", "-pix_fmt", "yuv420p",
                      "-c:a", "aac", "-b:a", "64k", "-ar", "48000"]
+        case let .topazLike(ms):
+            video = "scale=640:360:flags=lanczos,minterpolate=fps=60:mi_mode=blend"
+            audio = ms >= 0 ? "adelay=\(Int(ms.rounded())):all=1"
+                            : "atrim=start=\(String(format: "%.4f", -ms / 1_000)),asetpts=PTS-STARTPTS"
+            codec = ["-c:v", "libx264", "-preset", "ultrafast", "-crf", "23", "-pix_fmt", "yuv420p",
+                     "-c:a", "aac", "-b:a", "128k", "-ar", "44100"]
         }
         var args = ["-nostdin", "-v", "error"] + pre + ["-i", original.path]
         if let complex {

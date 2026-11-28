@@ -76,6 +76,15 @@ public struct AVSyncSignalReader: Sendable {
     public var ffmpegPath: String
     public var gridSeconds: Double
 
+    /// Bump when the signals a file yields change (envelope, motion, cuts,
+    /// decode argv): kept signals read by an older reader are then misses.
+    public static let signalVersion = 1
+
+    /// What makes two readers' signals interchangeable — a cache key part.
+    public var identity: String {
+        "avsync-signals v\(Self.signalVersion) grid=\(gridSeconds) thumb=\(Self.thumbnailWidth)x\(Self.thumbnailHeight)"
+    }
+
     public init(ffmpegPath: String = FFmpegLocator.ffmpegPath, gridSeconds: Double = AVSyncPolicy.default.gridSeconds) {
         self.ffmpegPath = ffmpegPath
         self.gridSeconds = gridSeconds
